@@ -34,6 +34,8 @@ It is meant to answer four questions:
 | Pointer interception detection | UI Testing Playground | Hidden Layers | `browser.hit_test` + `browser.click` preflight | PASS | Second click now blocked before false success. |
 | Hover / CSS `:hover` | The Internet | Hover over first profile card | `browser.hover` or `INTENT.HOVER` | PASS | Added after CSS injection workaround exposed the missing primitive. |
 | JavaScript alert handling | The Internet | JS Alert accept flow | `browser.get_dialogs` + `browser.accept_dialog` | PASS | Public benchmark; modal no longer blocks the agent. |
+| JavaScript confirm handling | The Internet | JS Confirm dismiss flow | `browser.get_dialogs` + `browser.dismiss_dialog` | PASS | Public benchmark; verified exact result text `You clicked: Cancel`. |
+| JavaScript prompt handling | The Internet | JS Prompt accept flow with typed input | `browser.get_dialogs` + `browser.accept_dialog` | PASS | Public benchmark; prompt captured through shim backend and verified exact result text `You entered: Goldenboy`. |
 | Semantic dialog intents | Local dialog fixture | Accept prompt / dismiss confirm through VM bytecode | `browser.run_intent_program` -> `INTENT.ACCEPT_DIALOG` / `INTENT.DISMISS_DIALOG` | PASS | Deterministic local regression coverage for dialog workflows. |
 | Diagnostics: console | Any failure case | Inspect console after render/action failure | `browser.get_console_events` | PASS | Tool exists and is available to agent runtime. |
 | Diagnostics: network | Any failure case | Inspect failed requests after render/action failure | `browser.get_network_events` | PASS | Tool exists and is available to agent runtime. |
@@ -85,6 +87,9 @@ Recent commits tied directly to benchmark-driven improvements:
 
 | Commit | Change |
 |---|---|
+| `444fcd2` | Bridge prompt shim into page world |
+| `54c25fb` | Add prompt dialog fallback for browser tabs |
+| `f5c5ebb` | Add dialog intents to Web Intent VM |
 | `5432f97` | Add JavaScript dialog browser tools |
 | `79376e0` | Add native hover browser primitive |
 | `3126f49` | Detect pointer interception before browser clicks |
@@ -100,12 +105,11 @@ These should be run next, in roughly this order:
 
 | Priority | Capability | Site | Goal | Expected Tool Path |
 |---|---|---|---|---|
-| 1 | JS confirm / prompt dialogs | The Internet | Accept/dismiss confirm, enter prompt text | `browser.get_dialogs`, `browser.accept_dialog`, `browser.dismiss_dialog` |
-| 2 | File upload | The Internet or ExpandTesting | Upload a local file and verify server-side echo/receipt | existing upload path, then improve if needed |
-| 3 | Iframes / nested frames | The Internet | Interact inside iframe content deterministically | likely needs frame-aware primitives |
-| 4 | New tabs / popups | The Internet | Open link in a new tab and continue work there | tab activation + navigation state verification |
-| 5 | Shadow DOM | ExpandTesting or custom fixture | Detect and interact with encapsulated elements | may need shadow-root traversal support |
-| 6 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
+| 1 | File upload | The Internet or ExpandTesting | Upload a local file and verify server-side echo/receipt | existing upload path, then improve if needed |
+| 2 | Iframes / nested frames | The Internet | Interact inside iframe content deterministically | likely needs frame-aware primitives |
+| 3 | New tabs / popups | The Internet | Open link in a new tab and continue work there | tab activation + navigation state verification |
+| 4 | Shadow DOM | ExpandTesting or custom fixture | Detect and interact with encapsulated elements | may need shadow-root traversal support |
+| 5 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
 
 ## Prompt Templates
 
