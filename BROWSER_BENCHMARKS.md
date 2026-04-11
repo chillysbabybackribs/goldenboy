@@ -41,7 +41,7 @@ It is meant to answer four questions:
 | Iframe reachability / extraction | The Internet | Inspect TinyMCE editor iframe and verify final content | frame inspection + `browser.evaluate_js` fallback | SOFT PASS | Same-origin iframe was reachable and content was verified, but normal click/type editing was blocked by TinyMCE read-only mode on the public page. |
 | Nested frames / frameset extraction | The Internet | Read text from left/middle/right/bottom frame documents | direct extraction preferred, `browser.evaluate_js` fallback used | SOFT PASS | Legacy `<frame>` documents were detectable, but standard extraction did not traverse them and the public run only partially completed before tool limits. |
 | Shadow DOM reachability / interaction | ExpandTesting | Read text and click button inside shadow root | direct extraction preferred, `browser.evaluate_js` fallback used | SOFT PASS | Shadow DOM was detected and interacted with, but only by explicitly traversing `shadowRoot` in JS; standard selector-based tools did not pierce the shadow boundary. |
-| Browser download tracking | Local download fixture + The Internet | Trigger an attachment response and verify the file lands on disk | `browser.click` + download state + filesystem verification | GAP | Even on a deterministic local fixture with `Content-Disposition: attachment`, the request completed as `mainFrame` navigation and no file landed on disk. The remaining issue is in browser download event handling/reporting, not server headers. |
+| Browser download tracking | Local download fixture | Trigger an attachment response and verify the file lands on disk | `browser.download_link` + `browser.wait_for_download` + saved-file verification | PASS | Deterministic local fixture now emits a tracked browser download, saves `/home/dp/Downloads/test-file.txt`, and reports `existsOnDisk: true` with non-zero file size. |
 | Semantic dialog intents | Local dialog fixture | Accept prompt / dismiss confirm through VM bytecode | `browser.run_intent_program` -> `INTENT.ACCEPT_DIALOG` / `INTENT.DISMISS_DIALOG` | PASS | Deterministic local regression coverage for dialog workflows. |
 | Diagnostics: console | Any failure case | Inspect console after render/action failure | `browser.get_console_events` | PASS | Tool exists and is available to agent runtime. |
 | Diagnostics: network | Any failure case | Inspect failed requests after render/action failure | `browser.get_network_events` | PASS | Tool exists and is available to agent runtime. |
@@ -93,6 +93,7 @@ Recent commits tied directly to benchmark-driven improvements:
 
 | Commit | Change |
 |---|---|
+| `0a72fd5` | Add tracked browser download primitives |
 | `213c68f` | Add real file upload browser primitive |
 | `444fcd2` | Bridge prompt shim into page world |
 | `54c25fb` | Add prompt dialog fallback for browser tabs |
@@ -113,9 +114,9 @@ These should be run next, in roughly this order:
 | Priority | Capability | Site | Goal | Expected Tool Path |
 |---|---|---|---|---|
 | 1 | Nested frames completion | The Internet or custom fixture | Extract all frame texts deterministically without direct URL hopping or `evaluate_js` fallback | likely needs explicit frame traversal/extraction primitives |
-| 2 | Download pipeline fix + rerun | Local download fixture | Trigger a real attachment download, surface the browser download event, and verify the saved file exists on disk | likely needs explicit download event plumbing and saved-file reporting |
-| 3 | Popup/window distinction | The Internet or custom fixture | Distinguish new tab vs popup window semantics explicitly | likely needs explicit popup/window metadata |
-| 4 | Shadow DOM primitive rerun | ExpandTesting or custom fixture | Revalidate shadow-root extraction and interaction without `evaluate_js` fallback | needs shadow-root traversal support |
+| 2 | Popup/window distinction | The Internet or custom fixture | Distinguish new tab vs popup window semantics explicitly | likely needs explicit popup/window metadata |
+| 3 | Shadow DOM primitive rerun | ExpandTesting or custom fixture | Revalidate shadow-root extraction and interaction without `evaluate_js` fallback | needs shadow-root traversal support |
+| 4 | Formal benchmark harness | Local fixtures + public sites | Script repeatable benchmark runs and collect pass/fail evidence automatically | likely needs benchmark runner and result persistence |
 
 ## Prompt Templates
 
@@ -153,7 +154,6 @@ These areas still need deeper work:
 - Frame-aware interaction and extraction without `evaluate_js` fallbacks
 - Legacy `<frame>/<frameset>` traversal and extraction
 - Shadow DOM traversal
-- Download event plumbing and saved-file verification
 - Explicit popup/window semantics beyond tab activation
 - Stronger success verification for tasks with no explicit UI confirmation
 - Formal benchmark runner or scripted benchmark harness
