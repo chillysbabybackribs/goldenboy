@@ -18,6 +18,7 @@ export type AgentToolName =
   | 'browser.activate_tab'
   | 'browser.click'
   | 'browser.type'
+  | 'browser.drag'
   | 'browser.extract_page'
   | 'browser.inspect_page'
   | 'browser.find_element'

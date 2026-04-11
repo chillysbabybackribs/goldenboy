@@ -1199,6 +1199,22 @@ export class BrowserService {
     return this.pageInteraction.typeInElement(selector, text, tabId);
   }
 
+  async dragElement(
+    sourceSelector: string,
+    targetSelector: string,
+    tabId?: string,
+  ): Promise<{
+    dragged: boolean;
+    error: string | null;
+    sourceSelector?: string;
+    targetSelector?: string;
+    method?: string;
+    from?: { x: number; y: number };
+    to?: { x: number; y: number };
+  }> {
+    return this.pageInteraction.dragElement(sourceSelector, targetSelector, tabId);
+  }
+
   async getPageMetadata(tabId?: string): Promise<Record<string, unknown>> {
     return this.pageInteraction.getPageMetadata(tabId);
   }

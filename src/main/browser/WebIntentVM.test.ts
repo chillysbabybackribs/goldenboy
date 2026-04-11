@@ -136,6 +136,50 @@ class JsdomIntentAdapter implements WebIntentAdapter {
     return { typed: true, error: null };
   }
 
+  async drag(sourceSelector: string, targetSelector: string): Promise<{ dragged: boolean; error: string | null }> {
+    const w = this.window();
+    const d = w.document;
+    const source = d.querySelector(sourceSelector);
+    const target = d.querySelector(targetSelector);
+    if (!(source instanceof w.Element)) {
+      return { dragged: false, error: `Drag source not found: ${sourceSelector}` };
+    }
+    if (!(target instanceof w.Element)) {
+      return { dragged: false, error: `Drop target not found: ${targetSelector}` };
+    }
+    const dataTransfer = {
+      data: {} as Record<string, string>,
+      dropEffect: 'move',
+      effectAllowed: 'all',
+      files: [],
+      items: [],
+      types: [] as string[],
+      clearData() {
+        this.data = {};
+        this.types = [];
+      },
+      getData(type: string) {
+        return this.data[type] || '';
+      },
+      setData(type: string, value: string) {
+        this.data[type] = value;
+        if (!this.types.includes(type)) this.types.push(type);
+      },
+      setDragImage() {},
+    };
+    const dispatchDrag = (node: Element, type: string) => {
+      const event = new w.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
+      node.dispatchEvent(event);
+    };
+    dispatchDrag(source, 'dragstart');
+    dispatchDrag(target, 'dragenter');
+    dispatchDrag(target, 'dragover');
+    dispatchDrag(target, 'drop');
+    dispatchDrag(source, 'dragend');
+    return { dragged: true, error: null };
+  }
+
   async executeInPage(expression: string): Promise<{ result: unknown; error: string | null }> {
     try {
       const result = this.window().eval(expression);
@@ -251,5 +295,24 @@ describe('WebIntentVM', () => {
     const selected = (extracted.selected || {}) as Record<string, string>;
     expect(selected['Order ID']).toBe('ORD-4242');
     expect(selected.Status).toBe('Order complete');
+  });
+
+  it('runs a semantic drag/drop flow on a website fixture', async () => {
+    const fixturePath = path.join(process.cwd(), 'demo-app/public/drag-lab.html');
+    const adapter = new JsdomIntentAdapter(fixturePath);
+    const vm = new WebIntentVM(adapter);
+
+    const result = await vm.run({
+      instructions: [
+        { op: 'NAVIGATE', args: { url: 'https://intent-lab.local/drag-lab.html' } },
+        { op: 'INTENT.DRAG_DROP', args: { source: 'circle', target: 'can', successText: 'Success: circle dropped in the can.' } },
+        { op: 'ASSERT', args: { kind: 'text_present', text: 'Success: circle dropped in the can.' } },
+      ],
+      failFast: true,
+    });
+
+    expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+    expect(result.failedAt).toBeNull();
+    expect(result.steps.every(step => step.status === 'ok')).toBe(true);
   });
 });

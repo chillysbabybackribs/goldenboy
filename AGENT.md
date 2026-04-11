@@ -207,6 +207,7 @@ Use stable dotted tool names:
 - `browser.research_search`
 - `browser.click`
 - `browser.type`
+- `browser.drag`
 - `browser.run_intent_program`
 - `browser.extract_page`
 - `browser.answer_from_cache`

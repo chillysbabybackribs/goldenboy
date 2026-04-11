@@ -127,6 +127,165 @@ export class BrowserPageInteraction {
     return { clicked: r?.clicked ?? false, error: r?.reason ?? null };
   }
 
+  // ─── Drag Element ────────────────────────────────────────────────────────
+
+  async dragElement(
+    sourceSelector: string,
+    targetSelector: string,
+    tabId?: string,
+  ): Promise<{
+    dragged: boolean;
+    error: string | null;
+    sourceSelector?: string;
+    targetSelector?: string;
+    method?: string;
+    from?: { x: number; y: number };
+    to?: { x: number; y: number };
+  }> {
+    const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
+    if (!entry) return { dragged: false, error: 'No active tab' };
+
+    const safeSourceSelector = JSON.stringify(sourceSelector);
+    const safeTargetSelector = JSON.stringify(targetSelector);
+    const geometry = await entry.view.webContents.executeJavaScript(`
+      (() => {
+        const source = document.querySelector(${safeSourceSelector});
+        const target = document.querySelector(${safeTargetSelector});
+        if (!source) return { ok: false, reason: 'Source element not found' };
+        if (!target) return { ok: false, reason: 'Target element not found' };
+        if (!(source instanceof Element) || !(target instanceof Element)) {
+          return { ok: false, reason: 'Source or target is not an Element' };
+        }
+        source.scrollIntoView({ block: 'center', inline: 'center' });
+        target.scrollIntoView({ block: 'center', inline: 'center' });
+        const sourceRect = source.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        if (sourceRect.width <= 0 || sourceRect.height <= 0) return { ok: false, reason: 'Source element has no visible box' };
+        if (targetRect.width <= 0 || targetRect.height <= 0) return { ok: false, reason: 'Target element has no visible box' };
+        return {
+          ok: true,
+          from: { x: sourceRect.left + sourceRect.width / 2, y: sourceRect.top + sourceRect.height / 2 },
+          to: { x: targetRect.left + targetRect.width / 2, y: targetRect.top + targetRect.height / 2 },
+        };
+      })()
+    `);
+
+    const box = geometry as {
+      ok?: boolean;
+      reason?: string;
+      from?: { x: number; y: number };
+      to?: { x: number; y: number };
+    } | null;
+    if (!box?.ok || !box.from || !box.to) {
+      return { dragged: false, error: box?.reason || 'Could not resolve drag geometry' };
+    }
+
+    try {
+      const steps = 16;
+      entry.view.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(box.from.x), y: Math.round(box.from.y) });
+      await this.delay(30);
+      entry.view.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(box.from.x), y: Math.round(box.from.y), button: 'left', clickCount: 1 });
+      await this.delay(80);
+      for (let i = 1; i <= steps; i++) {
+        const ratio = i / steps;
+        const x = box.from.x + ((box.to.x - box.from.x) * ratio);
+        const y = box.from.y + ((box.to.y - box.from.y) * ratio);
+        entry.view.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(x), y: Math.round(y), button: 'left' });
+        await this.delay(12);
+      }
+      entry.view.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(box.to.x), y: Math.round(box.to.y), button: 'left', clickCount: 1 });
+      await this.delay(80);
+    } catch {
+      // DOM event fallback below covers environments where native input is unavailable.
+    }
+
+    const { result, error } = await this.executeInPage(`
+      (() => {
+        const source = document.querySelector(${safeSourceSelector});
+        const target = document.querySelector(${safeTargetSelector});
+        if (!source) return { dragged: false, reason: 'Source element not found' };
+        if (!target) return { dragged: false, reason: 'Target element not found' };
+        if (!(source instanceof Element) || !(target instanceof Element)) {
+          return { dragged: false, reason: 'Source or target is not an Element' };
+        }
+
+        const rectOf = (el) => el.getBoundingClientRect();
+        const sourceRect = rectOf(source);
+        const targetRect = rectOf(target);
+        const from = { x: sourceRect.left + sourceRect.width / 2, y: sourceRect.top + sourceRect.height / 2 };
+        const to = { x: targetRect.left + targetRect.width / 2, y: targetRect.top + targetRect.height / 2 };
+        const dataTransfer = typeof DataTransfer === 'function'
+          ? new DataTransfer()
+          : {
+              data: {},
+              dropEffect: 'move',
+              effectAllowed: 'all',
+              files: [],
+              items: [],
+              types: [],
+              clearData() { this.data = {}; this.types = []; },
+              getData(type) { return this.data[type] || ''; },
+              setData(type, value) { this.data[type] = String(value); if (!this.types.includes(type)) this.types.push(type); },
+              setDragImage() {},
+            };
+        const fire = (el, type, point, extra = {}) => {
+          const common = { bubbles: true, cancelable: true, composed: true, clientX: point.x, clientY: point.y, button: 0, buttons: type.endsWith('up') ? 0 : 1, ...extra };
+          let event;
+          if (type.startsWith('drag') || type === 'drop') {
+            try {
+              event = new DragEvent(type, { ...common, dataTransfer });
+            } catch {
+              event = new MouseEvent(type, common);
+              Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
+            }
+          } else if (type.startsWith('pointer')) {
+            try {
+              event = new PointerEvent(type, { ...common, pointerId: 1, isPrimary: true, pointerType: 'mouse' });
+            } catch {
+              event = new MouseEvent(type.replace('pointer', 'mouse'), common);
+            }
+          } else {
+            event = new MouseEvent(type, common);
+          }
+          return el.dispatchEvent(event);
+        };
+
+        source.dispatchEvent(new Event('focus', { bubbles: true }));
+        fire(source, 'pointerdown', from);
+        fire(source, 'mousedown', from);
+        fire(source, 'dragstart', from);
+        fire(source, 'drag', from);
+        fire(target, 'pointermove', to);
+        fire(target, 'mousemove', to);
+        fire(target, 'dragenter', to);
+        fire(target, 'dragover', to);
+        fire(target, 'drop', to);
+        fire(source, 'dragend', to);
+        fire(target, 'mouseup', to, { buttons: 0 });
+        fire(target, 'pointerup', to, { buttons: 0 });
+
+        return { dragged: true, sourceSelector: ${safeSourceSelector}, targetSelector: ${safeTargetSelector}, from, to };
+      })()
+    `, tabId);
+
+    if (error) return { dragged: false, error };
+    const r = result as {
+      dragged?: boolean;
+      reason?: string;
+      from?: { x: number; y: number };
+      to?: { x: number; y: number };
+    } | null;
+    return {
+      dragged: r?.dragged ?? false,
+      error: r?.reason ?? null,
+      sourceSelector,
+      targetSelector,
+      method: 'native-input+dom-events',
+      from: r?.from || box.from,
+      to: r?.to || box.to,
+    };
+  }
+
   // ─── Type In Element ────────────────────────────────────────────────────
 
   async typeInElement(
@@ -213,5 +372,9 @@ export class BrowserPageInteraction {
     `, tabId);
     if (error) return { error };
     return (result as Record<string, unknown>) || {};
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

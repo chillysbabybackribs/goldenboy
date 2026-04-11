@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drag Lab</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.4; }
+    .stage { display: flex; gap: 28px; align-items: center; margin-top: 24px; }
+    .circle {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: 2px solid #1f1f1f;
+      background: #d7442e;
+      cursor: grab;
+    }
+    .can {
+      width: 150px;
+      height: 150px;
+      border: 3px dashed #2a2a2a;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #f3f7f5;
+    }
+    .can.accepted { border-style: solid; background: #d9f2df; }
+    .status { margin-top: 22px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Drag and Drop Circles</h1>
+  <p>Drag any of the circle into this can.</p>
+  <div class="stage">
+    <div id="red-circle" class="circle" draggable="true" aria-label="red circle" data-drag-source="circle"></div>
+    <div id="can" class="can" aria-label="drop can" data-drop-target="can">Can</div>
+  </div>
+  <div id="status" class="status" role="status">Waiting for circle.</div>
+
+  <script>
+    const circle = document.getElementById('red-circle');
+    const can = document.getElementById('can');
+    const status = document.getElementById('status');
+
+    circle.addEventListener('dragstart', (event) => {
+      event.dataTransfer?.setData('text/plain', 'red circle');
+    });
+
+    can.addEventListener('dragover', (event) => {
+      event.preventDefault();
+    });
+
+    can.addEventListener('drop', (event) => {
+      event.preventDefault();
+      can.classList.add('accepted');
+      status.textContent = 'Success: circle dropped in the can.';
+    });
+  </script>
+</body>
+</html>

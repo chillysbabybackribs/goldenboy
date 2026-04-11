@@ -20,7 +20,8 @@ export const UNRESTRICTED_DEV_TOOL_SCHEMAS: AgentToolSchemaSummary[] = [
   schema('browser.activate_tab', 'Activate a browser tab.', { type: 'object', required: ['tabId'], properties: { tabId: { type: 'string' } } }),
   schema('browser.click', 'Click a page element.', { type: 'object', required: ['selector'], properties: { selector: { type: 'string' }, tabId: { type: 'string' } } }),
   schema('browser.type', 'Type text into a page element.', { type: 'object', required: ['selector', 'text'], properties: { selector: { type: 'string' }, text: { type: 'string' }, tabId: { type: 'string' } } }),
-  schema('browser.run_intent_program', 'Execute semantic Web Intent VM bytecode for login/cart/checkout/upload/extract/assert flows.', {
+  schema('browser.drag', 'Drag one page element onto another by selector using native input plus DOM drag/drop events.', { type: 'object', required: ['sourceSelector', 'targetSelector'], properties: { sourceSelector: { type: 'string' }, targetSelector: { type: 'string' }, tabId: { type: 'string' } } }),
+  schema('browser.run_intent_program', 'Execute semantic Web Intent VM bytecode for login/drag-drop/cart/checkout/upload/extract/assert flows.', {
     type: 'object',
     required: ['instructions'],
     properties: {

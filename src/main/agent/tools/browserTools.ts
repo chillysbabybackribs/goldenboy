@@ -224,6 +224,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     async type(selector, text, tabId) {
       return browserService.typeInElement(selector, text, tabId);
     },
+    async drag(sourceSelector, targetSelector, tabId) {
+      return browserService.dragElement(sourceSelector, targetSelector, tabId);
+    },
     async executeInPage(expression, tabId) {
       return browserService.executeInPage(expression, tabId);
     },
@@ -560,6 +563,32 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const text = requireString(obj, 'text');
         const result = await browserService.typeInElement(selector, text, optionalString(obj, 'tabId'));
         return { summary: `Typed into ${selector}`, data: { result } };
+      },
+    },
+    {
+      name: 'browser.drag',
+      description: 'Drag one page element onto another by selector using native input plus DOM drag/drop events.',
+      inputSchema: {
+        type: 'object',
+        required: ['sourceSelector', 'targetSelector'],
+        properties: {
+          sourceSelector: { type: 'string' },
+          targetSelector: { type: 'string' },
+          tabId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const sourceSelector = requireString(obj, 'sourceSelector');
+        const targetSelector = requireString(obj, 'targetSelector');
+        const result = await browserService.dragElement(sourceSelector, targetSelector, optionalString(obj, 'tabId'));
+        return {
+          summary: result.dragged
+            ? `Dragged ${sourceSelector} to ${targetSelector}`
+            : `Drag failed from ${sourceSelector} to ${targetSelector}: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
       },
     },
     {
@@ -941,7 +970,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.run_intent_program',
-      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
+      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
       inputSchema: {
         type: 'object',
         required: ['instructions'],

@@ -5,6 +5,7 @@ export type WebIntentOpcode =
   | 'WAIT'
   | 'ASSERT'
   | 'INTENT.LOGIN'
+  | 'INTENT.DRAG_DROP'
   | 'INTENT.ADD_TO_CART'
   | 'INTENT.OPEN_CART'
   | 'INTENT.FILL_CHECKOUT_INFO'
@@ -58,12 +59,14 @@ export type WebIntentAdapter = {
   getFormModel: (tabId?: string) => Promise<BrowserFormModel[]>;
   click: (selector: string, tabId?: string) => Promise<{ clicked: boolean; error: string | null }>;
   type: (selector: string, text: string, tabId?: string) => Promise<{ typed: boolean; error: string | null }>;
+  drag: (sourceSelector: string, targetSelector: string, tabId?: string) => Promise<{ dragged: boolean; error: string | null }>;
   executeInPage: (expression: string, tabId?: string) => Promise<{ result: unknown; error: string | null }>;
 };
 
 const LOGIN_USER_RE = /\b(email|e-mail|username|user|login)\b/i;
 const LOGIN_PASSWORD_RE = /\bpassword|passcode|pin\b/i;
 const LOGIN_SUBMIT_RE = /\b(sign in|log in|login|continue|submit|next)\b/i;
+const DRAG_SUCCESS_RE = /\b(dropped|success|complete|placed|accepted|in the can|inside)\b/i;
 const UPLOAD_FIELD_RE = /\b(file|upload|attachment|document|csv|path)\b/i;
 const UPLOAD_BUTTON_RE = /\b(upload|attach|import|submit file|send file)\b/i;
 const ADD_TO_CART_BUTTON_RE = /\b(add to cart|add item|add)\b/i;
@@ -115,6 +118,7 @@ function normalizeOp(op: string): WebIntentOpcode {
     case 'WAIT':
     case 'ASSERT':
     case 'INTENT.LOGIN':
+    case 'INTENT.DRAG_DROP':
     case 'INTENT.ADD_TO_CART':
     case 'INTENT.OPEN_CART':
     case 'INTENT.FILL_CHECKOUT_INFO':
@@ -292,6 +296,8 @@ export class WebIntentVM {
         return this.executeAssert(args, tabId);
       case 'INTENT.LOGIN':
         return this.executeLogin(args, tabId);
+      case 'INTENT.DRAG_DROP':
+        return this.executeDragDrop(args, tabId);
       case 'INTENT.ADD_TO_CART':
         return this.executeAddToCart(args, tabId);
       case 'INTENT.OPEN_CART':
@@ -488,6 +494,52 @@ export class WebIntentVM {
       uploadField: fileField.ref.selector,
       uploadAction: uploadAction.ref.selector,
       evidence: `Upload confirmed for ${filePath}`,
+    };
+  }
+
+  private async executeDragDrop(args: Record<string, unknown>, tabId?: string): Promise<Record<string, unknown>> {
+    const sourceSelector = optionalString(args, 'sourceSelector');
+    const targetSelector = optionalString(args, 'targetSelector');
+    const sourceText = optionalString(args, 'source')
+      || optionalString(args, 'sourceText')
+      || optionalString(args, 'item')
+      || optionalString(args, 'from')
+      || 'draggable';
+    const targetText = optionalString(args, 'target')
+      || optionalString(args, 'targetText')
+      || optionalString(args, 'to')
+      || 'drop';
+
+    const resolved = sourceSelector && targetSelector
+      ? { sourceSelector, targetSelector, sourceLabel: sourceText, targetLabel: targetText }
+      : await this.resolveDragDropTargetsFromDom(sourceText, targetText, tabId);
+
+    if (!resolved.sourceSelector || !resolved.targetSelector) {
+      throw new Error(`Could not resolve drag/drop targets for "${sourceText}" -> "${targetText}"`);
+    }
+
+    const before = await this.adapter.readPageState(tabId);
+    const drag = await this.adapter.drag(resolved.sourceSelector, resolved.targetSelector, tabId);
+    if (!drag.dragged) throw new Error(drag.error || 'Drag/drop action failed');
+    await this.adapter.waitForSettled(3_000);
+    const after = await this.adapter.readPageState(tabId);
+
+    const changed = before.text !== after.text || before.url !== after.url;
+    const successText = optionalString(args, 'successText');
+    const successObserved = successText
+      ? includesText(after.text, successText)
+      : DRAG_SUCCESS_RE.test(after.text) || changed;
+
+    if (!successObserved) {
+      throw new Error('Drag/drop postcondition failed: no success text or page state change detected');
+    }
+
+    return {
+      sourceSelector: resolved.sourceSelector,
+      targetSelector: resolved.targetSelector,
+      source: resolved.sourceLabel,
+      target: resolved.targetLabel,
+      evidence: `Dragged "${resolved.sourceLabel}" to "${resolved.targetLabel}"`,
     };
   }
 
@@ -953,6 +1005,121 @@ export class WebIntentVM {
       };
     }
     return { count: null, hasRemove: false };
+  }
+
+  private async resolveDragDropTargetsFromDom(
+    sourceText: string,
+    targetText: string,
+    tabId?: string,
+  ): Promise<{
+    sourceSelector: string | null;
+    targetSelector: string | null;
+    sourceLabel: string;
+    targetLabel: string;
+  }> {
+    const probe = await this.adapter.executeInPage(`
+      (() => {
+        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!(el instanceof Element)) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          const semanticDragNode = el.hasAttribute('data-drag-source')
+            || el.hasAttribute('data-drop-target')
+            || el.getAttribute('draggable') === 'true'
+            || el.getAttribute('data-droppable') === 'true';
+          return style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && ((rect.width > 0 && rect.height > 0) || semanticDragNode);
+        };
+        const escapeCss = (value) => {
+          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
+          return String(value).replace(/([ #;?%&,.+*~\\':"!^$[\\]()=>|\\/@])/g, '\\\\$1');
+        };
+        const cssPath = (el) => {
+          if (!(el instanceof Element)) return '';
+          if (el.id) return '#' + escapeCss(el.id);
+          const dataTest = el.getAttribute('data-test') || el.getAttribute('data-testid');
+          if (dataTest) return '[' + (el.hasAttribute('data-test') ? 'data-test' : 'data-testid') + '="' + escapeCss(dataTest) + '"]';
+          const parts = [];
+          let node = el;
+          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+            let selector = node.tagName.toLowerCase();
+            const parent = node.parentElement;
+            if (parent) {
+              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
+              if (siblings.length > 1) selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+            }
+            parts.unshift(selector);
+            node = parent;
+          }
+          return parts.join(' > ');
+        };
+        const labelOf = (el) => clean([
+          el.getAttribute('aria-label') || '',
+          el.getAttribute('data-label') || '',
+          el.getAttribute('data-test') || '',
+          el.getAttribute('data-testid') || '',
+          el.getAttribute('title') || '',
+          el.id || '',
+          el.className && typeof el.className === 'string' ? el.className : '',
+          el.textContent || '',
+        ].join(' '));
+        const sourceNeedle = ${JSON.stringify(sourceText)}.toLowerCase();
+        const targetNeedle = ${JSON.stringify(targetText)}.toLowerCase();
+        const sourceBroadRe = /drag|circle|ball|token|item|source/i;
+        const targetBroadRe = /drop|target|can|bin|basket|zone|destination/i;
+        const sourceNodes = Array.from(document.querySelectorAll('[draggable="true"],[data-draggable="true"],[data-drag-source],.draggable,.circle,[class*="circle"],svg circle,button,[role="button"],div,span'))
+          .filter(isVisible);
+        const targetNodes = Array.from(document.querySelectorAll('[data-drop-target],[data-droppable="true"],.dropzone,.drop-zone,[class*="drop"],[class*="target"],[class*="can"],[aria-label],div,section'))
+          .filter(isVisible);
+        const score = (el, needle, broadRe, kind) => {
+          const label = labelOf(el);
+          const lower = label.toLowerCase();
+          let value = 0;
+          if (needle && lower.includes(needle)) value += 10;
+          if (broadRe.test(label)) value += 5;
+          if (kind === 'source' && el.getAttribute('draggable') === 'true') value += 6;
+          if (kind === 'target' && (el.hasAttribute('data-drop-target') || el.getAttribute('data-droppable') === 'true')) value += 6;
+          if (kind === 'source' && el.tagName.toLowerCase() === 'circle') value += 5;
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 8 && rect.height > 8) value += 1;
+          return { el, label, value };
+        };
+        const source = sourceNodes
+          .map(el => score(el, sourceNeedle, sourceBroadRe, 'source'))
+          .filter(item => item.value > 0)
+          .sort((a, b) => b.value - a.value)[0];
+        const target = targetNodes
+          .map(el => score(el, targetNeedle, targetBroadRe, 'target'))
+          .filter(item => item.value > 0 && item.el !== source?.el)
+          .sort((a, b) => b.value - a.value)[0];
+
+        return {
+          sourceSelector: source ? cssPath(source.el) : null,
+          targetSelector: target ? cssPath(target.el) : null,
+          sourceLabel: source ? source.label : ${JSON.stringify(sourceText)},
+          targetLabel: target ? target.label : ${JSON.stringify(targetText)},
+        };
+      })()
+    `, tabId);
+
+    if (!probe.error && probe.result && typeof probe.result === 'object') {
+      const raw = probe.result as Record<string, unknown>;
+      return {
+        sourceSelector: typeof raw.sourceSelector === 'string' && raw.sourceSelector ? raw.sourceSelector : null,
+        targetSelector: typeof raw.targetSelector === 'string' && raw.targetSelector ? raw.targetSelector : null,
+        sourceLabel: typeof raw.sourceLabel === 'string' && raw.sourceLabel ? raw.sourceLabel : sourceText,
+        targetLabel: typeof raw.targetLabel === 'string' && raw.targetLabel ? raw.targetLabel : targetText,
+      };
+    }
+
+    return {
+      sourceSelector: null,
+      targetSelector: null,
+      sourceLabel: sourceText,
+      targetLabel: targetText,
+    };
   }
 
   private async resolveLoginTargetsFromDom(tabId?: string): Promise<LoginTargets> {
