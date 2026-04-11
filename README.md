@@ -44,4 +44,4 @@ MIT
 
 ## Author
 
-Daniel (goldenboy)
+Goldenboy
