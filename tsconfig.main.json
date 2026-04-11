@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist/main",
+    "rootDir": "src"
+  },
+  "include": ["src/main/**/*", "src/shared/**/*"],
+  "exclude": [
+    "src/main/**/*.test.ts",
+    "src/main/models/**/*",
+    "src/main/research/**/*",
+    "src/shared/**/*.test.ts"
+  ]
+}

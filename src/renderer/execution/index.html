@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; img-src 'self' data: https: http:">
+  <title>Execution Surface</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="../vendor/xterm.css">
+  <link rel="stylesheet" href="execution.css">
+</head>
+<body>
+  <div class="execution-shell">
+    <!-- Browser Pane -->
+    <div class="pane browser-pane" id="browserPane">
+      <!-- Tab Bar -->
+      <div class="tab-bar" id="tabBar">
+        <button class="tab-scroll-btn tab-scroll-left" id="tabScrollLeft" title="Scroll tabs left">&#x2039;</button>
+        <div class="tab-list" id="tabList"></div>
+        <button class="tab-scroll-btn tab-scroll-right" id="tabScrollRight" title="Scroll tabs right">&#x203A;</button>
+        <button class="btn-tab-overflow" id="btnTabOverflow" title="All tabs">&#x25BE;</button>
+        <button class="btn-tab-new" id="btnNewTab" title="New Tab">+</button>
+      </div>
+      <!-- Tab Overflow Panel (in-flow, pushes content down like dropdown-panel) -->
+      <div class="tab-overflow-panel" id="tabOverflowDropdown" style="display:none"></div>
+      <!-- Navigation Bar -->
+      <div class="pane-header browser-header">
+        <div class="browser-nav-controls">
+          <button class="btn-nav" id="btnBack" title="Back" disabled>&larr;</button>
+          <button class="btn-nav" id="btnForward" title="Forward" disabled>&rarr;</button>
+          <button class="btn-nav" id="btnReload" title="Reload">&#x21bb;</button>
+          <button class="btn-nav btn-stop" id="btnStop" title="Stop" style="display:none">&#x2715;</button>
+        </div>
+        <div class="browser-address-bar">
+          <input type="text" id="addressInput" class="address-input" placeholder="Search or enter URL..." spellcheck="false" autocomplete="off">
+        </div>
+        <button class="btn-nav" id="btnBookmark" title="Bookmark this page">&#9734;</button>
+        <div class="browser-toolbar-actions">
+          <button class="btn-nav" id="btnZoomOut" title="Zoom out">&#x2212;</button>
+          <span class="zoom-label" id="zoomLabel">100%</span>
+          <button class="btn-nav" id="btnZoomIn" title="Zoom in">+</button>
+          <button class="btn-nav" id="btnDevTools" title="DevTools (F12)">&#x2699;</button>
+          <button class="btn-nav btn-menu" id="btnMenu" title="Menu">&#x2630;</button>
+        </div>
+      </div>
+      <!-- Find Bar (hidden by default) -->
+      <div class="find-bar" id="findBar" style="display:none">
+        <input type="text" id="findInput" class="find-input" placeholder="Find in page...">
+        <span class="find-count" id="findCount">0/0</span>
+        <button class="btn-nav btn-find" id="btnFindPrev" title="Previous">&uarr;</button>
+        <button class="btn-nav btn-find" id="btnFindNext" title="Next">&darr;</button>
+        <button class="btn-nav btn-find" id="btnFindClose" title="Close">&#x2715;</button>
+      </div>
+      <!-- Dropdown Panel (history, bookmarks, downloads, settings, extensions) -->
+      <div class="dropdown-panel" id="dropdownPanel" style="display:none">
+        <div class="dropdown-tabs">
+          <button class="dropdown-tab active" data-panel="history">History</button>
+          <button class="dropdown-tab" data-panel="bookmarks">Bookmarks</button>
+          <button class="dropdown-tab" data-panel="downloads">Downloads</button>
+          <button class="dropdown-tab" data-panel="extensions">Extensions</button>
+          <button class="dropdown-tab" data-panel="settings">Settings</button>
+        </div>
+        <div class="dropdown-content" id="dropdownContent"></div>
+      </div>
+      <!-- Browser Surface -->
+      <div class="pane-content" id="browserContent">
+        <div class="browser-surface-area" id="browserSurfaceArea"></div>
+      </div>
+    </div>
+
+    <!-- Draggable Splitter -->
+    <div class="splitter" id="splitter"><div class="splitter-handle"></div></div>
+
+    <!-- Terminal Pane -->
+    <div class="pane terminal-pane" id="terminalPane">
+      <div class="pane-header">
+        <div class="pane-identity">
+          <span class="pane-dot terminal"></span>
+          <span class="pane-label">TERMINAL</span>
+        </div>
+        <span class="pane-meta" id="terminalMeta"></span>
+        <span class="pane-status" id="terminalStatus">Idle</span>
+        <button class="btn-pane" id="termRestartBtn" title="Restart terminal">&#x21bb;</button>
+      </div>
+      <div class="pane-content" id="terminalContent">
+        <div id="terminalContainer" class="terminal-surface"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="execution-status-bar">
+    <span class="status-indicator">
+      <span class="status-dot done" id="connectionDot"></span>
+      <span id="connectionLabel">Connected</span>
+    </span>
+    <span id="termSizeLabel"></span>
+    <span class="status-spacer"></span>
+    <span id="splitLabel"></span>
+  </div>
+
+  <script src="../vendor/xterm.js"></script>
+  <script src="../vendor/addon-fit.js"></script>
+  <script type="module" src="execution.js"></script>
+</body>
+</html>

@@ -1,0 +1,420 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// BrowserPageAnalysis — Search result extraction, evidence, comparison,
+// research brief synthesis
+// ═══════════════════════════════════════════════════════════════════════════
+
+import type { WebContentsView } from 'electron';
+import type {
+  BrowserActionableElement,
+  BrowserSnapshot,
+} from '../../shared/types/browserIntelligence';
+import type { TabInfo } from '../../shared/types/browser';
+
+type TabEntry = {
+  id: string;
+  view: WebContentsView;
+  info: TabInfo;
+};
+
+type ResolveEntry = (tabId?: string) => TabEntry | undefined;
+
+export type SearchResultCandidate = {
+  index: number;
+  title: string;
+  url: string;
+  snippet: string;
+  selector: string;
+  source: 'search' | 'generic';
+};
+
+export type PageEvidence = {
+  tabId: string;
+  url: string;
+  title: string;
+  mainHeading: string;
+  summary: string;
+  keyFacts: string[];
+  quotes: string[];
+  dates: string[];
+  sourceLinks: string[];
+  activeSurfaceType: BrowserSnapshot['viewport']['activeSurfaceType'];
+  activeSurfaceLabel: string;
+};
+
+type Deps = {
+  resolveEntry: ResolveEntry;
+  getTabs: () => TabInfo[];
+  createTab: (url: string) => TabInfo;
+  activateTab: (tabId: string) => void;
+  executeInPage: (expression: string, tabId?: string) => Promise<{ result: unknown; error: string | null }>;
+  captureTabSnapshot: (tabId?: string) => Promise<BrowserSnapshot>;
+  activeTabId: () => string;
+};
+
+export class BrowserPageAnalysis {
+  private deps: Deps;
+
+  constructor(deps: Deps) {
+    this.deps = deps;
+  }
+
+  // ─── Extract Search Results ─────────────────────────────────────────────
+
+  async extractSearchResults(tabId?: string, limit: number = 10): Promise<SearchResultCandidate[]> {
+    const entry = this.deps.resolveEntry(tabId);
+    if (!entry) return [];
+    const { result, error } = await this.deps.executeInPage(`
+      (() => {
+        const isVisible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const cssPath = (el) => {
+          if (!(el instanceof Element)) return '';
+          const parts = [];
+          let node = el;
+          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+            let selector = node.tagName.toLowerCase();
+            if (node.id) {
+              selector += '#' + CSS.escape(node.id);
+              parts.unshift(selector);
+              break;
+            }
+            parts.unshift(selector);
+            node = node.parentElement;
+          }
+          return parts.join(' > ');
+        };
+        const normalizeUrl = (href) => {
+          try { return new URL(href, location.href).href; } catch { return ''; }
+        };
+        const skipUrl = (url) => {
+          if (!url) return true;
+          try {
+            const parsed = new URL(url);
+            if (!/^https?:$/.test(parsed.protocol)) return true;
+            if (parsed.origin === location.origin && /^\\/($|search|preferences|advanced_search)/.test(parsed.pathname)) return true;
+            if (/google\\.[^/]+$/.test(parsed.hostname) && parsed.pathname === '/search') return true;
+            return false;
+          } catch {
+            return true;
+          }
+        };
+        const anchors = Array.from(document.querySelectorAll('a[href]'))
+          .filter(el => el instanceof HTMLAnchorElement && isVisible(el));
+        const seen = new Set();
+        const scored = anchors.map((anchor) => {
+          const url = normalizeUrl(anchor.getAttribute('href') || '');
+          const title = (anchor.querySelector('h3')?.textContent || anchor.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 180);
+          const container = anchor.closest('article, [data-sokoban-container], [data-hveid], .g, .MjjYud, .tF2Cxc, .yuRUbf, .Ww4FFb, main > div, li');
+          const snippet = ((container instanceof HTMLElement ? container.innerText : anchor.textContent) || '')
+            .replace(/\\s+/g, ' ')
+            .trim()
+            .slice(0, 280);
+          let score = 0;
+          if (anchor.querySelector('h3')) score += 4;
+          if (container) score += 2;
+          if (title.length > 12) score += 2;
+          if (snippet.length > title.length + 20) score += 1;
+          if (url && !skipUrl(url)) score += 2;
+          const source = anchor.querySelector('h3') || container ? 'search' : 'generic';
+          return { url, title, snippet, selector: cssPath(anchor), score, source };
+        })
+        .filter(item => item.url && !skipUrl(item.url) && item.title)
+        .filter(item => {
+          if (seen.has(item.url)) return false;
+          seen.add(item.url);
+          return true;
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, ${Math.max(1, Math.floor(limit))})
+        .map((item, index) => ({ index, ...item }));
+        return scored;
+      })()
+    `, entry.id);
+    if (error || !Array.isArray(result)) return [];
+    return result as SearchResultCandidate[];
+  }
+
+  // ─── Open Search Results Tabs ───────────────────────────────────────────
+
+  async openSearchResultsTabs(input: {
+    tabId?: string;
+    indices?: number[];
+    limit?: number;
+    activateFirst?: boolean;
+  }): Promise<{ success: boolean; openedTabIds: string[]; urls: string[]; sourceResults: SearchResultCandidate[]; error: string | null }> {
+    const sourceEntry = this.deps.resolveEntry(input.tabId);
+    if (!sourceEntry) return { success: false, openedTabIds: [], urls: [], sourceResults: [], error: 'No active tab' };
+    const results = await this.extractSearchResults(sourceEntry.id, Math.max(input.limit ?? 10, 1));
+    if (results.length === 0) {
+      return { success: false, openedTabIds: [], urls: [], sourceResults: [], error: 'No search results detected' };
+    }
+    const targets = Array.isArray(input.indices) && input.indices.length > 0
+      ? input.indices.map(index => results.find(result => result.index === index)).filter(Boolean) as SearchResultCandidate[]
+      : results.slice(0, Math.max(1, input.limit ?? 10));
+    if (targets.length === 0) {
+      return { success: false, openedTabIds: [], urls: [], sourceResults: results, error: 'Requested result indices were unavailable' };
+    }
+    const originalTabId = this.deps.activeTabId();
+    const openedTabs = targets.map(target => this.deps.createTab(target.url));
+    if (input.activateFirst && openedTabs[0]) {
+      this.deps.activateTab(openedTabs[0].id);
+    } else if (originalTabId) {
+      this.deps.activateTab(originalTabId);
+    }
+    return {
+      success: true,
+      openedTabIds: openedTabs.map(tab => tab.id),
+      urls: targets.map(target => target.url),
+      sourceResults: results,
+      error: null,
+    };
+  }
+
+  // ─── Summarize Tab Working Set ──────────────────────────────────────────
+
+  async summarizeTabWorkingSet(tabIds?: string[]): Promise<Array<Record<string, unknown>>> {
+    const ids = Array.isArray(tabIds) && tabIds.length > 0
+      ? tabIds
+      : this.deps.getTabs().map(tab => tab.id);
+    const summaries: Array<Record<string, unknown>> = [];
+    for (const id of ids) {
+      const entry = this.deps.resolveEntry(id);
+      if (!entry) continue;
+      const snapshot = await this.deps.captureTabSnapshot(id);
+      summaries.push({
+        tabId: id,
+        url: snapshot.url,
+        title: snapshot.title,
+        mainHeading: snapshot.mainHeading,
+        activeSurfaceType: snapshot.viewport.activeSurfaceType,
+        activeSurfaceLabel: snapshot.viewport.activeSurfaceLabel,
+        activeSurfaceConfidence: snapshot.viewport.activeSurfaceConfidence,
+        isPrimarySurface: snapshot.viewport.isPrimarySurface,
+        excerpt: snapshot.visibleTextExcerpt.slice(0, 240),
+      });
+    }
+    return summaries;
+  }
+
+  // ─── Extract Page Evidence ──────────────────────────────────────────────
+
+  async extractPageEvidence(tabId?: string): Promise<PageEvidence | null> {
+    const entry = this.deps.resolveEntry(tabId);
+    if (!entry) return null;
+
+    const snapshot = await this.deps.captureTabSnapshot(entry.id);
+    const { result, error } = await this.deps.executeInPage(`
+      (() => {
+        const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+        const visible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const bodyText = clean(document.body?.innerText || '');
+        const sentenceCandidates = bodyText
+          .split(/(?<=[.!?])\\s+/)
+          .map(clean)
+          .filter(Boolean);
+        const paragraphs = Array.from(document.querySelectorAll('main p, article p, p'))
+          .filter(visible)
+          .map(el => clean(el.textContent || ''))
+          .filter(Boolean);
+        const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
+          .filter(visible)
+          .map(el => clean(el.textContent || ''))
+          .filter(Boolean);
+        const quotes = Array.from(document.querySelectorAll('blockquote, q'))
+          .filter(visible)
+          .map(el => clean(el.textContent || ''))
+          .filter(Boolean);
+        const links = Array.from(document.querySelectorAll('a[href]'))
+          .filter(visible)
+          .map(el => {
+            try { return new URL(el.getAttribute('href') || '', location.href).href; } catch { return ''; }
+          })
+          .filter(Boolean);
+        const dateRegex = /\\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[ ]+\\d{1,2},?[ ]+\\d{4}\\b|\\b\\d{4}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}\\b/g;
+        const dated = Array.from(new Set((bodyText.match(dateRegex) || []).map(clean))).slice(0, 8);
+        const factual = sentenceCandidates
+          .filter(text => text.length >= 40 && text.length <= 260)
+          .filter(text => /\\d|%|said|announced|reported|according|study|research|released|launched|founded|raised|acquired|lawsuit|court|policy|update/i.test(text))
+          .slice(0, 8);
+        return {
+          headings: headings.slice(0, 8),
+          paragraphs: paragraphs.slice(0, 6),
+          quotes: quotes.slice(0, 5),
+          dates: dated,
+          sourceLinks: Array.from(new Set(links)).slice(0, 8),
+          factual,
+        };
+      })()
+    `, entry.id);
+
+    const extracted = (!error && result && typeof result === 'object') ? result as {
+      headings?: string[];
+      paragraphs?: string[];
+      quotes?: string[];
+      dates?: string[];
+      sourceLinks?: string[];
+      factual?: string[];
+    } : null;
+
+    const summary = extracted?.paragraphs?.[0]
+      || extracted?.factual?.[0]
+      || snapshot.visibleTextExcerpt.slice(0, 220);
+
+    return {
+      tabId: entry.id,
+      url: snapshot.url,
+      title: snapshot.title,
+      mainHeading: snapshot.mainHeading,
+      summary,
+      keyFacts: extracted?.factual?.slice(0, 5) || [],
+      quotes: extracted?.quotes?.slice(0, 3) || [],
+      dates: extracted?.dates?.slice(0, 6) || [],
+      sourceLinks: extracted?.sourceLinks?.slice(0, 5) || [],
+      activeSurfaceType: snapshot.viewport.activeSurfaceType,
+      activeSurfaceLabel: snapshot.viewport.activeSurfaceLabel,
+    };
+  }
+
+  // ─── Compare Tabs ───────────────────────────────────────────────────────
+
+  async compareTabs(tabIds?: string[]): Promise<Record<string, unknown>> {
+    const ids = Array.isArray(tabIds) && tabIds.length > 0 ? tabIds : this.deps.getTabs().map(tab => tab.id);
+    const evidence = (await Promise.all(ids.map(id => this.extractPageEvidence(id)))).filter(Boolean) as PageEvidence[];
+    const termCounts = new Map<string, number>();
+    const stopWords = new Set(['the', 'and', 'that', 'with', 'from', 'this', 'have', 'were', 'their', 'about', 'which', 'would', 'there', 'into', 'could', 'after', 'before', 'because', 'while', 'where', 'when', 'what', 'your']);
+
+    for (const item of evidence) {
+      const tokens = new Set(
+        `${item.title} ${item.mainHeading} ${item.summary}`
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(token => token.length >= 4 && !stopWords.has(token)),
+      );
+      for (const token of tokens) {
+        termCounts.set(token, (termCounts.get(token) || 0) + 1);
+      }
+    }
+
+    const commonTerms = Array.from(termCounts.entries())
+      .filter(([, count]) => count >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([term]) => term);
+
+    const allDates = Array.from(new Set(evidence.flatMap(item => item.dates))).slice(0, 12);
+    const headings = evidence.map(item => ({ tabId: item.tabId, heading: item.mainHeading || item.title }));
+
+    return {
+      tabCount: evidence.length,
+      commonTerms,
+      datesMentioned: allDates,
+      headings,
+      tabs: evidence,
+    };
+  }
+
+  // ─── Synthesize Research Brief ──────────────────────────────────────────
+
+  async synthesizeResearchBrief(input?: { tabIds?: string[]; question?: string }): Promise<Record<string, unknown>> {
+    const comparison = await this.compareTabs(input?.tabIds);
+    const tabs = (comparison.tabs as PageEvidence[]) || [];
+    const keyFindings = tabs.flatMap(tab =>
+      tab.keyFacts.slice(0, 2).map(fact => ({
+        tabId: tab.tabId,
+        title: tab.title,
+        url: tab.url,
+        fact,
+      })),
+    ).slice(0, 10);
+    const sourceCount = tabs.length;
+    const question = input?.question?.trim() || '';
+    const narrative = [
+      question ? `Question: ${question}` : '',
+      sourceCount > 0 ? `Reviewed ${sourceCount} tab${sourceCount === 1 ? '' : 's'} across the current working set.` : 'No source tabs were available.',
+      keyFindings.length > 0 ? `Top finding: ${keyFindings[0]!.fact}` : '',
+      Array.isArray(comparison.commonTerms) && comparison.commonTerms.length > 0
+        ? `Shared themes: ${(comparison.commonTerms as string[]).slice(0, 5).join(', ')}.`
+        : '',
+    ].filter(Boolean).join(' ');
+
+    return {
+      question: question || null,
+      narrative,
+      sourceCount,
+      commonTerms: comparison.commonTerms,
+      datesMentioned: comparison.datesMentioned,
+      keyFindings,
+      sources: tabs.map(tab => ({
+        tabId: tab.tabId,
+        title: tab.title,
+        url: tab.url,
+        summary: tab.summary,
+      })),
+    };
+  }
+
+  // ─── Rank Actionable Elements ───────────────────────────────────────────
+
+  rankActionableElements(
+    snapshot: BrowserSnapshot,
+    options?: { preferDismiss?: boolean },
+  ): Array<BrowserActionableElement & { rankScore: number; rankReason: string }> {
+    const preferDismiss = !!options?.preferDismiss;
+    const dismissRe = /\b(close|dismiss|cancel|done|got it|not now|skip|back|hide|x)\b/i;
+    const overlayToggleRe = /\b(notification|notifications|activity|inbox|messages|menu)\b/i;
+    const items = snapshot.actionableElements
+      .filter(el => el.visible && el.enabled && !!el.ref.selector)
+      .map((el) => {
+        const text = `${el.text} ${el.ariaLabel}`.trim();
+        let score = Math.round(el.confidence * 100);
+        const reasons: string[] = [];
+
+        if (el.actionability.includes('clickable')) {
+          score += 35;
+          reasons.push('clickable');
+        }
+        if (snapshot.viewport.modalPresent) {
+          score += 20;
+          reasons.push('foreground-ui-open');
+        }
+        if (preferDismiss && dismissRe.test(text)) {
+          score += 140;
+          reasons.push('dismiss-match');
+        }
+        if (preferDismiss && overlayToggleRe.test(text)) {
+          score += 80;
+          reasons.push('overlay-toggle');
+        }
+        if (el.tagName === 'button') {
+          score += 15;
+          reasons.push('button');
+        }
+        if (el.actionability.includes('navigational') && snapshot.viewport.modalPresent) {
+          score -= 50;
+          reasons.push('background-navigation');
+        }
+        if (!text) {
+          score -= 20;
+          reasons.push('no-label');
+        }
+
+        return {
+          ...el,
+          rankScore: score,
+          rankReason: reasons.join(', ') || 'default',
+        };
+      })
+      .sort((a, b) => b.rankScore - a.rankScore);
+
+    return items;
+  }
+}

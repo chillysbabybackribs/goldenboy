@@ -1,0 +1,366 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Execution Surface — Full Browser with Tabs
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html, body { overflow: hidden; }
+
+.execution-shell {
+  display: flex; flex-direction: row;
+  height: calc(100vh - 34px); overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* ── Panes ──────────────────────────────────────────────────────────────── */
+.pane { display: flex; flex-direction: column; overflow: hidden; min-width: 120px; flex: none; }
+.pane-header { display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; height: 40px; }
+.pane-identity { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.pane-dot { width: 6px; height: 6px; border-radius: 50%; transition: all var(--duration-normal) var(--ease-out); }
+.pane-dot.terminal { background: var(--accent-purple); box-shadow: 0 0 5px rgba(167, 139, 250, 0.2); }
+.pane-label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-family: var(--font-mono); }
+.pane-status { font-size: 12px; font-family: var(--font-mono); color: var(--text-ghost); flex-shrink: 0; }
+.pane-meta { font-size: 12px; font-family: var(--font-mono); color: var(--text-ghost); flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.btn-pane { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: transparent; color: var(--text-ghost); font-size: 14px; cursor: pointer; padding: 0; line-height: 1; transition: all var(--duration-fast) var(--ease-out); }
+.btn-pane:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-hover); }
+.btn-pane:active { transform: scale(0.92); }
+.pane-content { flex: 1; overflow: hidden; position: relative; background: var(--bg-primary); }
+
+/* ── Tab Bar ──────────────────────────────────────────────────────────── */
+.tab-bar {
+  display: flex; align-items: flex-end; height: 42px;
+  background: var(--bg-secondary);
+  border-bottom: none;
+  flex-shrink: 0; padding: 0 4px; gap: 0; overflow: hidden;
+  position: relative;
+}
+/* Continuous baseline border that active tab breaks through */
+.tab-bar::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0;
+  height: 1px; background: var(--border); z-index: 0;
+}
+.tab-list {
+  display: flex; align-items: flex-end; flex: 1;
+  overflow-x: auto; gap: 2px; min-width: 0;
+  scrollbar-width: none; padding-bottom: 0;
+}
+.tab-list::-webkit-scrollbar { display: none; }
+
+/* ── Inactive Tab ── */
+.browser-tab {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 12px; height: 34px; min-width: 72px; max-width: 240px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer; flex-shrink: 0;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-ghost);
+  transition: color 0.18s var(--ease-out),
+              background 0.18s var(--ease-out),
+              border-color 0.18s var(--ease-out),
+              box-shadow 0.18s var(--ease-out);
+  position: relative; z-index: 1;
+  margin-bottom: -1px;
+}
+
+/* Inactive hover — ghost lifts slightly */
+.browser-tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-muted);
+  border-color: var(--border-subtle);
+}
+
+/* ── Active Tab — the lit surface ── */
+.browser-tab.active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-color: var(--border);
+  border-bottom-color: var(--bg-primary);
+  z-index: 2;
+  height: 38px;
+}
+
+/* Green accent edge — thin top-light on active tab */
+.browser-tab.active::before {
+  content: ''; position: absolute;
+  top: -1px; left: 8px; right: 8px; height: 2px;
+  background: var(--accent-green);
+  border-radius: 0 0 2px 2px;
+  box-shadow: 0 0 8px rgba(0, 212, 123, 0.25),
+              0 0 20px rgba(0, 212, 123, 0.08);
+  animation: tab-light-in 0.25s var(--ease-out);
+}
+
+@keyframes tab-light-in {
+  from { opacity: 0; left: 40%; right: 40%; }
+  to { opacity: 1; left: 8px; right: 8px; }
+}
+
+/* Subtle inner glow on active tab */
+.browser-tab.active::after {
+  content: ''; position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 212, 123, 0.03) 0%,
+    transparent 50%
+  );
+  pointer-events: none;
+}
+
+/* ── Tab internals ── */
+.browser-tab .tab-favicon {
+  width: 16px; height: 16px; flex-shrink: 0; border-radius: 2px;
+  opacity: 0.5; transition: opacity 0.15s;
+}
+.browser-tab.active .tab-favicon,
+.browser-tab:hover .tab-favicon { opacity: 1; }
+
+.browser-tab .tab-title {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color 0.15s;
+}
+.browser-tab.active .tab-title { font-weight: 500; letter-spacing: 0.01em; }
+
+/* ── Tab Close ── */
+.browser-tab .tab-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border: none; background: transparent;
+  color: var(--text-ghost); font-size: 11px;
+  cursor: pointer; border-radius: 3px; padding: 0;
+  flex-shrink: 0; opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.browser-tab:hover .tab-close,
+.browser-tab.active .tab-close { opacity: 0.6; }
+.browser-tab .tab-close:hover {
+  opacity: 1; background: rgba(238, 68, 68, 0.1); color: var(--accent-red);
+}
+
+/* ── Loading spinner ── */
+.tab-loading {
+  width: 14px; height: 14px; flex-shrink: 0;
+  border: 1.5px solid var(--accent-orange);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── New Tab Button ── */
+.btn-tab-new {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  border: 1px solid transparent; background: transparent;
+  color: var(--text-ghost); font-size: 18px; font-weight: 300;
+  cursor: pointer; border-radius: 6px 6px 0 0;
+  flex-shrink: 0;
+  transition: all 0.15s var(--ease-out);
+  margin-left: 2px; margin-bottom: -1px;
+  position: relative; z-index: 1;
+}
+.btn-tab-new:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+/* ── Tab Scroll Arrows ───────────────────────────────────────────────── */
+.tab-scroll-btn {
+  display: none; align-items: center; justify-content: center;
+  width: 24px; height: 34px; flex-shrink: 0;
+  border: none; background: transparent;
+  color: var(--text-ghost); font-size: 18px; font-weight: 300;
+  cursor: pointer; z-index: 3;
+  transition: color 0.12s, background 0.12s;
+  font-family: var(--font-sans);
+  position: relative;
+}
+.tab-scroll-btn.visible { display: flex; }
+.tab-scroll-btn:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); }
+.tab-scroll-btn:active { color: var(--text-primary); }
+
+/* Fade edges on scroll */
+.tab-scroll-left.visible ~ .tab-list {
+  mask-image: linear-gradient(to right, transparent 0px, black 20px, black calc(100% - 20px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0px, black 20px, black calc(100% - 20px), transparent 100%);
+}
+
+/* ── Tab Overflow Button ─────────────────────────────────────────────── */
+.btn-tab-overflow {
+  display: none; align-items: center; justify-content: center;
+  width: 26px; height: 32px; flex-shrink: 0;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent;
+  color: var(--text-ghost); font-size: 14px;
+  cursor: pointer; z-index: 3;
+  transition: all 0.12s var(--ease-out);
+  margin-left: 2px;
+  font-family: var(--font-sans);
+}
+.btn-tab-overflow.visible { display: flex; }
+.btn-tab-overflow:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); border-color: var(--border-subtle); }
+.btn-tab-overflow.active {
+  color: var(--accent-green); background: rgba(0, 212, 123, 0.06);
+  border-color: rgba(0, 212, 123, 0.15);
+}
+
+/* ── Tab Overflow Panel (in-flow, same pattern as dropdown-panel) ───── */
+.tab-overflow-panel {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  max-height: 290px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.tab-overflow-panel.open { display: block !important; }
+
+.overflow-tab-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 4px;
+  cursor: pointer; font-family: var(--font-mono); font-size: 13px;
+  color: var(--text-muted);
+  transition: background 0.1s, color 0.1s;
+  position: relative;
+}
+.overflow-tab-item:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.overflow-tab-item.active {
+  color: var(--text-primary);
+  background: rgba(0, 212, 123, 0.06);
+}
+/* Green accent pip on active item */
+.overflow-tab-item.active::before {
+  content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 12px; border-radius: 2px;
+  background: var(--accent-green);
+  box-shadow: 0 0 6px rgba(0, 212, 123, 0.3);
+}
+
+.overflow-tab-favicon {
+  width: 16px; height: 16px; border-radius: 2px; flex-shrink: 0;
+}
+.overflow-tab-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-ghost); flex-shrink: 0;
+  margin: 0 4px;
+}
+.overflow-tab-title {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.overflow-tab-id {
+  font-size: 11px; color: var(--text-ghost);
+  font-family: var(--font-mono); letter-spacing: 0.03em;
+  flex-shrink: 0;
+  padding: 1px 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+}
+.overflow-tab-item.active .overflow-tab-id {
+  color: rgba(0, 212, 123, 0.5);
+  border-color: rgba(0, 212, 123, 0.12);
+  background: rgba(0, 212, 123, 0.04);
+}
+
+.tab-overflow-empty {
+  padding: 14px; text-align: center;
+  color: var(--text-ghost); font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+/* ── Navigation Bar ──────────────────────────────────────────────────── */
+.browser-header { gap: 6px; padding: 0 8px; }
+.browser-nav-controls { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.btn-nav { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text-muted); font-size: 15px; cursor: pointer; padding: 0; line-height: 1; transition: all var(--duration-fast) var(--ease-out); font-family: var(--font-sans); }
+.btn-nav:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.btn-nav:active:not(:disabled) { transform: scale(0.9); }
+.btn-nav:disabled { color: var(--text-ghost); cursor: default; opacity: 0.4; }
+.btn-nav.btn-stop { color: var(--accent-red); font-size: 13px; }
+.btn-nav.btn-stop:hover { background: rgba(238, 68, 68, 0.1); }
+.btn-nav.btn-menu { font-size: 16px; }
+
+.browser-address-bar { flex: 1; min-width: 0; }
+.address-input { width: 100%; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--text-secondary); font-family: var(--font-mono); font-size: 13px; padding: 4px 10px; outline: none; height: 28px; transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
+.address-input:focus { border-color: var(--border-active); color: var(--text-primary); box-shadow: 0 0 0 1px var(--border-active); }
+.address-input::placeholder { color: var(--text-ghost); }
+
+.browser-toolbar-actions { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.zoom-label { font-size: 11px; font-family: var(--font-mono); color: var(--text-ghost); min-width: 34px; text-align: center; }
+
+/* ── Find Bar ─────────────────────────────────────────────────────────── */
+.find-bar { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 34px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.find-input { flex: 1; max-width: 280px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--text-primary); font-family: var(--font-mono); font-size: 13px; padding: 3px 10px; height: 24px; outline: none; }
+.find-input:focus { border-color: var(--border-active); }
+.find-count { font-size: 12px; font-family: var(--font-mono); color: var(--text-ghost); min-width: 36px; }
+.btn-find { width: 24px; height: 24px; font-size: 13px; }
+
+/* ── Dropdown Panel ───────────────────────────────────────────────────── */
+.dropdown-panel { background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; max-height: 360px; display: flex; flex-direction: column; }
+.dropdown-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.dropdown-tab { padding: 6px 14px; border: none; background: transparent; color: var(--text-ghost); font-family: var(--font-mono); font-size: 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 2px solid transparent; transition: all var(--duration-fast) var(--ease-out); }
+.dropdown-tab:hover { color: var(--text-secondary); }
+.dropdown-tab.active { color: var(--text-primary); border-bottom-color: var(--accent-green); }
+.dropdown-content { flex: 1; overflow-y: auto; padding: 10px; font-family: var(--font-mono); font-size: 13px; }
+
+.panel-item { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-radius: var(--radius-xs); cursor: pointer; transition: background var(--duration-fast); color: var(--text-secondary); }
+.panel-item:hover { background: var(--bg-hover); }
+.panel-item .item-favicon { width: 16px; height: 16px; border-radius: 2px; flex-shrink: 0; }
+.panel-item .item-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-item .item-url { color: var(--text-ghost); font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-item .item-time { color: var(--text-ghost); font-size: 12px; flex-shrink: 0; }
+.panel-item .item-action { border: none; background: transparent; color: var(--text-ghost); cursor: pointer; font-size: 13px; padding: 2px 4px; border-radius: 2px; }
+.panel-item .item-action:hover { color: var(--accent-red); background: var(--bg-hover); }
+.panel-empty { text-align: center; padding: 16px; color: var(--text-ghost); }
+
+.panel-dl-progress { width: 60px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.panel-dl-progress-fill { height: 100%; background: var(--accent-green); transition: width 0.2s; }
+
+/* Settings panel */
+.settings-group { margin-bottom: 12px; }
+.settings-label { font-size: 12px; color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+.settings-row-stack { align-items: flex-start; gap: 12px; }
+.settings-actions-row { justify-content: flex-start; gap: 8px; flex-wrap: wrap; }
+.settings-row label { color: var(--text-secondary); font-size: 13px; }
+.settings-note { color: var(--text-ghost); font-size: 12px; text-align: right; max-width: 240px; }
+.settings-row select, .settings-row input[type="text"] { background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--text-primary); font-family: var(--font-mono); font-size: 13px; padding: 3px 8px; height: 28px; outline: none; }
+.settings-row select:focus, .settings-row input[type="text"]:focus { border-color: var(--border-active); }
+.settings-toggle { width: 32px; height: 16px; background: var(--border); border: none; border-radius: 8px; cursor: pointer; position: relative; transition: background 0.2s; }
+.settings-toggle.on { background: var(--accent-green); }
+.settings-toggle::after { content: ''; position: absolute; width: 12px; height: 12px; background: white; border-radius: 50%; top: 2px; left: 2px; transition: left 0.2s; }
+.settings-toggle.on::after { left: 18px; }
+
+/* Extensions panel */
+.ext-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-xs); }
+.ext-item:hover { background: var(--bg-hover); }
+.ext-name { flex: 1; color: var(--text-secondary); }
+.ext-version { color: var(--text-ghost); font-size: 12px; }
+.ext-load-row { display: flex; gap: 4px; margin-top: 8px; }
+.ext-load-input { flex: 1; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--text-primary); font-family: var(--font-mono); font-size: 13px; padding: 3px 8px; height: 28px; outline: none; }
+.ext-load-btn { padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-tertiary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; cursor: pointer; }
+.ext-load-btn:hover { background: var(--bg-elevated); }
+
+/* ── Browser Surface ──────────────────────────────────────────────────── */
+.browser-surface-area { width: 100%; height: 100%; background: var(--bg-primary); }
+
+/* ── Terminal Surface ──────────────────────────────────────────────────── */
+.terminal-surface { width: 100%; height: 100%; overflow: hidden; background: #000000; padding: 4px 2px 2px 4px; }
+.terminal-surface .xterm { height: 100%; }
+.terminal-surface .xterm-viewport { overflow-y: scroll !important; }
+.terminal-surface .xterm-viewport::-webkit-scrollbar { width: 8px; }
+.terminal-surface .xterm-viewport::-webkit-scrollbar-track { background: #111; }
+.terminal-surface .xterm-viewport::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+.terminal-surface .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #666; }
+
+/* ── Splitter ──────────────────────────────────────────────────────────── */
+.splitter { width: 1px; background: var(--border); cursor: col-resize; flex-shrink: 0; display: flex; align-items: center; justify-content: center; position: relative; z-index: 10; transition: background var(--duration-fast) var(--ease-out); }
+.splitter::before { content: ''; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px; z-index: 1; }
+.splitter:hover, .splitter.active { background: var(--text-muted); }
+.splitter-handle { width: 1px; height: 32px; background: transparent; border-radius: 1px; opacity: 0; }
+
+/* ── Status Bar ────────────────────────────────────────────────────────── */
+.execution-status-bar { display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--bg-secondary); border-top: 1px solid var(--border); font-size: 12px; font-family: var(--font-mono); color: var(--text-ghost); height: 34px; flex-shrink: 0; letter-spacing: 0.02em; }
+.status-spacer { flex: 1; }
+.execution-status-bar .status-indicator { display: inline-flex; align-items: center; gap: 6px; }

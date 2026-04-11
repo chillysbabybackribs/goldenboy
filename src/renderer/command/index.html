@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'wasm-unsafe-eval'">
+  <title>Command Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="command.css">
+</head>
+<body>
+  <div class="cc-shell">
+
+    <!-- Header — full width -->
+    <header class="cc-header">
+      <span class="cc-header-title">COMMAND CENTER</span>
+      <span class="cc-header-task" id="taskSummary">No active task</span>
+    </header>
+
+    <!-- Main area: left content + right logs -->
+    <div class="cc-main">
+
+      <!-- Left column: metric boxes + chat -->
+      <div class="cc-left">
+
+        <!-- Codex metrics row -->
+        <div class="cc-metrics">
+          <div class="cc-metric-box" id="metricContext">
+            <div class="cc-metric-label">Codex All Time</div>
+            <div class="cc-metric-value" id="metricContextValue">...</div>
+            <div class="cc-metric-sub" id="metricContextSub">loading</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="metricContextBar"></div></div>
+          </div>
+          <div class="cc-metric-box" id="metric5h">
+            <div class="cc-metric-label">Codex 5h</div>
+            <div class="cc-metric-value" id="metric5hValue">...</div>
+            <div class="cc-metric-sub" id="metric5hSub">loading</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="metric5hBar"></div></div>
+          </div>
+          <div class="cc-metric-box" id="metricWeekly">
+            <div class="cc-metric-label">Codex Week</div>
+            <div class="cc-metric-value" id="metricWeeklyValue">...</div>
+            <div class="cc-metric-sub" id="metricWeeklySub">loading</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="metricWeeklyBar"></div></div>
+          </div>
+          <div class="cc-metric-box cc-metric-controls">
+            <div class="cc-metric-label">Threads</div>
+            <div class="cc-metric-value" id="metricCreditsValue">...</div>
+            <div class="cc-controls-group">
+              <div class="cc-toggle-row" id="modelSelector">
+                <button class="cc-toggle active" data-owner="auto">Auto</button>
+                <button class="cc-toggle" data-owner="codex">Codex</button>
+                <button class="cc-toggle" data-owner="haiku">Haiku</button>
+              </div>
+              <div class="cc-toggle-row" id="splitSelector">
+                <button class="cc-toggle active" data-preset="balanced">Bal</button>
+                <button class="cc-toggle" data-preset="focus-browser">Brws</button>
+                <button class="cc-toggle" data-preset="focus-terminal">Term</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Haiku metrics row -->
+        <div class="cc-metrics">
+          <div class="cc-metric-box">
+            <div class="cc-metric-label">Haiku Tokens</div>
+            <div class="cc-metric-value" id="haikuTokensValue">0</div>
+            <div class="cc-metric-sub" id="haikuTokensSub">no usage yet</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="haikuTokensBar"></div></div>
+          </div>
+          <div class="cc-metric-box">
+            <div class="cc-metric-label">Haiku Cost</div>
+            <div class="cc-metric-value" id="haikuCostValue">$0.00</div>
+            <div class="cc-metric-sub" id="haikuCostSub">this session</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="haikuCostBar"></div></div>
+          </div>
+          <div class="cc-metric-box">
+            <div class="cc-metric-label">Haiku Turns</div>
+            <div class="cc-metric-value" id="haikuTurnsValue">0</div>
+            <div class="cc-metric-sub" id="haikuTurnsSub">this session</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="haikuTurnsBar"></div></div>
+          </div>
+          <div class="cc-metric-box">
+            <div class="cc-metric-label">Session Total</div>
+            <div class="cc-metric-value" id="sessionTotalValue">$0.00</div>
+            <div class="cc-metric-sub" id="sessionTotalSub">all models</div>
+            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="sessionTotalBar"></div></div>
+          </div>
+        </div>
+
+        <!-- Chat thread -->
+        <div class="cc-chat" id="chatThread">
+          <div class="cc-chat-empty" id="chatEmptyState">Send a message to start a conversation.</div>
+        </div>
+
+        <!-- Input footer -->
+        <div class="cc-input-footer">
+          <input type="text" class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off">
+          <button class="cc-send-btn" id="chatSubmitBtn">Send</button>
+        </div>
+      </div>
+
+      <!-- Right column: logs (full height) -->
+      <div class="cc-logs">
+        <div class="cc-logs-header">
+          <span class="cc-logs-title">Logs</span>
+          <div class="cc-logs-actions">
+            <button class="cc-logs-action cc-logs-copy" id="logsCopyBtn" type="button" title="Copy visible logs" aria-label="Copy visible logs">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <rect x="5" y="3" width="8" height="10" rx="1.2"></rect>
+                <path d="M3 11.5V5.2C3 4.5 3.5 4 4.2 4H10"></path>
+              </svg>
+            </button>
+            <button class="cc-logs-action cc-logs-clear" id="logsClearBtn" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="cc-logs-stream" id="logStream"></div>
+      </div>
+    </div>
+
+    <!-- Status bar — full width -->
+    <div class="cc-status">
+      <span id="syncLabel">synced</span>
+      <span id="splitLabel">split 50/50</span>
+      <span id="modelLabel">—</span>
+      <span id="sessionLabel">—</span>
+      <span id="taskCount">tasks: 0</span>
+    </div>
+  </div>
+  <script type="module" src="command.js"></script>
+</body>
+</html>
