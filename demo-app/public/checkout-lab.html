@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout Lab</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.4; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .shopping_cart_badge { display: inline-block; min-width: 18px; text-align: center; padding: 1px 5px; margin-left: 4px; border: 1px solid #222; border-radius: 8px; font-size: 12px; }
+    .hidden { display: none; }
+    .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .card { border: 1px solid #ccc; border-radius: 6px; padding: 10px; }
+    .price { font-weight: 600; }
+    .row { margin-bottom: 12px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    input { width: 320px; max-width: 100%; padding: 7px; margin-bottom: 8px; }
+    button { padding: 8px 12px; border-radius: 6px; border: 1px solid #222; background: #fff; cursor: pointer; }
+    table { border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    .error { color: #9f0e0e; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Swag Labs Clone</strong>
+    <a id="cart-link" href="/cart.html" aria-label="Shopping Cart">
+      Cart
+      <span id="cart-badge" class="shopping_cart_badge hidden">0</span>
+    </a>
+  </header>
+  <main id="app"></main>
+
+  <script>
+    const products = [
+      { id: 'backpack', name: 'Sauce Labs Backpack', price: '$29.99' },
+      { id: 'bike-light', name: 'Sauce Labs Bike Light', price: '$9.99' }
+    ];
+    const state = {
+      loggedIn: false,
+      cart: [],
+      checkoutInfo: null,
+      orderId: 'ORD-4242'
+    };
+
+    function setPath(path) {
+      history.pushState({}, '', path);
+    }
+
+    function updateCartBadge() {
+      const badge = document.getElementById('cart-badge');
+      if (state.cart.length > 0) {
+        badge.textContent = String(state.cart.length);
+        badge.classList.remove('hidden');
+      } else {
+        badge.textContent = '0';
+        badge.classList.add('hidden');
+      }
+    }
+
+    function addToCart(productId) {
+      if (!state.cart.includes(productId)) state.cart.push(productId);
+      updateCartBadge();
+    }
+
+    function cartProducts() {
+      return state.cart.map((id) => products.find((p) => p.id === id)).filter(Boolean);
+    }
+
+    function renderLogin() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <h1>Swag Labs</h1>
+        <form id="login-form" aria-label="Login form">
+          <label for="user-name">Username</label>
+          <input id="user-name" name="user-name" autocomplete="username" placeholder="standard_user">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" placeholder="secret_sauce">
+          <div class="row">
+            <button id="login-button" type="button">Login</button>
+          </div>
+          <div id="login-error" class="error"></div>
+        </form>
+      `;
+      document.getElementById('login-button').addEventListener('click', () => {
+        const user = document.getElementById('user-name').value.trim();
+        const pass = document.getElementById('password').value.trim();
+        if (user === 'standard_user' && pass === 'secret_sauce') {
+          state.loggedIn = true;
+          setPath('/inventory.html');
+          render();
+          return;
+        }
+        document.getElementById('login-error').textContent = 'Epic sadface: Username and password do not match.';
+      });
+    }
+
+    function renderInventory() {
+      const app = document.getElementById('app');
+      const cards = products.map((product) => {
+        const inCart = state.cart.includes(product.id);
+        return `
+          <article class="card" data-test="inventory-item">
+            <h2>${product.name}</h2>
+            <p class="price">${product.price}</p>
+            <button type="button" data-test="add-to-cart-${product.id}" data-product-id="${product.id}">
+              ${inCart ? 'Remove' : 'Add to cart'}
+            </button>
+          </article>
+        `;
+      }).join('');
+      app.innerHTML = `
+        <h1>Products</h1>
+        <div class="grid">${cards}</div>
+      `;
+      app.querySelectorAll('button[data-product-id]').forEach((button) => {
+        button.addEventListener('click', () => {
+          addToCart(button.getAttribute('data-product-id'));
+          renderInventory();
+        });
+      });
+    }
+
+    function renderCart() {
+      const app = document.getElementById('app');
+      const rows = cartProducts().map((product) => `
+        <tr><td>${product.name}</td><td>${product.price}</td></tr>
+      `).join('');
+      app.innerHTML = `
+        <h1>Your Cart</h1>
+        <table>
+          <tr><th>Item</th><th>Price</th></tr>
+          ${rows}
+        </table>
+        <div class="row" style="margin-top:10px;">
+          <button id="checkout-button" type="button">Checkout</button>
+        </div>
+      `;
+      document.getElementById('checkout-button').addEventListener('click', () => {
+        setPath('/checkout-step-one.html');
+        render();
+      });
+    }
+
+    function renderCheckoutStepOne() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <h1>Checkout: Your Information</h1>
+        <form id="checkout-info" aria-label="Checkout information form">
+          <label for="first-name">First Name</label>
+          <input id="first-name" name="firstName" placeholder="First Name">
+          <label for="last-name">Last Name</label>
+          <input id="last-name" name="lastName" placeholder="Last Name">
+          <label for="postal-code">Zip/Postal Code</label>
+          <input id="postal-code" name="postalCode" placeholder="Postal Code">
+          <button id="continue" type="button">Continue</button>
+        </form>
+      `;
+      document.getElementById('continue').addEventListener('click', () => {
+        const firstName = document.getElementById('first-name').value.trim();
+        const lastName = document.getElementById('last-name').value.trim();
+        const postalCode = document.getElementById('postal-code').value.trim();
+        if (!firstName || !lastName || !postalCode) return;
+        state.checkoutInfo = { firstName, lastName, postalCode };
+        setPath('/checkout-step-two.html');
+        render();
+      });
+    }
+
+    function renderCheckoutStepTwo() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <h1>Checkout: Overview</h1>
+        <p>Payment Information: SauceCard #31337</p>
+        <p>Shipping Information: Free Pony Express Delivery</p>
+        <p>Item total: $39.98</p>
+        <button id="finish" type="button">Finish</button>
+      `;
+      document.getElementById('finish').addEventListener('click', () => {
+        setPath('/checkout-complete.html');
+        render();
+      });
+    }
+
+    function renderCheckoutComplete() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <h1>Checkout: Complete!</h1>
+        <h2>Thank you for your order!</h2>
+        <p>Your order has been dispatched, and will arrive just as fast as the pony can get there!</p>
+        <table aria-label="Order summary">
+          <tr><th>Order ID</th><td data-label="Order ID">${state.orderId}</td></tr>
+          <tr><th>Status</th><td data-label="Status">Order complete</td></tr>
+          <tr><th>Customer</th><td data-label="Customer">${state.checkoutInfo?.firstName || ''} ${state.checkoutInfo?.lastName || ''}</td></tr>
+        </table>
+      `;
+    }
+
+    function render() {
+      updateCartBadge();
+      const path = location.pathname;
+      if (!state.loggedIn && path !== '/' && path !== '/checkout-lab.html') {
+        setPath('/');
+        renderLogin();
+        return;
+      }
+      if (path === '/' || path === '/checkout-lab.html') {
+        renderLogin();
+      } else if (path === '/inventory.html') {
+        renderInventory();
+      } else if (path === '/cart.html') {
+        renderCart();
+      } else if (path === '/checkout-step-one.html') {
+        renderCheckoutStepOne();
+      } else if (path === '/checkout-step-two.html') {
+        renderCheckoutStepTwo();
+      } else if (path === '/checkout-complete.html') {
+        renderCheckoutComplete();
+      } else {
+        renderLogin();
+      }
+    }
+
+    document.getElementById('cart-link').addEventListener('click', (event) => {
+      event.preventDefault();
+      setPath('/cart.html');
+      render();
+    });
+
+    window.addEventListener('popstate', render);
+    render();
+  </script>
+</body>
+</html>

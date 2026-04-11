@@ -39,7 +39,7 @@ class JsdomIntentAdapter implements WebIntentAdapter {
     return {
       url: w.location.href,
       title: d.title || '',
-      text: (d.body?.textContent || '').replace(/\s+/g, ' ').trim(),
+      text: readableText(d.body),
       mainHeading: (d.querySelector('h1')?.textContent || '').trim(),
     };
   }
@@ -185,6 +185,13 @@ function toFieldKind(inputType: string): BrowserFormFieldModel['kind'] {
   }
 }
 
+function readableText(root: HTMLElement | null): string {
+  if (!root) return '';
+  const cloned = root.cloneNode(true) as HTMLElement;
+  cloned.querySelectorAll('script,style,noscript').forEach(node => node.remove());
+  return (cloned.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
 describe('WebIntentVM', () => {
   it('runs a semantic login/upload/checkout/extract program on a website fixture', async () => {
     const fixturePath = path.join(process.cwd(), 'demo-app/public/intent-lab.html');
@@ -212,6 +219,37 @@ describe('WebIntentVM', () => {
     const selected = (extracted.selected || {}) as Record<string, string>;
     expect(selected['Order ID']).toBe('A100');
     expect(selected['Uploaded File']).toBe('/tmp/orders.csv');
+    expect(selected.Status).toBe('Order complete');
+  });
+
+  it('runs a semantic e-commerce checkout flow with add-to-cart/cart/checkout-info/finish ops', async () => {
+    const fixturePath = path.join(process.cwd(), 'demo-app/public/checkout-lab.html');
+    const adapter = new JsdomIntentAdapter(fixturePath);
+    const vm = new WebIntentVM(adapter);
+
+    const result = await vm.run({
+      instructions: [
+        { op: 'NAVIGATE', args: { url: 'https://intent-lab.local/checkout-lab.html' } },
+        { op: 'INTENT.LOGIN', args: { username: 'standard_user', password: 'secret_sauce' } },
+        { op: 'INTENT.ADD_TO_CART', args: { item: 'Sauce Labs Backpack' } },
+        { op: 'INTENT.OPEN_CART' },
+        { op: 'INTENT.CHECKOUT' },
+        { op: 'INTENT.FILL_CHECKOUT_INFO', args: { firstName: 'Test', lastName: 'User', postalCode: '12345' } },
+        { op: 'INTENT.FINISH_ORDER' },
+        { op: 'ASSERT', args: { kind: 'text_present', text: 'Thank you for your order!' } },
+        { op: 'ASSERT', args: { kind: 'url_includes', value: 'checkout-complete' } },
+        { op: 'INTENT.EXTRACT', args: { fields: ['Order ID', 'Status'] } },
+      ],
+      failFast: true,
+    });
+
+    expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+    expect(result.failedAt).toBeNull();
+    expect(result.steps.every(step => step.status === 'ok')).toBe(true);
+    expect(result.extracted.length).toBe(1);
+    const extracted = result.extracted[0] || {};
+    const selected = (extracted.selected || {}) as Record<string, string>;
+    expect(selected['Order ID']).toBe('ORD-4242');
     expect(selected.Status).toBe('Order complete');
   });
 });

@@ -5,6 +5,10 @@ export type WebIntentOpcode =
   | 'WAIT'
   | 'ASSERT'
   | 'INTENT.LOGIN'
+  | 'INTENT.ADD_TO_CART'
+  | 'INTENT.OPEN_CART'
+  | 'INTENT.FILL_CHECKOUT_INFO'
+  | 'INTENT.FINISH_ORDER'
   | 'INTENT.UPLOAD'
   | 'INTENT.CHECKOUT'
   | 'INTENT.EXTRACT';
@@ -62,7 +66,15 @@ const LOGIN_PASSWORD_RE = /\bpassword|passcode|pin\b/i;
 const LOGIN_SUBMIT_RE = /\b(sign in|log in|login|continue|submit|next)\b/i;
 const UPLOAD_FIELD_RE = /\b(file|upload|attachment|document|csv|path)\b/i;
 const UPLOAD_BUTTON_RE = /\b(upload|attach|import|submit file|send file)\b/i;
+const ADD_TO_CART_BUTTON_RE = /\b(add to cart|add item|add)\b/i;
+const CART_ACTION_RE = /\b(cart|shopping cart|basket|bag)\b/i;
+const ADD_TO_CART_TEXT_RE = /\badd to cart\b/i;
 const CHECKOUT_BUTTON_RE = /\b(checkout|pay now|place order|complete order|buy now|submit order)\b/i;
+const CHECKOUT_FORM_FIRST_RE = /\b(first name|firstname|given name|first)\b/i;
+const CHECKOUT_FORM_LAST_RE = /\b(last name|lastname|surname|family name|last)\b/i;
+const CHECKOUT_FORM_POSTAL_RE = /\b(postal|zip|zipcode|zip code|postcode)\b/i;
+const CHECKOUT_CONTINUE_RE = /\b(continue|next|review|proceed)\b/i;
+const FINISH_ORDER_RE = /\b(finish|place order|complete order|submit order|pay now)\b/i;
 const CHECKOUT_SUCCESS_RE = /\b(order complete|order confirmed|thank you|receipt|purchase complete|success)\b/i;
 const TEXT_NORMALIZE_RE = /\s+/g;
 
@@ -103,6 +115,10 @@ function normalizeOp(op: string): WebIntentOpcode {
     case 'WAIT':
     case 'ASSERT':
     case 'INTENT.LOGIN':
+    case 'INTENT.ADD_TO_CART':
+    case 'INTENT.OPEN_CART':
+    case 'INTENT.FILL_CHECKOUT_INFO':
+    case 'INTENT.FINISH_ORDER':
     case 'INTENT.UPLOAD':
     case 'INTENT.CHECKOUT':
     case 'INTENT.EXTRACT':
@@ -201,6 +217,14 @@ type LoginTargets = {
   formSelector: string | null;
 };
 
+type CheckoutInfoTargets = {
+  firstNameSelector: string | null;
+  lastNameSelector: string | null;
+  postalSelector: string | null;
+  submitSelector: string | null;
+  formSelector: string | null;
+};
+
 export class WebIntentVM {
   constructor(private readonly adapter: WebIntentAdapter) {}
 
@@ -268,6 +292,14 @@ export class WebIntentVM {
         return this.executeAssert(args, tabId);
       case 'INTENT.LOGIN':
         return this.executeLogin(args, tabId);
+      case 'INTENT.ADD_TO_CART':
+        return this.executeAddToCart(args, tabId);
+      case 'INTENT.OPEN_CART':
+        return this.executeOpenCart(tabId);
+      case 'INTENT.FILL_CHECKOUT_INFO':
+        return this.executeFillCheckoutInfo(args, tabId);
+      case 'INTENT.FINISH_ORDER':
+        return this.executeFinishOrder(tabId);
       case 'INTENT.UPLOAD':
         return this.executeUpload(args, tabId);
       case 'INTENT.CHECKOUT':
@@ -459,6 +491,153 @@ export class WebIntentVM {
     };
   }
 
+  private async executeAddToCart(args: Record<string, unknown>, tabId?: string): Promise<Record<string, unknown>> {
+    const item = optionalString(args, 'item')
+      || optionalString(args, 'itemName')
+      || optionalString(args, 'product')
+      || optionalString(args, 'name');
+
+    const before = await this.readCartState(tabId);
+    const targetedAdd = await this.adapter.executeInPage(`
+      (() => {
+        const clean = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const item = ${JSON.stringify(item || '')}.toLowerCase();
+        const addRe = /add to cart|add item|add/i;
+        const selectors = 'button,input[type="button"],input[type="submit"],[role="button"]';
+        const buttons = Array.from(document.querySelectorAll(selectors)).filter(node => node instanceof HTMLElement && isVisible(node));
+        const best = buttons
+          .map((btn) => {
+            const text = clean(btn.textContent || btn.getAttribute('value') || btn.getAttribute('aria-label') || '');
+            if (!addRe.test(text)) return null;
+            const container = btn.closest('article,[data-test],section,li,div') || btn.parentElement;
+            const context = clean(container?.textContent || '');
+            let score = 0;
+            if (/add to cart/i.test(text)) score += 4;
+            if (item && context.toLowerCase().includes(item)) score += 8;
+            if (item && text.toLowerCase().includes(item)) score += 6;
+            return { btn, text, context, score };
+          })
+          .filter((entry) => !!entry)
+          .sort((a, b) => b.score - a.score)[0];
+        if (!best || !(best.btn instanceof HTMLElement)) return { clicked: false };
+        best.btn.click();
+        return {
+          clicked: true,
+          label: best.text,
+          itemMatched: item ? best.context.toLowerCase().includes(item) || best.text.toLowerCase().includes(item) : null,
+        };
+      })()
+    `, tabId);
+
+    if (targetedAdd.error) throw new Error(targetedAdd.error);
+    const targetedResult = asObject(targetedAdd.result);
+    if (targetedResult.clicked !== true) {
+      const actions = await this.adapter.getActionableElements(tabId);
+      const addAction = findBestAction(actions, ADD_TO_CART_BUTTON_RE);
+      if (!addAction?.ref.selector) throw new Error('Could not resolve add-to-cart action');
+      const click = await this.adapter.click(addAction.ref.selector, tabId);
+      if (!click.clicked) throw new Error(click.error || 'Could not click add-to-cart action');
+    }
+
+    await this.adapter.waitForSettled(4_000);
+    const after = await this.readCartState(tabId);
+    const page = await this.adapter.readPageState(tabId);
+    const success = (
+      (typeof before.count === 'number' && typeof after.count === 'number' && after.count > before.count)
+      || after.hasRemove
+      || /\b(remove)\b/i.test(page.text)
+    );
+    if (!success) {
+      throw new Error('Add-to-cart postcondition failed: no cart or UI state change detected');
+    }
+    return {
+      item: item || null,
+      cartCountBefore: before.count,
+      cartCountAfter: after.count,
+      evidence: item
+        ? `Added "${item}" to cart`
+        : 'Added item to cart',
+    };
+  }
+
+  private async executeOpenCart(tabId?: string): Promise<Record<string, unknown>> {
+    const targetedCart = await this.adapter.executeInPage(`
+      (() => {
+        const clean = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const nodes = Array.from(document.querySelectorAll('a[href],button,[role="button"],input[type="button"],input[type="submit"]'));
+        const best = nodes
+          .filter(node => node instanceof HTMLElement && isVisible(node))
+          .map((node) => {
+            const href = node.getAttribute('href') || '';
+            const text = clean(node.textContent || node.getAttribute('aria-label') || node.getAttribute('value') || '');
+            let score = 0;
+            if (/cart|basket|bag/i.test(text)) score += 6;
+            if (/cart/i.test(href)) score += 8;
+            if (/add to cart/i.test(text)) score -= 10;
+            if (node.tagName.toLowerCase() === 'a') score += 2;
+            if (node.getAttribute('data-test')?.includes('cart')) score += 5;
+            return { node, href, score };
+          })
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score)[0];
+        if (!best || !(best.node instanceof HTMLElement)) return { clicked: false };
+        best.node.click();
+        return { clicked: true, href: best.href || null };
+      })()
+    `, tabId);
+
+    if (targetedCart.error) throw new Error(targetedCart.error);
+    const targetedResult = asObject(targetedCart.result);
+    if (targetedResult.clicked !== true) {
+      const actions = await this.adapter.getActionableElements(tabId);
+      const cartAction = actions
+        .filter(el => el.visible && el.enabled && !!el.ref?.selector)
+        .filter((el) => {
+          const text = textOfElement(el);
+          return CART_ACTION_RE.test(text) && !ADD_TO_CART_TEXT_RE.test(text);
+        })
+        .sort((a, b) => {
+          const score = (el: BrowserActionableElement) => {
+            let out = 0;
+            const text = textOfElement(el);
+            if (el.tagName === 'a') out += 4;
+            if (el.actionability.includes('clickable')) out += 2;
+            if (/cart/i.test(el.href || '')) out += 8;
+            if (/shopping cart/i.test(text)) out += 4;
+            return out;
+          };
+          return score(b) - score(a);
+        })[0] || null;
+      if (!cartAction?.ref.selector) throw new Error('Could not resolve cart navigation action');
+      const click = await this.adapter.click(cartAction.ref.selector, tabId);
+      if (!click.clicked) throw new Error(click.error || 'Could not click cart navigation action');
+    }
+
+    await this.adapter.waitForSettled(6_000);
+    const page = await this.adapter.readPageState(tabId);
+    const urlLooksCart = /\bcart\b/i.test(page.url);
+    const textLooksCart = /\b(your cart|shopping cart|cart items|checkout)\b/i.test(page.text);
+    if (!urlLooksCart && !textLooksCart) {
+      throw new Error(`Cart navigation postcondition failed at ${page.url}`);
+    }
+    return {
+      url: page.url,
+      evidence: `Opened cart at ${page.url}`,
+    };
+  }
+
   private async executeCheckout(tabId?: string): Promise<Record<string, unknown>> {
     const actions = await this.adapter.getActionableElements(tabId);
     const checkoutAction = findBestAction(actions, CHECKOUT_BUTTON_RE);
@@ -468,13 +647,132 @@ export class WebIntentVM {
 
     await this.adapter.waitForSettled(8_000);
     const page = await this.adapter.readPageState(tabId);
-    if (!CHECKOUT_SUCCESS_RE.test(page.text)) {
-      throw new Error('Checkout postcondition failed: no confirmation text found');
+    if (CHECKOUT_SUCCESS_RE.test(page.text)) {
+      return {
+        url: page.url,
+        action: checkoutAction.ref.selector,
+        stage: 'completed',
+        evidence: 'Checkout confirmation observed',
+      };
+    }
+
+    if (/\b(checkout|shipping|billing|first name|postal|zip)\b/i.test(page.text) || /\bcheckout\b/i.test(page.url)) {
+      return {
+        url: page.url,
+        action: checkoutAction.ref.selector,
+        stage: 'in_progress',
+        evidence: `Checkout started on ${page.url}`,
+      };
+    }
+    throw new Error('Checkout postcondition failed: no checkout stage detected');
+  }
+
+  private async executeFillCheckoutInfo(args: Record<string, unknown>, tabId?: string): Promise<Record<string, unknown>> {
+    const firstName = optionalString(args, 'firstName')
+      || optionalString(args, 'firstname')
+      || optionalString(args, 'first')
+      || 'Test';
+    const lastName = optionalString(args, 'lastName')
+      || optionalString(args, 'lastname')
+      || optionalString(args, 'last')
+      || 'User';
+    const postalCode = optionalString(args, 'postalCode')
+      || optionalString(args, 'zip')
+      || optionalString(args, 'zipCode')
+      || '12345';
+
+    const forms = await this.adapter.getFormModel(tabId);
+    const checkoutForm = findBestForm(forms, (form) => {
+      let score = 0;
+      for (const field of form.fields) {
+        const label = `${field.label} ${field.name} ${field.placeholder}`;
+        if (CHECKOUT_FORM_FIRST_RE.test(label)) score += 4;
+        if (CHECKOUT_FORM_LAST_RE.test(label)) score += 4;
+        if (CHECKOUT_FORM_POSTAL_RE.test(label)) score += 4;
+        if (field.visible) score += 1;
+      }
+      return score;
+    });
+
+    const firstField = checkoutForm
+      ? findField(checkoutForm.fields, field => CHECKOUT_FORM_FIRST_RE.test(`${field.label} ${field.name} ${field.placeholder}`))
+      : null;
+    const lastField = checkoutForm
+      ? findField(checkoutForm.fields, field => CHECKOUT_FORM_LAST_RE.test(`${field.label} ${field.name} ${field.placeholder}`))
+      : null;
+    const postalField = checkoutForm
+      ? findField(checkoutForm.fields, field => CHECKOUT_FORM_POSTAL_RE.test(`${field.label} ${field.name} ${field.placeholder}`))
+      : null;
+
+    const fallbackTargets = await this.resolveCheckoutInfoTargetsFromDom(tabId);
+    const firstSelector = firstField?.ref.selector || fallbackTargets.firstNameSelector;
+    const lastSelector = lastField?.ref.selector || fallbackTargets.lastNameSelector;
+    const postalSelector = postalField?.ref.selector || fallbackTargets.postalSelector;
+    const formSelector = checkoutForm?.formRef?.selector || fallbackTargets.formSelector;
+
+    if (!firstSelector || !lastSelector || !postalSelector) {
+      throw new Error('Could not resolve checkout information fields');
+    }
+
+    const firstType = await this.adapter.type(firstSelector, firstName, tabId);
+    if (!firstType.typed) throw new Error(firstType.error || 'Typing first name failed');
+    const lastType = await this.adapter.type(lastSelector, lastName, tabId);
+    if (!lastType.typed) throw new Error(lastType.error || 'Typing last name failed');
+    const postalType = await this.adapter.type(postalSelector, postalCode, tabId);
+    if (!postalType.typed) throw new Error(postalType.error || 'Typing postal code failed');
+
+    const actions = await this.adapter.getActionableElements(tabId);
+    const continueAction = findBestAction(actions, CHECKOUT_CONTINUE_RE);
+    const clickSelector = continueAction?.ref.selector || fallbackTargets.submitSelector;
+    if (clickSelector) {
+      const click = await this.adapter.click(clickSelector, tabId);
+      if (!click.clicked) throw new Error(click.error || 'Could not click continue action');
+    } else if (formSelector) {
+      const escaped = JSON.stringify(formSelector);
+      await this.adapter.executeInPage(`
+        (() => {
+          const form = document.querySelector(${escaped});
+          if (!(form instanceof HTMLFormElement)) return false;
+          if (typeof form.requestSubmit === 'function') form.requestSubmit();
+          else form.submit();
+          return true;
+        })()
+      `, tabId);
+    } else {
+      throw new Error('Could not resolve checkout continue action');
+    }
+
+    await this.adapter.waitForSettled(6_000);
+    const page = await this.adapter.readPageState(tabId);
+    const progressed = /\b(checkout|review|order summary|finish|payment|shipping)\b/i.test(page.text)
+      || /\b(checkout-step-two|review|finish)\b/i.test(page.url);
+    if (!progressed) throw new Error(`Checkout info postcondition failed at ${page.url}`);
+    return {
+      url: page.url,
+      firstNameField: firstSelector,
+      lastNameField: lastSelector,
+      postalField: postalSelector,
+      submitField: clickSelector || formSelector || null,
+      evidence: `Checkout info submitted on ${page.url}`,
+    };
+  }
+
+  private async executeFinishOrder(tabId?: string): Promise<Record<string, unknown>> {
+    const actions = await this.adapter.getActionableElements(tabId);
+    const finishAction = findBestAction(actions, FINISH_ORDER_RE);
+    if (!finishAction?.ref.selector) throw new Error('Could not resolve finish-order action');
+    const click = await this.adapter.click(finishAction.ref.selector, tabId);
+    if (!click.clicked) throw new Error(click.error || 'Could not click finish-order action');
+
+    await this.adapter.waitForSettled(8_000);
+    const page = await this.adapter.readPageState(tabId);
+    if (!CHECKOUT_SUCCESS_RE.test(page.text) && !/\b(complete|confirmation)\b/i.test(page.url)) {
+      throw new Error('Finish-order postcondition failed: no confirmation text found');
     }
     return {
       url: page.url,
-      action: checkoutAction.ref.selector,
-      evidence: 'Checkout confirmation observed',
+      action: finishAction.ref.selector,
+      evidence: `Order completion observed at ${page.url}`,
     };
   }
 
@@ -635,6 +933,28 @@ export class WebIntentVM {
     return out;
   }
 
+  private async readCartState(tabId?: string): Promise<{ count: number | null; hasRemove: boolean }> {
+    const probe = await this.adapter.executeInPage(`
+      (() => {
+        const badge = document.querySelector('.shopping_cart_badge,[data-test*="shopping-cart-badge"],[aria-label*="cart"] .badge');
+        const badgeText = badge?.textContent?.trim() || '';
+        const parsed = Number.parseInt(badgeText, 10);
+        const count = Number.isFinite(parsed) ? parsed : null;
+        const bodyText = (document.body?.innerText || '').toLowerCase();
+        const hasRemove = /\\bremove\\b/.test(bodyText);
+        return { count, hasRemove };
+      })()
+    `, tabId);
+    if (!probe.error && probe.result && typeof probe.result === 'object') {
+      const raw = probe.result as Record<string, unknown>;
+      return {
+        count: typeof raw.count === 'number' && Number.isFinite(raw.count) ? raw.count : null,
+        hasRemove: raw.hasRemove === true,
+      };
+    }
+    return { count: null, hasRemove: false };
+  }
+
   private async resolveLoginTargetsFromDom(tabId?: string): Promise<LoginTargets> {
     const probe = await this.adapter.executeInPage(`
       (() => {
@@ -747,6 +1067,111 @@ export class WebIntentVM {
     return {
       usernameSelector: null,
       passwordSelector: null,
+      submitSelector: null,
+      formSelector: null,
+    };
+  }
+
+  private async resolveCheckoutInfoTargetsFromDom(tabId?: string): Promise<CheckoutInfoTargets> {
+    const probe = await this.adapter.executeInPage(`
+      (() => {
+        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const cssPath = (el) => {
+          if (!(el instanceof Element)) return '';
+          if (el.id) return '#' + CSS.escape(el.id);
+          const parts = [];
+          let node = el;
+          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+            let selector = node.tagName.toLowerCase();
+            const parent = node.parentElement;
+            if (parent) {
+              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
+              if (siblings.length > 1) selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+            }
+            parts.unshift(selector);
+            node = parent;
+          }
+          return parts.join(' > ');
+        };
+        const labelOf = (field) => clean([
+          field.getAttribute('aria-label') || '',
+          field.getAttribute('name') || '',
+          field.getAttribute('id') || '',
+          field.getAttribute('placeholder') || '',
+          (field.id ? document.querySelector('label[for="' + CSS.escape(field.id) + '"]')?.textContent : '') || '',
+        ].join(' '));
+        const firstRe = /first name|firstname|given name|first/i;
+        const lastRe = /last name|lastname|surname|family name|last/i;
+        const postalRe = /postal|zip|zipcode|zip code|postcode/i;
+        const continueRe = /continue|next|review|proceed/i;
+
+        const forms = Array.from(document.querySelectorAll('form'));
+        const best = forms
+          .filter(form => form instanceof HTMLElement && isVisible(form))
+          .map((form) => {
+            const fields = Array.from(form.querySelectorAll('input,textarea,select')).filter(node => node instanceof HTMLElement && isVisible(node));
+            const first = fields.find(node => firstRe.test(labelOf(node)));
+            const last = fields.find(node => lastRe.test(labelOf(node)));
+            const postal = fields.find(node => postalRe.test(labelOf(node)));
+            const submit = Array.from(form.querySelectorAll('button,input[type="submit"],[role="button"]'))
+              .find(node => node instanceof HTMLElement && isVisible(node) && continueRe.test(clean(node.textContent || node.getAttribute('value') || node.getAttribute('aria-label') || '')));
+            let score = 0;
+            if (first) score += 4;
+            if (last) score += 4;
+            if (postal) score += 4;
+            if (submit) score += 2;
+            return {
+              formSelector: cssPath(form),
+              firstNameSelector: first ? cssPath(first) : '',
+              lastNameSelector: last ? cssPath(last) : '',
+              postalSelector: postal ? cssPath(postal) : '',
+              submitSelector: submit ? cssPath(submit) : '',
+              score,
+            };
+          })
+          .sort((a, b) => b.score - a.score)[0];
+
+        if (best && best.firstNameSelector && best.lastNameSelector && best.postalSelector) {
+          return {
+            firstNameSelector: best.firstNameSelector,
+            lastNameSelector: best.lastNameSelector,
+            postalSelector: best.postalSelector,
+            submitSelector: best.submitSelector || null,
+            formSelector: best.formSelector || null,
+          };
+        }
+
+        return {
+          firstNameSelector: null,
+          lastNameSelector: null,
+          postalSelector: null,
+          submitSelector: null,
+          formSelector: null,
+        };
+      })()
+    `, tabId);
+
+    if (!probe.error && probe.result && typeof probe.result === 'object') {
+      const raw = probe.result as Record<string, unknown>;
+      return {
+        firstNameSelector: typeof raw.firstNameSelector === 'string' && raw.firstNameSelector ? raw.firstNameSelector : null,
+        lastNameSelector: typeof raw.lastNameSelector === 'string' && raw.lastNameSelector ? raw.lastNameSelector : null,
+        postalSelector: typeof raw.postalSelector === 'string' && raw.postalSelector ? raw.postalSelector : null,
+        submitSelector: typeof raw.submitSelector === 'string' && raw.submitSelector ? raw.submitSelector : null,
+        formSelector: typeof raw.formSelector === 'string' && raw.formSelector ? raw.formSelector : null,
+      };
+    }
+
+    return {
+      firstNameSelector: null,
+      lastNameSelector: null,
+      postalSelector: null,
       submitSelector: null,
       formSelector: null,
     };
