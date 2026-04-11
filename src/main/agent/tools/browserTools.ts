@@ -592,6 +592,30 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
+      name: 'browser.hit_test',
+      description: 'Check whether a selector is the topmost clickable element at its center point.',
+      inputSchema: {
+        type: 'object',
+        required: ['selector'],
+        properties: {
+          selector: { type: 'string' },
+          tabId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const selector = requireString(obj, 'selector');
+        const result = await browserService.hitTestElement(selector, optionalString(obj, 'tabId'));
+        return {
+          summary: result.intercepted
+            ? `Pointer to ${selector} is intercepted by ${result.hitSelector || result.hitTagName || 'another element'}`
+            : `Pointer to ${selector} reaches the target element`,
+          data: { result },
+        };
+      },
+    },
+    {
       name: 'browser.extract_page',
       description: 'Fallback only: extract active page text and metadata when cached page search/chunk reads are missing or insufficient. Prefer browser.search_page_cache and browser.read_cached_chunk first.',
       inputSchema: { type: 'object', properties: { maxLength: { type: 'number' }, tabId: { type: 'string' } } },

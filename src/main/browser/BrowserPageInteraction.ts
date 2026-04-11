@@ -12,6 +12,25 @@ type TabEntry = {
 
 type ResolveEntry = (tabId?: string) => TabEntry | undefined;
 
+export type BrowserPointerHitTestResult = {
+  ok: boolean;
+  error: string | null;
+  selector: string;
+  x?: number;
+  y?: number;
+  globalX?: number;
+  globalY?: number;
+  hitSelector?: string | null;
+  hitTagName?: string | null;
+  hitId?: string | null;
+  hitText?: string | null;
+  targetSelector?: string | null;
+  targetTagName?: string | null;
+  targetId?: string | null;
+  targetText?: string | null;
+  intercepted?: boolean;
+};
+
 export class BrowserPageInteraction {
   private resolveEntry: ResolveEntry;
 
@@ -101,6 +120,7 @@ export class BrowserPageInteraction {
     y?: number;
     globalX?: number;
     globalY?: number;
+    hitTest?: BrowserPointerHitTestResult;
   }> {
     const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
     if (!entry) return { clicked: false, error: 'No active tab' };
@@ -129,10 +149,24 @@ export class BrowserPageInteraction {
       return { clicked: false, error: point?.reason || 'Could not resolve click geometry' };
     }
 
+    const x = Math.max(1, Math.round(point.x));
+    const y = Math.max(1, Math.round(point.y));
+    const globalPoint = this.toGlobalPoint(entry, x, y);
+    const hitTest = await this.hitTestElement(selector, tabId);
+    if (hitTest.intercepted) {
+      return {
+        clicked: false,
+        error: `Pointer intercepted by ${hitTest.hitSelector || hitTest.hitTagName || 'unknown element'}`,
+        method: 'preflight-hit-test',
+        x,
+        y,
+        globalX: globalPoint.x,
+        globalY: globalPoint.y,
+        hitTest,
+      };
+    }
+
     try {
-      const x = Math.max(1, Math.round(point.x));
-      const y = Math.max(1, Math.round(point.y));
-      const globalPoint = this.toGlobalPoint(entry, x, y);
       const nativePoint = {
         x,
         y,
@@ -153,6 +187,7 @@ export class BrowserPageInteraction {
         y,
         globalX: globalPoint.x,
         globalY: globalPoint.y,
+        hitTest,
       };
     } catch {
       // DOM fallback below covers test and degraded environments.
@@ -196,6 +231,120 @@ export class BrowserPageInteraction {
       method: 'dom-mouse-events',
       x: r?.x,
       y: r?.y,
+    };
+  }
+
+  async hitTestElement(
+    selector: string,
+    tabId?: string,
+  ): Promise<BrowserPointerHitTestResult> {
+    const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
+    if (!entry) {
+      return { ok: false, error: 'No active tab', selector };
+    }
+
+    const safeSelector = JSON.stringify(selector);
+    const { result, error } = await this.executeInPage(`
+      (() => {
+        const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const cssEscape = (value) => {
+          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
+          return String(value).replace(/([ #;?%&,.+*~\\':"!^$[\\]()=>|\\/@])/g, '\\\\$1');
+        };
+        const selectorFor = (el) => {
+          if (!(el instanceof Element)) return '';
+          if (el.id) return '#' + cssEscape(el.id);
+          const dataTest = el.getAttribute('data-test') || el.getAttribute('data-testid');
+          if (dataTest) return '[' + (el.hasAttribute('data-test') ? 'data-test' : 'data-testid') + '="' + cssEscape(dataTest) + '"]';
+          const parts = [];
+          let node = el;
+          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+            let part = node.tagName.toLowerCase();
+            const parent = node.parentElement;
+            if (parent) {
+              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
+              if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+            }
+            parts.unshift(part);
+            node = parent;
+          }
+          return parts.join(' > ');
+        };
+        const summarize = (el) => {
+          if (!(el instanceof Element)) return {
+            selector: null,
+            tagName: null,
+            id: null,
+            text: null,
+          };
+          return {
+            selector: selectorFor(el),
+            tagName: el.tagName.toLowerCase(),
+            id: el.id || null,
+            text: clean(el.getAttribute('aria-label') || el.textContent || '').slice(0, 120) || null,
+          };
+        };
+
+        const target = document.querySelector(${safeSelector});
+        if (!target) return { ok: false, reason: 'Element not found' };
+        if (!(target instanceof HTMLElement)) return { ok: false, reason: 'Element is not an HTMLElement' };
+        target.scrollIntoView({ block: 'center', inline: 'center' });
+        const rect = target.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return { ok: false, reason: 'Element has no visible box' };
+        const x = Math.max(1, Math.round(rect.left + rect.width / 2));
+        const y = Math.max(1, Math.round(rect.top + rect.height / 2));
+        const hit = document.elementFromPoint(x, y);
+        const intercepted = !!hit && hit !== target && !target.contains(hit);
+        const targetSummary = summarize(target);
+        const hitSummary = summarize(hit);
+        return {
+          ok: true,
+          x,
+          y,
+          intercepted,
+          targetSelector: targetSummary.selector,
+          targetTagName: targetSummary.tagName,
+          targetId: targetSummary.id,
+          targetText: targetSummary.text,
+          hitSelector: hitSummary.selector,
+          hitTagName: hitSummary.tagName,
+          hitId: hitSummary.id,
+          hitText: hitSummary.text,
+        };
+      })()
+    `, tabId);
+
+    if (error) return { ok: false, error, selector };
+    const raw = (result || {}) as Record<string, unknown>;
+    if (raw.ok !== true) {
+      return {
+        ok: false,
+        error: typeof raw.reason === 'string' ? raw.reason : 'Hit test failed',
+        selector,
+      };
+    }
+    const x = typeof raw.x === 'number' ? raw.x : undefined;
+    const y = typeof raw.y === 'number' ? raw.y : undefined;
+    const globalPoint = typeof x === 'number' && typeof y === 'number'
+      ? this.toGlobalPoint(entry, x, y)
+      : null;
+    return {
+      ok: true,
+      error: null,
+      selector,
+      x,
+      y,
+      globalX: globalPoint?.x,
+      globalY: globalPoint?.y,
+      intercepted: raw.intercepted === true,
+      hitSelector: typeof raw.hitSelector === 'string' ? raw.hitSelector : null,
+      hitTagName: typeof raw.hitTagName === 'string' ? raw.hitTagName : null,
+      hitId: typeof raw.hitId === 'string' ? raw.hitId : null,
+      hitText: typeof raw.hitText === 'string' ? raw.hitText : null,
+      targetSelector: typeof raw.targetSelector === 'string' ? raw.targetSelector : null,
+      targetTagName: typeof raw.targetTagName === 'string' ? raw.targetTagName : null,
+      targetId: typeof raw.targetId === 'string' ? raw.targetId : null,
+      targetText: typeof raw.targetText === 'string' ? raw.targetText : null,
     };
   }
 

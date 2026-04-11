@@ -42,6 +42,7 @@ import { BrowserSiteStrategyStore } from './BrowserSiteStrategies';
 import { appendSurfaceFixture } from './BrowserIntelligenceStore';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { BrowserPageInteraction } from './BrowserPageInteraction';
+import type { BrowserPointerHitTestResult } from './BrowserPageInteraction';
 import { BrowserPageAnalysis } from './BrowserPageAnalysis';
 import type { SearchResultCandidate, PageEvidence } from './BrowserPageAnalysis';
 import { BrowserOverlayManager } from './BrowserOverlayManager';
@@ -1195,8 +1196,13 @@ export class BrowserService {
     y?: number;
     globalX?: number;
     globalY?: number;
+    hitTest?: BrowserPointerHitTestResult;
   }> {
     return this.pageInteraction.clickElement(selector, tabId);
+  }
+
+  async hitTestElement(selector: string, tabId?: string): Promise<BrowserPointerHitTestResult> {
+    return this.pageInteraction.hitTestElement(selector, tabId);
   }
 
   async typeInElement(

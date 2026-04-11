@@ -19,6 +19,7 @@ export type AgentToolName =
   | 'browser.click'
   | 'browser.type'
   | 'browser.drag'
+  | 'browser.hit_test'
   | 'browser.extract_page'
   | 'browser.inspect_page'
   | 'browser.find_element'

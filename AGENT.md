@@ -208,6 +208,7 @@ Use stable dotted tool names:
 - `browser.click`
 - `browser.type`
 - `browser.drag`
+- `browser.hit_test`
 - `browser.get_console_events`
 - `browser.get_network_events`
 - `browser.run_intent_program`
