@@ -34,6 +34,7 @@ It is meant to answer four questions:
 | Pointer interception detection | UI Testing Playground | Hidden Layers | `browser.hit_test` + `browser.click` preflight | PASS | Second click now blocked before false success. |
 | Hover / CSS `:hover` | The Internet | Hover over first profile card | `browser.hover` or `INTENT.HOVER` | PASS | Added after CSS injection workaround exposed the missing primitive. |
 | JavaScript alert handling | The Internet | JS Alert accept flow | `browser.get_dialogs` + `browser.accept_dialog` | PASS | Public benchmark; modal no longer blocks the agent. |
+| Semantic dialog intents | Local dialog fixture | Accept prompt / dismiss confirm through VM bytecode | `browser.run_intent_program` -> `INTENT.ACCEPT_DIALOG` / `INTENT.DISMISS_DIALOG` | PASS | Deterministic local regression coverage for dialog workflows. |
 | Diagnostics: console | Any failure case | Inspect console after render/action failure | `browser.get_console_events` | PASS | Tool exists and is available to agent runtime. |
 | Diagnostics: network | Any failure case | Inspect failed requests after render/action failure | `browser.get_network_events` | PASS | Tool exists and is available to agent runtime. |
 | Scroll into view | UI Testing Playground | Scrollbars | `browser.hit_test` + `browser.click` | SOFT PASS | Click completed, but no strong explicit page-side success signal. |
@@ -48,6 +49,7 @@ These are deterministic regression pages we own and should keep green in CI:
 | [checkout-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/checkout-lab.html) | E-commerce flow | login, add to cart, cart, checkout info, finish order |
 | [drag-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/drag-lab.html) | Drag/drop | native drag support |
 | [hover-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/hover-lab.html) | Hover reveal | native hover support |
+| [dialog-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/dialog-lab.html) | Dialog semantics | accept/dismiss/prompt intent flows |
 
 Regression coverage lives in [WebIntentVM.test.ts](/home/dp/Desktop/v2workspace/src/main/browser/WebIntentVM.test.ts).
 

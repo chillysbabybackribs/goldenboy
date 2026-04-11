@@ -28,7 +28,7 @@ export const UNRESTRICTED_DEV_TOOL_SCHEMAS: AgentToolSchemaSummary[] = [
   schema('browser.get_dialogs', 'Return pending JavaScript alert/confirm/prompt dialogs.', { type: 'object', properties: { tabId: { type: 'string' } } }),
   schema('browser.accept_dialog', 'Accept a pending JavaScript alert/confirm/prompt dialog.', { type: 'object', properties: { tabId: { type: 'string' }, dialogId: { type: 'string' }, promptText: { type: 'string' } } }),
   schema('browser.dismiss_dialog', 'Dismiss a pending JavaScript confirm/prompt dialog.', { type: 'object', properties: { tabId: { type: 'string' }, dialogId: { type: 'string' } } }),
-  schema('browser.run_intent_program', 'Execute semantic Web Intent VM bytecode for login/hover/drag-drop/cart/checkout/upload/extract/assert flows.', {
+  schema('browser.run_intent_program', 'Execute semantic Web Intent VM bytecode for login/dialog/hover/drag-drop/cart/checkout/upload/extract/assert flows.', {
     type: 'object',
     required: ['instructions'],
     properties: {

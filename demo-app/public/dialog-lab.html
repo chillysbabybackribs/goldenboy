@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dialog Lab</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.4; }
+    table { border-collapse: collapse; margin-top: 16px; }
+    th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; }
+    .status { margin-top: 14px; padding: 12px; border: 1px solid #ccc; }
+    code { background: #f4f4f4; padding: 1px 4px; }
+  </style>
+</head>
+<body>
+  <h1>Dialog Lab</h1>
+  <p>Use query params like <code>?dialog=alert</code>, <code>?dialog=confirm</code>, or <code>?dialog=prompt</code> to seed a deterministic dialog for VM tests.</p>
+
+  <div id="dialog-status" class="status" role="status">No pending dialog.</div>
+
+  <table aria-label="Dialog summary">
+    <tr><th>Dialog Type</th><td data-label="Dialog Type">none</td></tr>
+    <tr><th>Dialog Message</th><td data-label="Dialog Message">none</td></tr>
+    <tr><th>Prompt Value</th><td data-label="Prompt Value">none</td></tr>
+    <tr><th>Dialog Result</th><td data-label="Dialog Result">Pending</td></tr>
+  </table>
+</body>
+</html>

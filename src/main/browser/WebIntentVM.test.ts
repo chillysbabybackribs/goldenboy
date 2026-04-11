@@ -8,6 +8,12 @@ class JsdomIntentAdapter implements WebIntentAdapter {
   private dom: JSDOM | null = null;
   private readonly tabId = 'test-tab';
   private readonly fixturePath: string;
+  private pendingDialogs: Array<{
+    id: string;
+    type: string;
+    message: string;
+    defaultPrompt?: string;
+  }> = [];
 
   constructor(fixturePath: string) {
     this.fixturePath = fixturePath;
@@ -21,6 +27,8 @@ class JsdomIntentAdapter implements WebIntentAdapter {
       resources: 'usable',
       pretendToBeVisual: true,
     });
+    this.pendingDialogs = [];
+    this.seedDialogFromUrl(url);
     await this.waitForSettled(20);
   }
 
@@ -42,6 +50,26 @@ class JsdomIntentAdapter implements WebIntentAdapter {
       text: readableText(d.body),
       mainHeading: (d.querySelector('h1')?.textContent || '').trim(),
     };
+  }
+
+  async getDialogs(): Promise<Array<{ id: string; type: string; message: string; defaultPrompt?: string }>> {
+    return this.pendingDialogs.map(dialog => ({ ...dialog }));
+  }
+
+  async acceptDialog(input: { dialogId?: string; promptText?: string }): Promise<{ accepted: boolean; error: string | null }> {
+    const dialog = this.resolveDialog(input.dialogId);
+    if (!dialog) return { accepted: false, error: 'No pending dialog to accept' };
+    this.pendingDialogs = this.pendingDialogs.filter(item => item.id !== dialog.id);
+    this.applyDialogResolution(dialog, true, input.promptText);
+    return { accepted: true, error: null };
+  }
+
+  async dismissDialog(input: { dialogId?: string }): Promise<{ dismissed: boolean; error: string | null }> {
+    const dialog = this.resolveDialog(input.dialogId);
+    if (!dialog) return { dismissed: false, error: 'No pending dialog to dismiss' };
+    this.pendingDialogs = this.pendingDialogs.filter(item => item.id !== dialog.id);
+    this.applyDialogResolution(dialog, false);
+    return { dismissed: true, error: null };
   }
 
   async getActionableElements(): Promise<BrowserActionableElement[]> {
@@ -206,6 +234,64 @@ class JsdomIntentAdapter implements WebIntentAdapter {
     if (!this.dom) throw new Error('No DOM loaded. Call navigate first.');
     return this.dom.window as unknown as Window;
   }
+
+  private seedDialogFromUrl(url: string): void {
+    const parsed = new URL(url);
+    const dialogType = parsed.searchParams.get('dialog');
+    if (!dialogType) return;
+    const message = parsed.searchParams.get('message') || `Fixture ${dialogType} dialog`;
+    const defaultPrompt = parsed.searchParams.get('defaultPrompt') || '';
+    this.pendingDialogs = [{
+      id: `dialog_${dialogType}_0`,
+      type: dialogType,
+      message,
+      defaultPrompt,
+    }];
+    this.updateDialogStatus(`Pending ${dialogType} dialog: ${message}`);
+  }
+
+  private resolveDialog(dialogId?: string): { id: string; type: string; message: string; defaultPrompt?: string } | null {
+    if (dialogId) {
+      return this.pendingDialogs.find(dialog => dialog.id === dialogId) || null;
+    }
+    return this.pendingDialogs[0] || null;
+  }
+
+  private applyDialogResolution(
+    dialog: { id: string; type: string; message: string; defaultPrompt?: string },
+    accepted: boolean,
+    promptText?: string,
+  ): void {
+    const d = this.window().document;
+    const resultNode = d.querySelector('[data-label="Dialog Result"]');
+    const typeNode = d.querySelector('[data-label="Dialog Type"]');
+    const messageNode = d.querySelector('[data-label="Dialog Message"]');
+    const promptNode = d.querySelector('[data-label="Prompt Value"]');
+
+    if (typeNode) typeNode.textContent = dialog.type;
+    if (messageNode) messageNode.textContent = dialog.message;
+
+    let resultText = accepted ? 'Accepted dialog' : 'Dismissed dialog';
+    let promptValue = '';
+    if (dialog.type === 'alert') {
+      resultText = 'You successfully clicked an alert';
+    } else if (dialog.type === 'confirm') {
+      resultText = accepted ? 'You clicked: Ok' : 'You clicked: Cancel';
+    } else if (dialog.type === 'prompt') {
+      promptValue = accepted ? (promptText ?? dialog.defaultPrompt ?? '') : '';
+      resultText = accepted ? `You entered: ${promptValue}` : 'You entered: null';
+    }
+
+    if (resultNode) resultNode.textContent = resultText;
+    if (promptNode) promptNode.textContent = promptValue || 'none';
+    this.updateDialogStatus(resultText);
+  }
+
+  private updateDialogStatus(text: string): void {
+    const d = this.window().document;
+    const statusNode = d.getElementById('dialog-status');
+    if (statusNode) statusNode.textContent = text;
+  }
 }
 
 function selectorFor(node: Element): string {
@@ -339,6 +425,66 @@ describe('WebIntentVM', () => {
         { op: 'NAVIGATE', args: { url: 'https://intent-lab.local/hover-lab.html' } },
         { op: 'INTENT.HOVER', args: { target: 'first profile', successText: 'name: user1' } },
         { op: 'ASSERT', args: { kind: 'text_present', text: 'View profile' } },
+      ],
+      failFast: true,
+    });
+
+    expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+    expect(result.failedAt).toBeNull();
+    expect(result.steps.every(step => step.status === 'ok')).toBe(true);
+  });
+
+  it('runs semantic dialog accept flow with prompt text on a website fixture', async () => {
+    const fixturePath = path.join(process.cwd(), 'demo-app/public/dialog-lab.html');
+    const adapter = new JsdomIntentAdapter(fixturePath);
+    const vm = new WebIntentVM(adapter);
+
+    const result = await vm.run({
+      instructions: [
+        {
+          op: 'NAVIGATE',
+          args: {
+            url: 'https://intent-lab.local/dialog-lab.html?dialog=prompt&message=Enter%20your%20name&defaultPrompt=Guest',
+          },
+        },
+        {
+          op: 'INTENT.ACCEPT_DIALOG',
+          args: {
+            messageContains: 'Enter your name',
+            promptText: 'Goldenboy',
+            successText: 'You entered: Goldenboy',
+          },
+        },
+        { op: 'ASSERT', args: { kind: 'text_present', text: 'You entered: Goldenboy' } },
+      ],
+      failFast: true,
+    });
+
+    expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+    expect(result.failedAt).toBeNull();
+    expect(result.steps.every(step => step.status === 'ok')).toBe(true);
+  });
+
+  it('runs semantic dialog dismiss flow on a website fixture', async () => {
+    const fixturePath = path.join(process.cwd(), 'demo-app/public/dialog-lab.html');
+    const adapter = new JsdomIntentAdapter(fixturePath);
+    const vm = new WebIntentVM(adapter);
+
+    const result = await vm.run({
+      instructions: [
+        {
+          op: 'NAVIGATE',
+          args: {
+            url: 'https://intent-lab.local/dialog-lab.html?dialog=confirm&message=Delete%20item',
+          },
+        },
+        {
+          op: 'INTENT.DISMISS_DIALOG',
+          args: {
+            messageContains: 'Delete item',
+          },
+        },
+        { op: 'ASSERT', args: { kind: 'text_present', text: 'You clicked: Cancel' } },
       ],
       failFast: true,
     });

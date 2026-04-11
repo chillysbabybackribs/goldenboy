@@ -5,6 +5,8 @@ export type WebIntentOpcode =
   | 'WAIT'
   | 'ASSERT'
   | 'INTENT.LOGIN'
+  | 'INTENT.ACCEPT_DIALOG'
+  | 'INTENT.DISMISS_DIALOG'
   | 'INTENT.HOVER'
   | 'INTENT.DRAG_DROP'
   | 'INTENT.ADD_TO_CART'
@@ -56,6 +58,14 @@ export type WebIntentAdapter = {
   waitForSettled: (timeoutMs?: number) => Promise<void>;
   getCurrentUrl: (tabId?: string) => Promise<string>;
   readPageState: (tabId?: string) => Promise<WebIntentPageState>;
+  getDialogs: (tabId?: string) => Promise<Array<{
+    id: string;
+    type: string;
+    message: string;
+    defaultPrompt?: string;
+  }>>;
+  acceptDialog: (input: { tabId?: string; dialogId?: string; promptText?: string }) => Promise<{ accepted: boolean; error: string | null }>;
+  dismissDialog: (input: { tabId?: string; dialogId?: string }) => Promise<{ dismissed: boolean; error: string | null }>;
   getActionableElements: (tabId?: string) => Promise<BrowserActionableElement[]>;
   getFormModel: (tabId?: string) => Promise<BrowserFormModel[]>;
   click: (selector: string, tabId?: string) => Promise<{ clicked: boolean; error: string | null }>;
@@ -68,6 +78,7 @@ export type WebIntentAdapter = {
 const LOGIN_USER_RE = /\b(email|e-mail|username|user|login)\b/i;
 const LOGIN_PASSWORD_RE = /\bpassword|passcode|pin\b/i;
 const LOGIN_SUBMIT_RE = /\b(sign in|log in|login|continue|submit|next)\b/i;
+const DIALOG_SUCCESS_RE = /\b(alert|confirm|prompt|accepted|dismissed|clicked:|entered:|you successfully)\b/i;
 const HOVER_SUCCESS_RE = /\b(view profile|profile|caption|tooltip|menu|popover|visible|shown|name:|user)\b/i;
 const DRAG_SUCCESS_RE = /\b(dropped|success|complete|placed|accepted|in the can|inside)\b/i;
 const UPLOAD_FIELD_RE = /\b(file|upload|attachment|document|csv|path)\b/i;
@@ -121,6 +132,8 @@ function normalizeOp(op: string): WebIntentOpcode {
     case 'WAIT':
     case 'ASSERT':
     case 'INTENT.LOGIN':
+    case 'INTENT.ACCEPT_DIALOG':
+    case 'INTENT.DISMISS_DIALOG':
     case 'INTENT.HOVER':
     case 'INTENT.DRAG_DROP':
     case 'INTENT.ADD_TO_CART':
@@ -300,6 +313,10 @@ export class WebIntentVM {
         return this.executeAssert(args, tabId);
       case 'INTENT.LOGIN':
         return this.executeLogin(args, tabId);
+      case 'INTENT.ACCEPT_DIALOG':
+        return this.executeAcceptDialog(args, tabId);
+      case 'INTENT.DISMISS_DIALOG':
+        return this.executeDismissDialog(args, tabId);
       case 'INTENT.HOVER':
         return this.executeHover(args, tabId);
       case 'INTENT.DRAG_DROP':
@@ -466,6 +483,75 @@ export class WebIntentVM {
       passwordField: passwordSelector,
       submitField: clickSelector || formSelector || null,
       evidence: `Login succeeded on ${auth.url}`,
+    };
+  }
+
+  private async executeAcceptDialog(args: Record<string, unknown>, tabId?: string): Promise<Record<string, unknown>> {
+    const dialogs = await this.adapter.getDialogs(tabId);
+    const dialogId = optionalString(args, 'dialogId');
+    const messageContains = optionalString(args, 'messageContains') || optionalString(args, 'message');
+    const dialog = dialogs.find((item) => {
+      if (dialogId && item.id !== dialogId) return false;
+      if (messageContains && !includesText(item.message || '', messageContains)) return false;
+      return true;
+    }) || dialogs[0] || null;
+    if (!dialog) throw new Error('No pending dialog to accept');
+
+    const promptText = optionalString(args, 'promptText') || optionalString(args, 'value') || undefined;
+    const accepted = await this.adapter.acceptDialog({
+      tabId,
+      dialogId: dialog.id,
+      promptText,
+    });
+    if (!accepted.accepted) throw new Error(accepted.error || 'Accept dialog failed');
+    await this.adapter.waitForSettled(1_000);
+    const page = await this.adapter.readPageState(tabId);
+    const successText = optionalString(args, 'successText');
+    const ok = successText ? includesText(page.text, successText) : DIALOG_SUCCESS_RE.test(page.text);
+    if (!ok) {
+      throw new Error('Accept dialog postcondition failed: no confirmation text found');
+    }
+    return {
+      dialogId: dialog.id,
+      type: dialog.type,
+      message: dialog.message,
+      promptText: promptText || null,
+      accepted: true,
+      evidence: ok
+        ? `Accepted ${dialog.type} dialog: ${dialog.message || '(empty)'}`
+        : `Accepted ${dialog.type} dialog`,
+    };
+  }
+
+  private async executeDismissDialog(args: Record<string, unknown>, tabId?: string): Promise<Record<string, unknown>> {
+    const dialogs = await this.adapter.getDialogs(tabId);
+    const dialogId = optionalString(args, 'dialogId');
+    const messageContains = optionalString(args, 'messageContains') || optionalString(args, 'message');
+    const dialog = dialogs.find((item) => {
+      if (dialogId && item.id !== dialogId) return false;
+      if (messageContains && !includesText(item.message || '', messageContains)) return false;
+      return true;
+    }) || dialogs[0] || null;
+    if (!dialog) throw new Error('No pending dialog to dismiss');
+
+    const dismissed = await this.adapter.dismissDialog({
+      tabId,
+      dialogId: dialog.id,
+    });
+    if (!dismissed.dismissed) throw new Error(dismissed.error || 'Dismiss dialog failed');
+    await this.adapter.waitForSettled(1_000);
+    const page = await this.adapter.readPageState(tabId);
+    const successText = optionalString(args, 'successText');
+    const ok = successText ? includesText(page.text, successText) : DIALOG_SUCCESS_RE.test(page.text);
+    if (!ok) {
+      throw new Error('Dismiss dialog postcondition failed: no confirmation text found');
+    }
+    return {
+      dialogId: dialog.id,
+      type: dialog.type,
+      message: dialog.message,
+      dismissed: true,
+      evidence: `Dismissed ${dialog.type} dialog: ${dialog.message || '(empty)'}`,
     };
   }
 

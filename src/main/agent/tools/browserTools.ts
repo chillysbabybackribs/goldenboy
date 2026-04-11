@@ -212,6 +212,15 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         mainHeading: snapshot.mainHeading,
       };
     },
+    async getDialogs(tabId) {
+      return browserService.getPendingDialogs(tabId);
+    },
+    async acceptDialog(input) {
+      return browserService.acceptDialog(input);
+    },
+    async dismissDialog(input) {
+      return browserService.dismissDialog(input);
+    },
     async getActionableElements(tabId) {
       return browserService.getActionableElements(tabId);
     },
@@ -1154,7 +1163,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.run_intent_program',
-      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.HOVER, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
+      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.ACCEPT_DIALOG, INTENT.DISMISS_DIALOG, INTENT.HOVER, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
       inputSchema: {
         type: 'object',
         required: ['instructions'],
