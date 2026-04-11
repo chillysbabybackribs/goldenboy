@@ -180,6 +180,19 @@ class JsdomIntentAdapter implements WebIntentAdapter {
     return { dragged: true, error: null };
   }
 
+  async hover(selector: string): Promise<{ hovered: boolean; error: string | null }> {
+    const w = this.window();
+    const d = w.document;
+    const target = d.querySelector(selector);
+    if (!(target instanceof w.Element)) {
+      return { hovered: false, error: `Hover target not found: ${selector}` };
+    }
+    target.dispatchEvent(new w.MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new w.MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new w.MouseEvent('mousemove', { bubbles: true, cancelable: true }));
+    return { hovered: true, error: null };
+  }
+
   async executeInPage(expression: string): Promise<{ result: unknown; error: string | null }> {
     try {
       const result = this.window().eval(expression);
@@ -307,6 +320,25 @@ describe('WebIntentVM', () => {
         { op: 'NAVIGATE', args: { url: 'https://intent-lab.local/drag-lab.html' } },
         { op: 'INTENT.DRAG_DROP', args: { source: 'circle', target: 'can', successText: 'Success: circle dropped in the can.' } },
         { op: 'ASSERT', args: { kind: 'text_present', text: 'Success: circle dropped in the can.' } },
+      ],
+      failFast: true,
+    });
+
+    expect(result.success, JSON.stringify(result, null, 2)).toBe(true);
+    expect(result.failedAt).toBeNull();
+    expect(result.steps.every(step => step.status === 'ok')).toBe(true);
+  });
+
+  it('runs a semantic hover flow on a website fixture', async () => {
+    const fixturePath = path.join(process.cwd(), 'demo-app/public/hover-lab.html');
+    const adapter = new JsdomIntentAdapter(fixturePath);
+    const vm = new WebIntentVM(adapter);
+
+    const result = await vm.run({
+      instructions: [
+        { op: 'NAVIGATE', args: { url: 'https://intent-lab.local/hover-lab.html' } },
+        { op: 'INTENT.HOVER', args: { target: 'first profile', successText: 'name: user1' } },
+        { op: 'ASSERT', args: { kind: 'text_present', text: 'View profile' } },
       ],
       failFast: true,
     });

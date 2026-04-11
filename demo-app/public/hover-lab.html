@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hover Lab</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.4; }
+    .figure {
+      width: 220px;
+      height: 180px;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      background: #eef3f8;
+    }
+    .avatar {
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      background: #2d7f9f;
+    }
+    .figcaption {
+      display: none;
+      position: absolute;
+      inset: auto 12px 12px 12px;
+      padding: 8px;
+      border-radius: 6px;
+      background: #fff;
+      border: 1px solid #333;
+    }
+    .figure:hover .figcaption,
+    .figure.revealed .figcaption {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <h1>Hover Profiles</h1>
+  <p>Hover over the first profile card.</p>
+  <div id="profile-one" class="figure" data-hover-target="first profile" aria-label="first profile card">
+    <div class="avatar" aria-label="user avatar"></div>
+    <div class="figcaption"></div>
+  </div>
+  <script>
+    const profile = document.getElementById('profile-one');
+    const caption = profile.querySelector('.figcaption');
+    function reveal() {
+      caption.innerHTML = '<strong>name: user1</strong> <a href="/users/1">View profile</a>';
+      profile.classList.add('revealed');
+    }
+    profile.addEventListener('mouseenter', () => {
+      reveal();
+    });
+    profile.addEventListener('mouseover', () => {
+      reveal();
+    });
+  </script>
+</body>
+</html>

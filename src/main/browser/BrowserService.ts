@@ -1205,6 +1205,23 @@ export class BrowserService {
     return this.pageInteraction.hitTestElement(selector, tabId);
   }
 
+  async hoverElement(
+    selector: string,
+    tabId?: string,
+  ): Promise<{
+    hovered: boolean;
+    error: string | null;
+    method?: string;
+    selector?: string;
+    x?: number;
+    y?: number;
+    globalX?: number;
+    globalY?: number;
+    hitTest?: BrowserPointerHitTestResult;
+  }> {
+    return this.pageInteraction.hoverElement(selector, tabId);
+  }
+
   async typeInElement(
     selector: string,
     text: string,

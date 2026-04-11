@@ -227,6 +227,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     async drag(sourceSelector, targetSelector, tabId) {
       return browserService.dragElement(sourceSelector, targetSelector, tabId);
     },
+    async hover(selector, tabId) {
+      return browserService.hoverElement(selector, tabId);
+    },
     async executeInPage(expression, tabId) {
       return browserService.executeInPage(expression, tabId);
     },
@@ -587,6 +590,30 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           summary: result.dragged
             ? `Dragged ${sourceSelector} to ${targetSelector}`
             : `Drag failed from ${sourceSelector} to ${targetSelector}: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
+      },
+    },
+    {
+      name: 'browser.hover',
+      description: 'Move the native pointer over an element by selector.',
+      inputSchema: {
+        type: 'object',
+        required: ['selector'],
+        properties: {
+          selector: { type: 'string' },
+          tabId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const selector = requireString(obj, 'selector');
+        const result = await browserService.hoverElement(selector, optionalString(obj, 'tabId'));
+        return {
+          summary: result.hovered
+            ? `Hovered ${selector}`
+            : `Hover failed for ${selector}: ${result.error || 'unknown error'}`,
           data: { result },
         };
       },
@@ -1054,7 +1081,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.run_intent_program',
-      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
+      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.HOVER, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
       inputSchema: {
         type: 'object',
         required: ['instructions'],

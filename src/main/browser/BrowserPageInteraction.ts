@@ -348,6 +348,104 @@ export class BrowserPageInteraction {
     };
   }
 
+  // ─── Hover Element ───────────────────────────────────────────────────────
+
+  async hoverElement(
+    selector: string,
+    tabId?: string,
+  ): Promise<{
+    hovered: boolean;
+    error: string | null;
+    method?: string;
+    selector?: string;
+    x?: number;
+    y?: number;
+    globalX?: number;
+    globalY?: number;
+    hitTest?: BrowserPointerHitTestResult;
+  }> {
+    const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
+    if (!entry) return { hovered: false, error: 'No active tab' };
+
+    const hitTest = await this.hitTestElement(selector, tabId);
+    if (!hitTest.ok || typeof hitTest.x !== 'number' || typeof hitTest.y !== 'number') {
+      return { hovered: false, error: hitTest.error || 'Could not resolve hover target', hitTest };
+    }
+    if (hitTest.intercepted) {
+      return {
+        hovered: false,
+        error: `Pointer intercepted by ${hitTest.hitSelector || hitTest.hitTagName || 'unknown element'}`,
+        method: 'preflight-hit-test',
+        selector,
+        x: hitTest.x,
+        y: hitTest.y,
+        globalX: hitTest.globalX,
+        globalY: hitTest.globalY,
+        hitTest,
+      };
+    }
+
+    const x = Math.max(1, Math.round(hitTest.x));
+    const y = Math.max(1, Math.round(hitTest.y));
+    const globalPoint = this.toGlobalPoint(entry, x, y);
+    try {
+      entry.view.webContents.sendInputEvent({
+        type: 'mouseMove',
+        x,
+        y,
+        globalX: globalPoint.x,
+        globalY: globalPoint.y,
+      });
+      await this.delay(120);
+      return {
+        hovered: true,
+        error: null,
+        method: 'native-input',
+        selector,
+        x,
+        y,
+        globalX: globalPoint.x,
+        globalY: globalPoint.y,
+        hitTest,
+      };
+    } catch {
+      // DOM fallback below covers test and degraded environments.
+    }
+
+    const safeSelector = JSON.stringify(selector);
+    const { result, error } = await this.executeInPage(`
+      (() => {
+        const el = document.querySelector(${safeSelector});
+        if (!el) return { hovered: false, reason: 'Element not found' };
+        if (!(el instanceof Element)) return { hovered: false, reason: 'Element is not an Element' };
+        const rect = el.getBoundingClientRect();
+        const x = Math.max(1, Math.round(rect.left + rect.width / 2));
+        const y = Math.max(1, Math.round(rect.top + rect.height / 2));
+        const opts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: Math.max(1, x), screenY: Math.max(1, y), button: 0, buttons: 0 };
+        try {
+          el.dispatchEvent(new PointerEvent('pointerover', { ...opts, pointerId: 1, isPrimary: true, pointerType: 'mouse' }));
+          el.dispatchEvent(new PointerEvent('pointerenter', { ...opts, pointerId: 1, isPrimary: true, pointerType: 'mouse' }));
+        } catch {}
+        el.dispatchEvent(new MouseEvent('mouseover', opts));
+        el.dispatchEvent(new MouseEvent('mouseenter', opts));
+        el.dispatchEvent(new MouseEvent('mousemove', opts));
+        return { hovered: true, x, y };
+      })()
+    `, tabId);
+
+    if (error) return { hovered: false, error, hitTest };
+    const r = result as { hovered?: boolean; reason?: string; x?: number; y?: number } | null;
+    return {
+      hovered: r?.hovered ?? false,
+      error: r?.reason ?? null,
+      method: 'dom-hover-events',
+      selector,
+      x: r?.x,
+      y: r?.y,
+      hitTest,
+    };
+  }
+
   // ─── Drag Element ────────────────────────────────────────────────────────
 
   async dragElement(

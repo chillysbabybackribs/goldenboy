@@ -5,6 +5,7 @@ export type WebIntentOpcode =
   | 'WAIT'
   | 'ASSERT'
   | 'INTENT.LOGIN'
+  | 'INTENT.HOVER'
   | 'INTENT.DRAG_DROP'
   | 'INTENT.ADD_TO_CART'
   | 'INTENT.OPEN_CART'
@@ -59,6 +60,7 @@ export type WebIntentAdapter = {
   getFormModel: (tabId?: string) => Promise<BrowserFormModel[]>;
   click: (selector: string, tabId?: string) => Promise<{ clicked: boolean; error: string | null }>;
   type: (selector: string, text: string, tabId?: string) => Promise<{ typed: boolean; error: string | null }>;
+  hover: (selector: string, tabId?: string) => Promise<{ hovered: boolean; error: string | null }>;
   drag: (sourceSelector: string, targetSelector: string, tabId?: string) => Promise<{ dragged: boolean; error: string | null }>;
   executeInPage: (expression: string, tabId?: string) => Promise<{ result: unknown; error: string | null }>;
 };
@@ -66,6 +68,7 @@ export type WebIntentAdapter = {
 const LOGIN_USER_RE = /\b(email|e-mail|username|user|login)\b/i;
 const LOGIN_PASSWORD_RE = /\bpassword|passcode|pin\b/i;
 const LOGIN_SUBMIT_RE = /\b(sign in|log in|login|continue|submit|next)\b/i;
+const HOVER_SUCCESS_RE = /\b(view profile|profile|caption|tooltip|menu|popover|visible|shown|name:|user)\b/i;
 const DRAG_SUCCESS_RE = /\b(dropped|success|complete|placed|accepted|in the can|inside)\b/i;
 const UPLOAD_FIELD_RE = /\b(file|upload|attachment|document|csv|path)\b/i;
 const UPLOAD_BUTTON_RE = /\b(upload|attach|import|submit file|send file)\b/i;
@@ -118,6 +121,7 @@ function normalizeOp(op: string): WebIntentOpcode {
     case 'WAIT':
     case 'ASSERT':
     case 'INTENT.LOGIN':
+    case 'INTENT.HOVER':
     case 'INTENT.DRAG_DROP':
     case 'INTENT.ADD_TO_CART':
     case 'INTENT.OPEN_CART':
@@ -296,6 +300,8 @@ export class WebIntentVM {
         return this.executeAssert(args, tabId);
       case 'INTENT.LOGIN':
         return this.executeLogin(args, tabId);
+      case 'INTENT.HOVER':
+        return this.executeHover(args, tabId);
       case 'INTENT.DRAG_DROP':
         return this.executeDragDrop(args, tabId);
       case 'INTENT.ADD_TO_CART':
@@ -494,6 +500,43 @@ export class WebIntentVM {
       uploadField: fileField.ref.selector,
       uploadAction: uploadAction.ref.selector,
       evidence: `Upload confirmed for ${filePath}`,
+    };
+  }
+
+  private async executeHover(args: Record<string, unknown>, tabId?: string): Promise<Record<string, unknown>> {
+    const selector = optionalString(args, 'selector');
+    const targetText = optionalString(args, 'target')
+      || optionalString(args, 'targetText')
+      || optionalString(args, 'text')
+      || optionalString(args, 'item')
+      || 'hover';
+    const resolved = selector
+      ? { selector, label: targetText }
+      : await this.resolveHoverTargetFromDom(targetText, tabId);
+
+    if (!resolved.selector) {
+      throw new Error(`Could not resolve hover target for "${targetText}"`);
+    }
+
+    const before = await this.adapter.readPageState(tabId);
+    const hover = await this.adapter.hover(resolved.selector, tabId);
+    if (!hover.hovered) throw new Error(hover.error || 'Hover action failed');
+    await this.adapter.waitForSettled(500);
+    const after = await this.adapter.readPageState(tabId);
+
+    const successText = optionalString(args, 'successText');
+    const changed = before.text !== after.text;
+    const successObserved = successText
+      ? includesText(after.text, successText)
+      : HOVER_SUCCESS_RE.test(after.text) || changed;
+    if (!successObserved) {
+      throw new Error('Hover postcondition failed: no revealed hover content or page state change detected');
+    }
+
+    return {
+      selector: resolved.selector,
+      target: resolved.label,
+      evidence: `Hovered "${resolved.label}"`,
     };
   }
 
@@ -1005,6 +1048,91 @@ export class WebIntentVM {
       };
     }
     return { count: null, hasRemove: false };
+  }
+
+  private async resolveHoverTargetFromDom(
+    targetText: string,
+    tabId?: string,
+  ): Promise<{ selector: string | null; label: string }> {
+    const probe = await this.adapter.executeInPage(`
+      (() => {
+        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!(el instanceof Element)) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          const semanticHoverNode = el.hasAttribute('data-hover-target');
+          return style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && ((rect.width > 0 && rect.height > 0) || semanticHoverNode);
+        };
+        const escapeCss = (value) => {
+          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
+          return String(value).replace(/([ #;?%&,.+*~\\':"!^$[\\]()=>|\\/@])/g, '\\\\$1');
+        };
+        const cssPath = (el) => {
+          if (!(el instanceof Element)) return '';
+          if (el.id) return '#' + escapeCss(el.id);
+          const dataTest = el.getAttribute('data-test') || el.getAttribute('data-testid');
+          if (dataTest) return '[' + (el.hasAttribute('data-test') ? 'data-test' : 'data-testid') + '="' + escapeCss(dataTest) + '"]';
+          const parts = [];
+          let node = el;
+          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+            let selector = node.tagName.toLowerCase();
+            const parent = node.parentElement;
+            if (parent) {
+              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
+              if (siblings.length > 1) selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+            }
+            parts.unshift(selector);
+            node = parent;
+          }
+          return parts.join(' > ');
+        };
+        const labelOf = (el) => clean([
+          el.getAttribute('aria-label') || '',
+          el.getAttribute('data-label') || '',
+          el.getAttribute('data-test') || '',
+          el.getAttribute('data-testid') || '',
+          el.getAttribute('title') || '',
+          el.id || '',
+          el.className && typeof el.className === 'string' ? el.className : '',
+          el.textContent || '',
+        ].join(' '));
+        const needle = ${JSON.stringify(targetText)}.toLowerCase();
+        const hoverRe = /hover|profile|figure|card|image|avatar|tooltip|menu|caption|user/i;
+        const nodes = Array.from(document.querySelectorAll('[data-hover-target],.figure,figure,[class*="hover"],[class*="profile"],[class*="card"],img,a,button,[role="button"],div,section'))
+          .filter(isVisible);
+        const best = nodes
+          .map((el, index) => {
+            const label = labelOf(el);
+            const lower = label.toLowerCase();
+            let score = 0;
+            if (needle && lower.includes(needle)) score += 10;
+            if (hoverRe.test(label)) score += 5;
+            if (el.matches('.figure,figure,[data-hover-target]')) score += 6;
+            if (el.querySelector && el.querySelector('.figcaption,[class*="caption"],[role="tooltip"]')) score += 4;
+            if (/first|1|one/i.test(needle) && index === 0) score += 3;
+            return { el, label, score };
+          })
+          .filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score)[0];
+        return {
+          selector: best ? cssPath(best.el) : null,
+          label: best ? best.label : ${JSON.stringify(targetText)},
+        };
+      })()
+    `, tabId);
+
+    if (!probe.error && probe.result && typeof probe.result === 'object') {
+      const raw = probe.result as Record<string, unknown>;
+      return {
+        selector: typeof raw.selector === 'string' && raw.selector ? raw.selector : null,
+        label: typeof raw.label === 'string' && raw.label ? raw.label : targetText,
+      };
+    }
+
+    return { selector: null, label: targetText };
   }
 
   private async resolveDragDropTargetsFromDom(
