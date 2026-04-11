@@ -81,6 +81,40 @@ type PromptDialogResolution = {
   value: string | null;
 };
 
+const MAIN_WORLD_PROMPT_SHIM_SCRIPT = String.raw`
+(() => {
+  const pageWindow = window;
+  if (pageWindow.__browserPromptShimInstalled) return true;
+  const bridge = pageWindow.browserPromptShim;
+  if (!bridge || typeof bridge.openSync !== 'function') return false;
+
+  const nativePrompt = typeof pageWindow.prompt === 'function'
+    ? pageWindow.prompt.bind(pageWindow)
+    : null;
+
+  pageWindow.prompt = function browserPromptShim(message, defaultValue) {
+    const text = typeof message === 'string' ? message : '';
+    const defaultPrompt = typeof defaultValue === 'string' ? defaultValue : '';
+
+    if (nativePrompt) {
+      try {
+        return nativePrompt(text, defaultPrompt);
+      } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        if (!/prompt\(\)\s+is\s+not\s+supported/i.test(errorText)) {
+          throw err;
+        }
+      }
+    }
+
+    return bridge.openSync(text, defaultPrompt, pageWindow.location?.href || '');
+  };
+
+  pageWindow.__browserPromptShimInstalled = true;
+  return true;
+})()
+`;
+
 function getBrowserTabPreloadPath(): string {
   return path.join(__dirname, '..', '..', '..', 'preload', 'preload', 'browserTabPreload.js');
 }
@@ -483,6 +517,10 @@ export class BrowserService {
     const info = entry.info;
     const nav = info.navigation;
 
+    wc.on('dom-ready', () => {
+      void this.installPromptShimInPage(entry);
+    });
+
     wc.on('did-start-loading', () => {
       nav.isLoading = true;
       nav.loadingProgress = 0.1;
@@ -633,6 +671,17 @@ export class BrowserService {
       this.createTab(url);
       return { action: 'deny' };
     });
+  }
+
+  private async installPromptShimInPage(entry: TabEntry): Promise<void> {
+    const wc = entry.view.webContents;
+    if (wc.isDestroyed()) return;
+    try {
+      await wc.executeJavaScript(MAIN_WORLD_PROMPT_SHIM_SCRIPT, true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.emitLog('warn', `Prompt shim injection failed: ${message}`);
+    }
   }
 
   private attachDialogDebugger(entry: TabEntry): void {
