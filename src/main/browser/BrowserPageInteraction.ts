@@ -2,6 +2,7 @@
 // BrowserPageInteraction — DOM query, click, type, and metadata extraction
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { BrowserWindow } from 'electron';
 import type { WebContentsView } from 'electron';
 
 type TabEntry = {
@@ -98,6 +99,8 @@ export class BrowserPageInteraction {
     method?: string;
     x?: number;
     y?: number;
+    globalX?: number;
+    globalY?: number;
   }> {
     const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
     if (!entry) return { clicked: false, error: 'No active tab' };
@@ -129,13 +132,28 @@ export class BrowserPageInteraction {
     try {
       const x = Math.max(1, Math.round(point.x));
       const y = Math.max(1, Math.round(point.y));
-      entry.view.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+      const globalPoint = this.toGlobalPoint(entry, x, y);
+      const nativePoint = {
+        x,
+        y,
+        globalX: globalPoint.x,
+        globalY: globalPoint.y,
+      };
+      entry.view.webContents.sendInputEvent({ type: 'mouseMove', ...nativePoint });
       await this.delay(20);
-      entry.view.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      entry.view.webContents.sendInputEvent({ type: 'mouseDown', ...nativePoint, button: 'left', clickCount: 1 });
       await this.delay(35);
-      entry.view.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+      entry.view.webContents.sendInputEvent({ type: 'mouseUp', ...nativePoint, button: 'left', clickCount: 1 });
       await this.delay(60);
-      return { clicked: true, error: null, method: 'native-input', x, y };
+      return {
+        clicked: true,
+        error: null,
+        method: 'native-input',
+        x,
+        y,
+        globalX: globalPoint.x,
+        globalY: globalPoint.y,
+      };
     } catch {
       // DOM fallback below covers test and degraded environments.
     }
@@ -195,6 +213,8 @@ export class BrowserPageInteraction {
     method?: string;
     from?: { x: number; y: number };
     to?: { x: number; y: number };
+    globalFrom?: { x: number; y: number };
+    globalTo?: { x: number; y: number };
   }> {
     const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
     if (!entry) return { dragged: false, error: 'No active tab' };
@@ -236,18 +256,30 @@ export class BrowserPageInteraction {
 
     try {
       const steps = 16;
-      entry.view.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(box.from.x), y: Math.round(box.from.y) });
+      const start = {
+        x: Math.round(box.from.x),
+        y: Math.round(box.from.y),
+      };
+      const startGlobal = this.toGlobalPoint(entry, start.x, start.y);
+      entry.view.webContents.sendInputEvent({ type: 'mouseMove', ...start, globalX: startGlobal.x, globalY: startGlobal.y });
       await this.delay(30);
-      entry.view.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(box.from.x), y: Math.round(box.from.y), button: 'left', clickCount: 1 });
+      entry.view.webContents.sendInputEvent({ type: 'mouseDown', ...start, globalX: startGlobal.x, globalY: startGlobal.y, button: 'left', clickCount: 1 });
       await this.delay(80);
       for (let i = 1; i <= steps; i++) {
         const ratio = i / steps;
         const x = box.from.x + ((box.to.x - box.from.x) * ratio);
         const y = box.from.y + ((box.to.y - box.from.y) * ratio);
-        entry.view.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(x), y: Math.round(y), button: 'left' });
+        const point = { x: Math.round(x), y: Math.round(y) };
+        const globalPoint = this.toGlobalPoint(entry, point.x, point.y);
+        entry.view.webContents.sendInputEvent({ type: 'mouseMove', ...point, globalX: globalPoint.x, globalY: globalPoint.y, button: 'left' });
         await this.delay(12);
       }
-      entry.view.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(box.to.x), y: Math.round(box.to.y), button: 'left', clickCount: 1 });
+      const end = {
+        x: Math.round(box.to.x),
+        y: Math.round(box.to.y),
+      };
+      const endGlobal = this.toGlobalPoint(entry, end.x, end.y);
+      entry.view.webContents.sendInputEvent({ type: 'mouseUp', ...end, globalX: endGlobal.x, globalY: endGlobal.y, button: 'left', clickCount: 1 });
       await this.delay(80);
     } catch {
       // DOM event fallback below covers environments where native input is unavailable.
@@ -337,6 +369,8 @@ export class BrowserPageInteraction {
       method: 'native-input+dom-events',
       from: r?.from || box.from,
       to: r?.to || box.to,
+      globalFrom: this.toGlobalPoint(entry, Math.round(box.from.x), Math.round(box.from.y)),
+      globalTo: this.toGlobalPoint(entry, Math.round(box.to.x), Math.round(box.to.y)),
     };
   }
 
@@ -430,5 +464,14 @@ export class BrowserPageInteraction {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private toGlobalPoint(entry: TabEntry, x: number, y: number): { x: number; y: number } {
+    const viewBounds = entry.view.getBounds();
+    const windowBounds = BrowserWindow.fromWebContents(entry.view.webContents)?.getBounds();
+    return {
+      x: Math.max(1, Math.round((windowBounds?.x || 0) + viewBounds.x + x)),
+      y: Math.max(1, Math.round((windowBounds?.y || 0) + viewBounds.y + y)),
+    };
   }
 }

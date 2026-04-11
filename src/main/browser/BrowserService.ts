@@ -1193,6 +1193,8 @@ export class BrowserService {
     method?: string;
     x?: number;
     y?: number;
+    globalX?: number;
+    globalY?: number;
   }> {
     return this.pageInteraction.clickElement(selector, tabId);
   }
