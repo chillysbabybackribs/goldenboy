@@ -40,6 +40,7 @@ It is meant to answer four questions:
 | New tab activation / extraction | The Internet | Open new tab and continue work there | `browser.click` + tab activation/state verification | PASS | Public benchmark opened a second tab and extracted the `New Window` heading from the active new tab. |
 | Iframe reachability / extraction | The Internet | Inspect TinyMCE editor iframe and verify final content | frame inspection + `browser.evaluate_js` fallback | SOFT PASS | Same-origin iframe was reachable and content was verified, but normal click/type editing was blocked by TinyMCE read-only mode on the public page. |
 | Nested frames / frameset extraction | The Internet | Read text from left/middle/right/bottom frame documents | direct extraction preferred, `browser.evaluate_js` fallback used | SOFT PASS | Legacy `<frame>` documents were detectable, but standard extraction did not traverse them and the public run only partially completed before tool limits. |
+| Shadow DOM reachability / interaction | ExpandTesting | Read text and click button inside shadow root | direct extraction preferred, `browser.evaluate_js` fallback used | SOFT PASS | Shadow DOM was detected and interacted with, but only by explicitly traversing `shadowRoot` in JS; standard selector-based tools did not pierce the shadow boundary. |
 | Semantic dialog intents | Local dialog fixture | Accept prompt / dismiss confirm through VM bytecode | `browser.run_intent_program` -> `INTENT.ACCEPT_DIALOG` / `INTENT.DISMISS_DIALOG` | PASS | Deterministic local regression coverage for dialog workflows. |
 | Diagnostics: console | Any failure case | Inspect console after render/action failure | `browser.get_console_events` | PASS | Tool exists and is available to agent runtime. |
 | Diagnostics: network | Any failure case | Inspect failed requests after render/action failure | `browser.get_network_events` | PASS | Tool exists and is available to agent runtime. |
@@ -111,9 +112,9 @@ These should be run next, in roughly this order:
 | Priority | Capability | Site | Goal | Expected Tool Path |
 |---|---|---|---|---|
 | 1 | Nested frames completion | The Internet or custom fixture | Extract all frame texts deterministically without direct URL hopping or `evaluate_js` fallback | likely needs explicit frame traversal/extraction primitives |
-| 2 | Shadow DOM | ExpandTesting or custom fixture | Detect and interact with encapsulated elements | may need shadow-root traversal support |
-| 3 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
-| 4 | Popup/window distinction | The Internet or custom fixture | Distinguish new tab vs popup window semantics explicitly | likely needs explicit popup/window metadata |
+| 2 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
+| 3 | Popup/window distinction | The Internet or custom fixture | Distinguish new tab vs popup window semantics explicitly | likely needs explicit popup/window metadata |
+| 4 | Shadow DOM primitive rerun | ExpandTesting or custom fixture | Revalidate shadow-root extraction and interaction without `evaluate_js` fallback | needs shadow-root traversal support |
 
 ## Prompt Templates
 
