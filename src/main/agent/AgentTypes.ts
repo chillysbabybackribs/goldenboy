@@ -18,6 +18,7 @@ export type AgentToolName =
   | 'browser.activate_tab'
   | 'browser.click'
   | 'browser.type'
+  | 'browser.upload_file'
   | 'browser.drag'
   | 'browser.hover'
   | 'browser.hit_test'

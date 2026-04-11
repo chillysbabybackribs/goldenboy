@@ -233,6 +233,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     async type(selector, text, tabId) {
       return browserService.typeInElement(selector, text, tabId);
     },
+    async upload(selector, filePath, tabId) {
+      return browserService.uploadFileToElement(selector, filePath, tabId);
+    },
     async drag(sourceSelector, targetSelector, tabId) {
       return browserService.dragElement(sourceSelector, targetSelector, tabId);
     },
@@ -575,6 +578,24 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const text = requireString(obj, 'text');
         const result = await browserService.typeInElement(selector, text, optionalString(obj, 'tabId'));
         return { summary: `Typed into ${selector}`, data: { result } };
+      },
+    },
+    {
+      name: 'browser.upload_file',
+      description: 'Attach a local file to an input[type="file"] element by selector.',
+      inputSchema: { type: 'object', required: ['selector', 'filePath'], properties: { selector: { type: 'string' }, filePath: { type: 'string' }, tabId: { type: 'string' } } },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const selector = requireString(obj, 'selector');
+        const filePath = requireString(obj, 'filePath');
+        const result = await browserService.uploadFileToElement(selector, filePath, optionalString(obj, 'tabId'));
+        return {
+          summary: result.uploaded
+            ? `Attached ${result.fileName || result.filePath || filePath} to ${selector}`
+            : `Upload failed for ${selector}: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
       },
     },
     {

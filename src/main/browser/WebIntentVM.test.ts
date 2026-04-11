@@ -164,6 +164,14 @@ class JsdomIntentAdapter implements WebIntentAdapter {
     return { typed: true, error: null };
   }
 
+  async upload(selector: string, filePath: string): Promise<{ uploaded: boolean; error: string | null }> {
+    const result = await this.type(selector, filePath);
+    return {
+      uploaded: result.typed,
+      error: result.error,
+    };
+  }
+
   async drag(sourceSelector: string, targetSelector: string): Promise<{ dragged: boolean; error: string | null }> {
     const w = this.window();
     const d = w.document;

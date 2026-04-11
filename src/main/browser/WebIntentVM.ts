@@ -70,6 +70,7 @@ export type WebIntentAdapter = {
   getFormModel: (tabId?: string) => Promise<BrowserFormModel[]>;
   click: (selector: string, tabId?: string) => Promise<{ clicked: boolean; error: string | null }>;
   type: (selector: string, text: string, tabId?: string) => Promise<{ typed: boolean; error: string | null }>;
+  upload: (selector: string, filePath: string, tabId?: string) => Promise<{ uploaded: boolean; error: string | null }>;
   hover: (selector: string, tabId?: string) => Promise<{ hovered: boolean; error: string | null }>;
   drag: (sourceSelector: string, targetSelector: string, tabId?: string) => Promise<{ dragged: boolean; error: string | null }>;
   executeInPage: (expression: string, tabId?: string) => Promise<{ result: unknown; error: string | null }>;
@@ -568,8 +569,8 @@ export class WebIntentVM {
       && field.kind !== 'password'
     ));
     if (!fileField?.ref.selector) throw new Error('Could not resolve upload field');
-    const typed = await this.adapter.type(fileField.ref.selector, filePath, tabId);
-    if (!typed.typed) throw new Error(typed.error || 'Typing upload field failed');
+    const upload = await this.adapter.upload(fileField.ref.selector, filePath, tabId);
+    if (!upload.uploaded) throw new Error(upload.error || 'Uploading file failed');
 
     const actions = await this.adapter.getActionableElements(tabId);
     const uploadAction = findBestAction(actions, UPLOAD_BUTTON_RE);

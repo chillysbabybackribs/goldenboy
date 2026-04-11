@@ -1492,6 +1492,21 @@ export class BrowserService {
     return this.pageInteraction.typeInElement(selector, text, tabId);
   }
 
+  async uploadFileToElement(
+    selector: string,
+    filePath: string,
+    tabId?: string,
+  ): Promise<{
+    uploaded: boolean;
+    error: string | null;
+    method?: string;
+    selector?: string;
+    filePath?: string;
+    fileName?: string;
+  }> {
+    return this.pageInteraction.uploadFile(selector, filePath, tabId);
+  }
+
   async dragElement(
     sourceSelector: string,
     targetSelector: string,

@@ -2,6 +2,8 @@
 // BrowserPageInteraction — DOM query, click, type, and metadata extraction
 // ═══════════════════════════════════════════════════════════════════════════
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { BrowserWindow } from 'electron';
 import type { WebContentsView } from 'electron';
 
@@ -81,6 +83,118 @@ export class BrowserPageInteraction {
       const message = err instanceof Error ? err.message : String(err);
       return { result: null, error: message };
     }
+  }
+
+  // ─── Upload File ────────────────────────────────────────────────────────
+
+  async uploadFile(
+    selector: string,
+    filePath: string,
+    tabId?: string,
+  ): Promise<{
+    uploaded: boolean;
+    error: string | null;
+    method?: string;
+    selector?: string;
+    filePath?: string;
+    fileName?: string;
+  }> {
+    const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
+    if (!entry) return { uploaded: false, error: 'No active tab' };
+
+    const resolvedPath = path.resolve(filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      return { uploaded: false, error: `File not found: ${resolvedPath}` };
+    }
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(resolvedPath);
+    } catch (err) {
+      return { uploaded: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (!stats.isFile()) {
+      return { uploaded: false, error: `Not a file: ${resolvedPath}` };
+    }
+
+    const safeSelector = JSON.stringify(selector);
+    const preflight = await entry.view.webContents.executeJavaScript(`
+      (() => {
+        const node = document.querySelector(${safeSelector});
+        if (!node) return { ok: false, reason: 'Element not found' };
+        if (!(node instanceof HTMLInputElement)) {
+          return { ok: false, reason: 'Element is not an HTMLInputElement' };
+        }
+        if ((node.type || '').toLowerCase() !== 'file') {
+          return { ok: false, reason: 'Element is not a file input' };
+        }
+        node.scrollIntoView({ block: 'center', inline: 'center' });
+        return { ok: true, multiple: node.multiple === true };
+      })()
+    `);
+    const check = preflight as { ok?: boolean; reason?: string } | null;
+    if (!check?.ok) {
+      return { uploaded: false, error: check?.reason || 'Could not resolve file input' };
+    }
+
+    try {
+      const dbg = entry.view.webContents.debugger;
+      if (!dbg.isAttached()) {
+        dbg.attach('1.3');
+      }
+      await dbg.sendCommand('DOM.enable');
+      const documentRoot = await dbg.sendCommand('DOM.getDocument', { depth: -1, pierce: true }) as { root?: { nodeId?: number } };
+      const rootNodeId = documentRoot?.root?.nodeId;
+      if (typeof rootNodeId !== 'number') {
+        return { uploaded: false, error: 'Could not resolve DOM root for file upload' };
+      }
+      const query = await dbg.sendCommand('DOM.querySelector', {
+        nodeId: rootNodeId,
+        selector,
+      }) as { nodeId?: number };
+      const nodeId = query?.nodeId;
+      if (typeof nodeId !== 'number' || nodeId <= 0) {
+        return { uploaded: false, error: `Could not resolve file input selector: ${selector}` };
+      }
+      await dbg.sendCommand('DOM.setFileInputFiles', {
+        nodeId,
+        files: [resolvedPath],
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { uploaded: false, error: message };
+    }
+
+    const post = await this.executeInPage(`
+      (() => {
+        const node = document.querySelector(${safeSelector});
+        if (!node) return { uploaded: false, reason: 'Element not found after upload' };
+        if (!(node instanceof HTMLInputElement)) {
+          return { uploaded: false, reason: 'Element is not an HTMLInputElement after upload' };
+        }
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+        const files = Array.from(node.files || []).map(file => ({
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        }));
+        return {
+          uploaded: files.length > 0,
+          files,
+        };
+      })()
+    `, tabId);
+    if (post.error) return { uploaded: false, error: post.error };
+    const result = post.result as { uploaded?: boolean; files?: Array<{ name?: string }> } | null;
+    const fileName = result?.files?.[0]?.name;
+    return {
+      uploaded: result?.uploaded === true,
+      error: result?.uploaded === true ? null : 'No files present on input after upload',
+      method: 'cdp-set-file-input-files',
+      selector,
+      filePath: resolvedPath,
+      fileName: typeof fileName === 'string' ? fileName : path.basename(resolvedPath),
+    };
   }
 
   // ─── Query Selector ─────────────────────────────────────────────────────
