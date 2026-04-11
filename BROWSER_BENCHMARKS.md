@@ -88,7 +88,7 @@ Recent commits tied directly to benchmark-driven improvements:
 
 | Commit | Change |
 |---|---|
-| `pending` | Add real file upload browser primitive |
+| `213c68f` | Add real file upload browser primitive |
 | `444fcd2` | Bridge prompt shim into page world |
 | `54c25fb` | Add prompt dialog fallback for browser tabs |
 | `f5c5ebb` | Add dialog intents to Web Intent VM |
