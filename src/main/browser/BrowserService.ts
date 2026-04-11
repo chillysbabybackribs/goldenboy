@@ -1187,7 +1187,13 @@ export class BrowserService {
   async clickElement(
     selector: string,
     tabId?: string,
-  ): Promise<{ clicked: boolean; error: string | null }> {
+  ): Promise<{
+    clicked: boolean;
+    error: string | null;
+    method?: string;
+    x?: number;
+    y?: number;
+  }> {
     return this.pageInteraction.clickElement(selector, tabId);
   }
 

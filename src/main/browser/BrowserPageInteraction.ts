@@ -92,8 +92,54 @@ export class BrowserPageInteraction {
   async clickElement(
     selector: string,
     tabId?: string,
-  ): Promise<{ clicked: boolean; error: string | null }> {
+  ): Promise<{
+    clicked: boolean;
+    error: string | null;
+    method?: string;
+    x?: number;
+    y?: number;
+  }> {
+    const entry = tabId ? this.resolveEntry(tabId) : this.resolveEntry();
+    if (!entry) return { clicked: false, error: 'No active tab' };
+
     const safeSelector = JSON.stringify(selector);
+    const geometry = await entry.view.webContents.executeJavaScript(`
+      (() => {
+        const el = document.querySelector(${safeSelector});
+        if (!el) return { ok: false, reason: 'Element not found' };
+        if (!(el instanceof HTMLElement)) {
+          return { ok: false, reason: 'Element is not an HTMLElement' };
+        }
+        if ((el).disabled) return { ok: false, reason: 'Element is disabled' };
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return { ok: false, reason: 'Element has no visible box' };
+        return {
+          ok: true,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+      })()
+    `);
+    const point = geometry as { ok?: boolean; reason?: string; x?: number; y?: number } | null;
+    if (!point?.ok || typeof point.x !== 'number' || typeof point.y !== 'number') {
+      return { clicked: false, error: point?.reason || 'Could not resolve click geometry' };
+    }
+
+    try {
+      const x = Math.max(1, Math.round(point.x));
+      const y = Math.max(1, Math.round(point.y));
+      entry.view.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+      await this.delay(20);
+      entry.view.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      await this.delay(35);
+      entry.view.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+      await this.delay(60);
+      return { clicked: true, error: null, method: 'native-input', x, y };
+    } catch {
+      // DOM fallback below covers test and degraded environments.
+    }
+
     const { result, error } = await this.executeInPage(`
       (() => {
         const el = document.querySelector(${safeSelector});
@@ -106,7 +152,9 @@ export class BrowserPageInteraction {
         const rect = el.getBoundingClientRect();
         const cx = Math.max(0, rect.left + Math.min(rect.width / 2, Math.max(1, rect.width - 1)));
         const cy = Math.max(0, rect.top + Math.min(rect.height / 2, Math.max(1, rect.height - 1)));
-        const opts = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy };
+        const sx = Math.max(1, Math.round((window.screenX || 0) + cx));
+        const sy = Math.max(1, Math.round((window.screenY || 0) + cy));
+        const opts = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, screenX: sx, screenY: sy };
 
         try {
           el.dispatchEvent(new PointerEvent('pointerdown', { ...opts, pointerId: 1, isPrimary: true, pointerType: 'mouse', button: 0, buttons: 1 }));
@@ -118,13 +166,19 @@ export class BrowserPageInteraction {
         }
 
         el.focus();
-        el.click();
-        return { clicked: true, selector: ${safeSelector} };
+        el.dispatchEvent(new MouseEvent('click', { ...opts, button: 0, buttons: 0, detail: 1 }));
+        return { clicked: true, selector: ${safeSelector}, x: cx, y: cy };
       })()
     `, tabId);
     if (error) return { clicked: false, error };
-    const r = result as { clicked?: boolean; reason?: string } | null;
-    return { clicked: r?.clicked ?? false, error: r?.reason ?? null };
+    const r = result as { clicked?: boolean; reason?: string; x?: number; y?: number } | null;
+    return {
+      clicked: r?.clicked ?? false,
+      error: r?.reason ?? null,
+      method: 'dom-mouse-events',
+      x: r?.x,
+      y: r?.y,
+    };
   }
 
   // ─── Drag Element ────────────────────────────────────────────────────────
