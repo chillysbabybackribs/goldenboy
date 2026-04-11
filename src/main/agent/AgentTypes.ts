@@ -25,6 +25,7 @@ export type AgentToolName =
   | 'browser.wait_for'
   | 'browser.summarize_page'
   | 'browser.evaluate_js'
+  | 'browser.run_intent_program'
   | 'browser.cache_current_page'
   | 'browser.answer_from_cache'
   | 'browser.search_page_cache'

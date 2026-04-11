@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; img-src 'self' data: https: http:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: https: http:">
   <title>Execution Surface</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -83,6 +83,7 @@
         </div>
         <span class="pane-meta" id="terminalMeta"></span>
         <span class="pane-status" id="terminalStatus">Idle</span>
+        <button class="btn-pane btn-pane-collapse" id="termCollapseBtn" title="Collapse terminal" aria-label="Collapse terminal" aria-expanded="true">&#x203A;</button>
         <button class="btn-pane" id="termRestartBtn" title="Restart terminal">&#x21bb;</button>
       </div>
       <div class="pane-content" id="terminalContent">

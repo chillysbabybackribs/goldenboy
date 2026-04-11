@@ -6,6 +6,7 @@ import { appStateStore } from '../../state/appStateStore';
 import { ActionType } from '../../state/actions';
 import { generateId } from '../../../shared/utils/ids';
 import { geminiSidecar } from '../GeminiSidecar';
+import { WebIntentInstruction, WebIntentVM } from '../../browser/WebIntentVM';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -187,6 +188,46 @@ async function waitForCondition(input: {
 
 export function createBrowserToolDefinitions(): AgentToolDefinition[] {
   const pageExtractor = new PageExtractor((expression, tabId) => browserService.executeInPage(expression, tabId));
+  const webIntentVm = new WebIntentVM({
+    async navigate(url, tabId) {
+      if (tabId) browserService.activateTab(tabId);
+      browserService.navigate(url);
+    },
+    async waitForSettled(timeoutMs = 7000) {
+      await waitForBrowserSettled(timeoutMs);
+    },
+    async getCurrentUrl(tabId) {
+      if (tabId) {
+        const tab = browserService.getTabs().find(item => item.id === tabId);
+        if (tab?.navigation.url) return tab.navigation.url;
+      }
+      return browserService.getState().navigation.url;
+    },
+    async readPageState(tabId) {
+      const snapshot = await browserService.captureTabSnapshot(tabId);
+      return {
+        url: snapshot.url,
+        title: snapshot.title,
+        text: snapshot.visibleTextExcerpt,
+        mainHeading: snapshot.mainHeading,
+      };
+    },
+    async getActionableElements(tabId) {
+      return browserService.getActionableElements(tabId);
+    },
+    async getFormModel(tabId) {
+      return browserService.getFormModel(tabId);
+    },
+    async click(selector, tabId) {
+      return browserService.clickElement(selector, tabId);
+    },
+    async type(selector, text, tabId) {
+      return browserService.typeInElement(selector, text, tabId);
+    },
+    async executeInPage(expression, tabId) {
+      return browserService.executeInPage(expression, tabId);
+    },
+  });
 
   return [
     {
@@ -894,6 +935,44 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const result = await browserService.executeInPage(expression, optionalString(obj, 'tabId'));
         return {
           summary: result.error ? `JavaScript evaluation failed: ${result.error}` : 'Evaluated JavaScript',
+          data: result,
+        };
+      },
+    },
+    {
+      name: 'browser.run_intent_program',
+      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.UPLOAD, INTENT.CHECKOUT, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
+      inputSchema: {
+        type: 'object',
+        required: ['instructions'],
+        properties: {
+          instructions: { type: 'array', items: { type: 'object' } },
+          tabId: { type: 'string' },
+          failFast: { type: 'boolean' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const instructions = Array.isArray(obj.instructions)
+          ? obj.instructions.filter((item): item is WebIntentInstruction => {
+            return typeof item === 'object' && item !== null && typeof (item as Record<string, unknown>).op === 'string';
+          })
+          : [];
+        if (instructions.length === 0) {
+          throw new Error('browser.run_intent_program requires a non-empty instructions array');
+        }
+        const result = await webIntentVm.run({
+          instructions,
+          tabId: optionalString(obj, 'tabId'),
+          failFast: obj.failFast === false ? false : true,
+        });
+        const failedStep = result.failedAt !== null ? result.steps[result.failedAt] : null;
+        const failureReason = failedStep?.error || failedStep?.evidence || 'unknown error';
+        return {
+          summary: result.success
+            ? `Intent program completed (${result.steps.length} steps)`
+            : `Intent program failed at step ${result.failedAt} (${failedStep?.op || 'unknown'}): ${failureReason}`,
           data: result,
         };
       },

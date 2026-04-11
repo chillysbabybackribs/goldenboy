@@ -48,6 +48,7 @@ import { BrowserOverlayManager } from './BrowserOverlayManager';
 import { PageExtractor } from '../context/pageExtractor';
 import type { DiskCache } from '../context/diskCache';
 import { pageKnowledgeStore } from '../browserKnowledge/PageKnowledgeStore';
+import { normalizeNavigationTarget } from './navigationTarget';
 
 const PROFILE_ID = 'workspace-browser';
 const PARTITION = 'persist:workspace-browser';
@@ -679,21 +680,12 @@ export class BrowserService {
   private navigateTab(tabId: string, url: string): void {
     const entry = this.tabs.get(tabId);
     if (!entry) return;
-    let normalized = url.trim();
-    if (normalized && !normalized.match(/^[a-zA-Z]+:\/\//)) {
-      if (normalized.includes('.') && !normalized.includes(' ')) {
-        normalized = 'https://' + normalized;
-      } else {
-        const engines: Record<string, string> = {
-          google: 'https://www.google.com/search?q=',
-          duckduckgo: 'https://duckduckgo.com/?q=',
-          bing: 'https://www.bing.com/search?q=',
-        };
-        normalized = (engines[this.settings.searchEngine] || engines.google) + encodeURIComponent(normalized);
-      }
-    }
-    entry.info.navigation.url = normalized;
-    entry.view.webContents.loadURL(normalized);
+    const normalized = normalizeNavigationTarget(url, {
+      searchEngine: this.settings.searchEngine,
+      cwd: process.cwd(),
+    });
+    entry.info.navigation.url = normalized.url;
+    entry.view.webContents.loadURL(normalized.url);
   }
 
   goBack(): void {

@@ -1,7 +1,6 @@
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { InvocationResult, ProviderRuntime } from '../../shared/types/model';
-import { AgentToolName } from './AgentTypes';
 import { ActionType } from '../state/actions';
 import { appStateStore } from '../state/appStateStore';
 import { eventBus } from '../events/eventBus';
@@ -17,7 +16,7 @@ import { createSubAgentToolDefinitions } from './tools/subagentTools';
 import { createChatToolDefinitions } from './tools/chatTools';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
-import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
+import { scopeForPrompt, withBrowserSearchDirective } from './runtimeScope';
 
 class AgentModelService {
   private runtime: AgentRuntime | null = null;
@@ -199,111 +198,6 @@ class AgentModelService {
   }
 }
 
-type RuntimeScope = {
-  skillNames: string[];
-  allowedTools: 'all' | AgentToolName[];
-  canSpawnSubagents: boolean;
-  maxToolTurns: number;
-};
-
-const DEFAULT_MAX_TOOL_TURNS = 20;
-const STRICT_VALIDATION_MAX_TOOL_TURNS = 32;
-const DELEGATION_MAX_TOOL_TURNS = 40;
-
-const CHAT_TOOLS: AgentToolName[] = [
-  'chat.thread_summary',
-  'chat.read_last',
-  'chat.search',
-  'chat.read_message',
-  'chat.read_window',
-  'chat.recall',
-  'chat.cache_stats',
-];
-
-const BROWSER_RESEARCH_TOOLS: AgentToolName[] = [
-  'browser.get_state',
-  'browser.get_tabs',
-  'browser.search_web',
-  'browser.research_search',
-  'browser.close_tab',
-  'browser.activate_tab',
-  'browser.answer_from_cache',
-  'browser.search_page_cache',
-  'browser.read_cached_chunk',
-  'browser.list_cached_pages',
-  'browser.list_cached_sections',
-  'browser.cache_stats',
-];
-
-const FILESYSTEM_TOOLS: AgentToolName[] = [
-  'filesystem.list',
-  'filesystem.search',
-  'filesystem.index_workspace',
-  'filesystem.answer_from_cache',
-  'filesystem.search_file_cache',
-  'filesystem.read_file_chunk',
-  'filesystem.list_cached_files',
-  'filesystem.file_cache_stats',
-  'filesystem.read',
-  'filesystem.write',
-  'filesystem.patch',
-  'filesystem.delete',
-  'filesystem.mkdir',
-  'filesystem.move',
-];
-
-const TERMINAL_TOOLS: AgentToolName[] = [
-  'terminal.exec',
-  'terminal.spawn',
-  'terminal.write',
-  'terminal.kill',
-];
-
-function scopeForPrompt(prompt: string): RuntimeScope {
-  if (looksLikeDelegationTask(prompt)) {
-    return {
-      skillNames: ['browser-operation', 'filesystem-operation', 'local-debug', 'subagent-coordination'],
-      allowedTools: 'all',
-      canSpawnSubagents: true,
-      maxToolTurns: DELEGATION_MAX_TOOL_TURNS,
-    };
-  }
-
-  if (looksLikeBrowserSearchTask(prompt)) {
-    return {
-      skillNames: ['browser-operation'],
-      allowedTools: [...BROWSER_RESEARCH_TOOLS, ...CHAT_TOOLS],
-      canSpawnSubagents: false,
-      maxToolTurns: shouldUseStrictSourceValidation(prompt) ? STRICT_VALIDATION_MAX_TOOL_TURNS : DEFAULT_MAX_TOOL_TURNS,
-    };
-  }
-
-  if (looksLikeLocalCodeTask(prompt)) {
-    return {
-      skillNames: ['filesystem-operation', 'local-debug'],
-      allowedTools: [...FILESYSTEM_TOOLS, ...TERMINAL_TOOLS, ...CHAT_TOOLS],
-      canSpawnSubagents: false,
-      maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
-    };
-  }
-
-  return {
-    skillNames: ['browser-operation', 'filesystem-operation', 'local-debug'],
-    allowedTools: [...BROWSER_RESEARCH_TOOLS, ...FILESYSTEM_TOOLS, ...TERMINAL_TOOLS, ...CHAT_TOOLS],
-    canSpawnSubagents: false,
-    maxToolTurns: shouldUseStrictSourceValidation(prompt) ? STRICT_VALIDATION_MAX_TOOL_TURNS : DEFAULT_MAX_TOOL_TURNS,
-  };
-}
-
-function withBrowserSearchDirective(prompt: string): string {
-  if (!looksLikeBrowserSearchTask(prompt)) return prompt;
-  return [
-    'Runtime directive: This is a browser-search task. You must call browser.research_search first with the user query. Let it open/cache one result at a time and stop when enough evidence is found. Use only browser-observed search results, cached page chunks, or pages opened in the owned browser as evidence. Do not answer from model memory or provider-native search.',
-    '',
-    `User request: ${prompt}`,
-  ].join('\n');
-}
-
 function buildContextPrompt(parts: Array<string | null | undefined>): string | null {
   const context = parts
     .map(part => part?.trim())
@@ -311,25 +205,6 @@ function buildContextPrompt(parts: Array<string | null | undefined>): string | n
     .join('\n\n');
   if (!context) return null;
   return context.length > 4_000 ? `${context.slice(0, 4_000)}\n...[context truncated]` : context;
-}
-
-function looksLikeDelegationTask(prompt: string): boolean {
-  return /\b(sub-?agents?|delegate|parallel|concurrently|multiple agents?|workers?|split (?:the )?work)\b/i.test(prompt);
-}
-
-function looksLikeLocalCodeTask(prompt: string): boolean {
-  const normalized = prompt.toLowerCase();
-  const local = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|typescript|javascript|electron|compile|build|test|fix|implement|patch|edit|refactor)\b/.test(normalized);
-  const web = /\b(search|look up|lookup|find online|research|google|web search|latest|current|today|news)\b/.test(normalized);
-  return local && !web;
-}
-
-function looksLikeBrowserSearchTask(prompt: string): boolean {
-  const normalized = prompt.toLowerCase();
-  const asksForWeb = /\b(search|look up|lookup|find online|research|google|web search|latest|current|today|news)\b/.test(normalized);
-  if (!asksForWeb) return false;
-  const localSearch = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|grep)\b/.test(normalized);
-  return !localSearch;
 }
 
 export const agentModelService = new AgentModelService();

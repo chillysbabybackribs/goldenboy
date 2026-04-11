@@ -167,6 +167,9 @@ const api = {
     handoff(taskId: string, from: string, to: string) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_HANDOFF, taskId, from, to);
     },
+    runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }) {
+      return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RUN_INTENT_PROGRAM, taskId, input);
+    },
     onProgress(callback: (progress: any) => void) {
       ipcRenderer.on(IPC_CHANNELS.MODEL_PROGRESS, (_event: any, progress: any) => {
         callback(progress);

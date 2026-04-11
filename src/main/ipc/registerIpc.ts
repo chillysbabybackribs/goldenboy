@@ -14,6 +14,7 @@ import { SurfaceActionInput } from '../../shared/actions/surfaceActionTypes';
 import { DiskCache } from '../context/diskCache';
 import { PageExtractor } from '../context/pageExtractor';
 import { agentModelService } from '../agent/AgentModelService';
+import { agentToolExecutor } from '../agent/AgentToolExecutor';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -250,6 +251,18 @@ export function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.MODEL_HANDOFF, () => {
     throw new Error('Model handoff is not implemented in the v2 agent runtime yet.');
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.MODEL_RUN_INTENT_PROGRAM,
+    async (_event, taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }) => {
+      return agentToolExecutor.execute('browser.run_intent_program', input, {
+        runId: generateId('run'),
+        agentId: 'haiku',
+        mode: 'unrestricted-dev',
+        taskId,
+      });
+    },
+  );
 
   // Debug: test disk extraction on active browser tab
   ipcMain.handle(IPC_CHANNELS.DEBUG_TEST_DISK_EXTRACT, async () => {

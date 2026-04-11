@@ -99,6 +99,7 @@ export const IPC_CHANNELS = {
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
   MODEL_HANDOFF: 'model:handoff',
+  MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
   // Terminal session channels
@@ -202,6 +203,7 @@ export interface WorkspaceAPI {
     getTaskMemory(taskId: string): Promise<TaskMemoryRecord>;
     resolve(prompt: string, explicitOwner?: string): Promise<string>;
     handoff(taskId: string, from: string, to: string): Promise<any>;
+    runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }): Promise<any>;
     onProgress(callback: (progress: any) => void): void;
   };
 

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Intent Lab Store</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.4; }
+    h1 { margin-bottom: 6px; }
+    .row { margin-bottom: 14px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    input { width: 320px; max-width: 100%; padding: 8px; margin-bottom: 8px; }
+    button { padding: 8px 12px; margin-right: 8px; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #ccc; }
+    table { border-collapse: collapse; margin-top: 14px; }
+    th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Intent Lab Store</h1>
+  <p>Use this page for semantic browser intent testing.</p>
+
+  <section id="auth-panel" class="row" aria-label="Login section">
+    <h2>Sign in</h2>
+    <form id="login-form">
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" placeholder="name@example.com" autocomplete="username">
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="password" autocomplete="current-password">
+
+      <button id="login-submit" type="button">Sign In</button>
+    </form>
+  </section>
+
+  <section id="upload-panel" class="row" aria-label="Upload section">
+    <h2>Upload document</h2>
+    <form id="upload-form">
+      <label for="file-path">File path</label>
+      <input id="file-path" name="filePath" type="text" placeholder="/tmp/orders.csv">
+      <button id="upload-submit" type="button">Upload File</button>
+    </form>
+  </section>
+
+  <section id="checkout-panel" class="row" aria-label="Checkout section">
+    <h2>Checkout</h2>
+    <button id="checkout-submit" type="button">Complete Order</button>
+  </section>
+
+  <div id="status" class="status" role="status">
+    Waiting for actions.
+  </div>
+
+  <table aria-label="Order summary">
+    <tr><th>Order ID</th><td data-label="Order ID">A100</td></tr>
+    <tr><th>Uploaded File</th><td data-label="Uploaded File">none</td></tr>
+    <tr><th>Status</th><td data-label="Status">Pending</td></tr>
+  </table>
+
+  <script>
+    let loggedIn = false;
+    const expectedUser = 'demo@example.com';
+    const expectedPassword = 'demo123';
+
+    const statusNode = document.getElementById('status');
+    const statusCell = document.querySelector('[data-label="Status"]');
+    const uploadedCell = document.querySelector('[data-label="Uploaded File"]');
+
+    function setStatus(text) {
+      statusNode.textContent = text;
+    }
+
+    document.getElementById('login-submit').addEventListener('click', () => {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value.trim();
+
+      if (email === expectedUser && password === expectedPassword) {
+        loggedIn = true;
+        setStatus('Welcome, demo user. You are now logged in.');
+        return;
+      }
+
+      loggedIn = false;
+      setStatus('Login failed. Please sign in with valid credentials.');
+    });
+
+    document.getElementById('upload-submit').addEventListener('click', () => {
+      const value = document.getElementById('file-path').value.trim();
+      if (!loggedIn) {
+        setStatus('Upload blocked. Please log in first.');
+        return;
+      }
+      if (!value) {
+        setStatus('Upload blocked. Provide a file path.');
+        return;
+      }
+      uploadedCell.textContent = value;
+      setStatus(`File uploaded successfully: ${value}`);
+    });
+
+    document.getElementById('checkout-submit').addEventListener('click', () => {
+      if (!loggedIn) {
+        setStatus('Checkout blocked. Please log in first.');
+        return;
+      }
+      const uploaded = uploadedCell.textContent || '';
+      if (uploaded === 'none') {
+        setStatus('Checkout blocked. Upload a document first.');
+        return;
+      }
+      statusCell.textContent = 'Order complete';
+      setStatus('Order complete. Receipt generated.');
+    });
+  </script>
+</body>
+</html>

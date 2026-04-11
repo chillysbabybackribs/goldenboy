@@ -98,8 +98,28 @@ export class BrowserPageInteraction {
       (() => {
         const el = document.querySelector(${safeSelector});
         if (!el) return { clicked: false, reason: 'Element not found' };
+        if (!(el instanceof HTMLElement)) {
+          return { clicked: false, reason: 'Element is not an HTMLElement' };
+        }
+        if ((el).disabled) return { clicked: false, reason: 'Element is disabled' };
+
+        const rect = el.getBoundingClientRect();
+        const cx = Math.max(0, rect.left + Math.min(rect.width / 2, Math.max(1, rect.width - 1)));
+        const cy = Math.max(0, rect.top + Math.min(rect.height / 2, Math.max(1, rect.height - 1)));
+        const opts = { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy };
+
+        try {
+          el.dispatchEvent(new PointerEvent('pointerdown', { ...opts, pointerId: 1, isPrimary: true, pointerType: 'mouse', button: 0, buttons: 1 }));
+          el.dispatchEvent(new MouseEvent('mousedown', { ...opts, button: 0, buttons: 1 }));
+          el.dispatchEvent(new PointerEvent('pointerup', { ...opts, pointerId: 1, isPrimary: true, pointerType: 'mouse', button: 0, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('mouseup', { ...opts, button: 0, buttons: 0 }));
+        } catch {
+          // Ignore PointerEvent unsupported environments.
+        }
+
+        el.focus();
         el.click();
-        return { clicked: true };
+        return { clicked: true, selector: ${safeSelector} };
       })()
     `, tabId);
     if (error) return { clicked: false, error };
@@ -120,11 +140,55 @@ export class BrowserPageInteraction {
       (() => {
         const el = document.querySelector(${safeSelector});
         if (!el) return { typed: false, reason: 'Element not found' };
+        if (!(el instanceof HTMLElement)) return { typed: false, reason: 'Element is not an HTMLElement' };
+        if ((el).disabled) return { typed: false, reason: 'Element is disabled' };
+
+        const value = ${safeText};
+        const setNativeValue = (node, next) => {
+          const proto = node instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : node instanceof HTMLSelectElement
+              ? HTMLSelectElement.prototype
+              : HTMLInputElement.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (desc && typeof desc.set === 'function') {
+            desc.set.call(node, next);
+            return true;
+          }
+          node.value = next;
+          return true;
+        };
+
+        const fireInput = (node, data) => {
+          const common = { bubbles: true, cancelable: true, composed: true };
+          try {
+            node.dispatchEvent(new InputEvent('beforeinput', { ...common, inputType: 'insertText', data }));
+          } catch {}
+          try {
+            node.dispatchEvent(new InputEvent('input', { ...common, inputType: 'insertText', data }));
+          } catch {
+            node.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          node.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
         el.focus();
-        el.value = ${safeText};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return { typed: true };
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+          setNativeValue(el, value);
+          fireInput(el, value);
+          el.blur();
+          return { typed: true, value: el.value };
+        }
+
+        if (el.isContentEditable) {
+          el.textContent = value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.blur();
+          return { typed: true, value: el.textContent || '' };
+        }
+
+        return { typed: false, reason: 'Element is not typeable' };
       })()
     `, tabId);
     if (error) return { typed: false, error };

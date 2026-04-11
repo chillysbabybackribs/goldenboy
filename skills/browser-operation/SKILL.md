@@ -37,6 +37,7 @@ Use this skill when a task requires navigation, web search, page inspection, cli
 - `browser.list_cached_sections`
 - `browser.click`
 - `browser.type`
+- `browser.run_intent_program`
 - `browser.extract_page`
 - `browser.get_actionable_elements`
 - `browser.capture_snapshot`
