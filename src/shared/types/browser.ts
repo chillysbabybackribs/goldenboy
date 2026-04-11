@@ -67,6 +67,12 @@ export type BrowserDownloadState = {
   receivedBytes: number;
   totalBytes: number;
   startedAt: number;
+  completedAt?: number | null;
+  sourceTabId?: string | null;
+  sourcePageUrl?: string | null;
+  existsOnDisk?: boolean;
+  fileSize?: number | null;
+  error?: string | null;
 };
 
 // ─── Permissions ────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@
 // settings, zoom, find-in-page, downloads, and permissions.
 
 import { BrowserWindow, WebContentsView, session, DownloadItem, Event as ElectronEvent, Menu, MenuItem, clipboard } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import {
   BrowserState, BrowserNavigationState, BrowserSurfaceStatus,
@@ -81,6 +82,15 @@ type PromptDialogResolution = {
   value: string | null;
 };
 
+type DownloadStartWaiter = {
+  id: string;
+  tabId: string | null;
+  url: string;
+  resolve: (download: BrowserDownloadState) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 const MAIN_WORLD_PROMPT_SHIM_SCRIPT = String.raw`
 (() => {
   const pageWindow = window;
@@ -140,6 +150,7 @@ export class BrowserService {
   private bookmarks: BookmarkEntry[] = [];
   private activeDownloads: Map<string, { entry: BrowserDownloadState; item: DownloadItem }> = new Map();
   private completedDownloads: BrowserDownloadState[] = [];
+  private downloadStartWaiters: Map<string, DownloadStartWaiter> = new Map();
   private recentPermissions: BrowserPermissionRequest[] = [];
   private pendingDialogs: Map<string, BrowserJavaScriptDialog> = new Map();
   private promptDialogResolutions: Map<string, PromptDialogResolution> = new Map();
@@ -339,12 +350,15 @@ export class BrowserService {
       this.syncState();
     });
 
-    ses.on('will-download', (_event: ElectronEvent, item: DownloadItem) => {
+    ses.on('will-download', (_event: ElectronEvent, item: DownloadItem, webContents) => {
       const filename = item.getFilename();
       const savePath = resolveDownloadPath(filename);
       item.setSavePath(savePath);
       const entry = createDownloadEntry(item.getURL(), filename, savePath);
+      entry.sourceTabId = webContents ? this.resolveTabIdByWebContentsId(webContents.id) : null;
+      entry.sourcePageUrl = webContents?.getURL() || null;
       this.activeDownloads.set(entry.id, { entry, item });
+      this.resolveDownloadStartWaiters(entry);
       eventBus.emit(AppEventType.BROWSER_DOWNLOAD_STARTED, { download: { ...entry } });
       this.emitLog('info', `Download started: ${filename}`);
       this.syncState();
@@ -360,7 +374,29 @@ export class BrowserService {
       item.once('done', (_e: ElectronEvent, state: string) => {
         entry.receivedBytes = item.getReceivedBytes();
         entry.totalBytes = item.getTotalBytes();
-        entry.state = state === 'completed' ? 'completed' : 'cancelled';
+        entry.state = state === 'completed'
+          ? 'completed'
+          : state === 'interrupted'
+            ? 'interrupted'
+            : 'cancelled';
+        entry.completedAt = Date.now();
+        try {
+          if (fs.existsSync(savePath)) {
+            const stats = fs.statSync(savePath);
+            entry.existsOnDisk = stats.isFile();
+            entry.fileSize = stats.isFile() ? stats.size : null;
+          } else {
+            entry.existsOnDisk = false;
+            entry.fileSize = null;
+          }
+        } catch (err) {
+          entry.existsOnDisk = false;
+          entry.fileSize = null;
+          entry.error = err instanceof Error ? err.message : String(err);
+        }
+        if (entry.state === 'completed' && entry.existsOnDisk === false && !entry.error) {
+          entry.error = 'Download completed but saved file was not found on disk';
+        }
         eventBus.emit(AppEventType.BROWSER_DOWNLOAD_COMPLETED, { download: { ...entry } });
         this.emitLog(entry.state === 'completed' ? 'info' : 'warn', `Download ${entry.state}: ${filename}`);
         this.activeDownloads.delete(entry.id);
@@ -1221,9 +1257,189 @@ export class BrowserService {
 
   // ─── Downloads ──────────────────────────────────────────────────────────
 
+  private normalizeComparableUrl(url: string): string {
+    try {
+      const parsed = new URL(url);
+      parsed.hash = '';
+      return parsed.toString();
+    } catch {
+      return url;
+    }
+  }
+
+  private resolveDownloadStartWaiters(download: BrowserDownloadState): void {
+    const downloadUrl = this.normalizeComparableUrl(download.url);
+    for (const [waiterId, waiter] of this.downloadStartWaiters.entries()) {
+      const waiterUrl = this.normalizeComparableUrl(waiter.url);
+      const tabMatches = !waiter.tabId || waiter.tabId === download.sourceTabId;
+      if (!tabMatches || waiterUrl !== downloadUrl) continue;
+      clearTimeout(waiter.timer);
+      waiter.resolve({ ...download });
+      this.downloadStartWaiters.delete(waiterId);
+    }
+  }
+
+  async downloadUrl(
+    url: string,
+    tabId?: string,
+  ): Promise<{
+    started: boolean;
+    error: string | null;
+    url: string;
+    tabId?: string;
+    download?: BrowserDownloadState;
+    method?: string;
+  }> {
+    const entry = this.resolveEntry(tabId || this.activeTabId);
+    if (!entry) {
+      return { started: false, error: 'No active tab', url };
+    }
+    const waiterId = generateId('downloadwait');
+    const waitForStart = new Promise<BrowserDownloadState>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.downloadStartWaiters.delete(waiterId);
+        reject(new Error(`Timed out waiting for browser download event for ${url}`));
+      }, 5000);
+      this.downloadStartWaiters.set(waiterId, {
+        id: waiterId,
+        tabId: entry.id,
+        url,
+        resolve,
+        reject,
+        timer,
+      });
+    });
+
+    try {
+      entry.view.webContents.downloadURL(url);
+      const download = await waitForStart;
+      return {
+        started: true,
+        error: null,
+        url,
+        tabId: entry.id,
+        download,
+        method: 'webContents.downloadURL',
+      };
+    } catch (err) {
+      const waiter = this.downloadStartWaiters.get(waiterId);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        this.downloadStartWaiters.delete(waiterId);
+      }
+      return {
+        started: false,
+        error: err instanceof Error ? err.message : String(err),
+        url,
+        tabId: entry.id,
+        method: 'webContents.downloadURL',
+      };
+    }
+  }
+
+  async downloadLink(
+    selector: string,
+    tabId?: string,
+  ): Promise<{
+    started: boolean;
+    error: string | null;
+    selector: string;
+    href?: string;
+    tabId?: string;
+    download?: BrowserDownloadState;
+    method?: string;
+  }> {
+    const safeSelector = JSON.stringify(selector);
+    const hrefResult = await this.executeInPage(`
+      (() => {
+        const node = document.querySelector(${safeSelector});
+        if (!node) return { ok: false, reason: 'Element not found' };
+        const candidate = node instanceof HTMLAnchorElement ? node : node.closest('a[href]');
+        if (!(candidate instanceof HTMLAnchorElement)) {
+          return { ok: false, reason: 'Element is not a download link or inside an anchor' };
+        }
+        candidate.scrollIntoView({ block: 'center', inline: 'center' });
+        return {
+          ok: true,
+          href: candidate.href || '',
+          text: (candidate.innerText || candidate.textContent || '').trim().slice(0, 200),
+        };
+      })()
+    `, tabId);
+    if (hrefResult.error) {
+      return { started: false, error: hrefResult.error, selector };
+    }
+    const raw = hrefResult.result as { ok?: boolean; reason?: string; href?: string } | null;
+    if (!raw?.ok || typeof raw.href !== 'string' || raw.href.trim() === '') {
+      return {
+        started: false,
+        error: raw?.reason || 'Could not resolve download link href',
+        selector,
+      };
+    }
+    const started = await this.downloadUrl(raw.href, tabId);
+    return {
+      started: started.started,
+      error: started.error,
+      selector,
+      href: raw.href,
+      tabId: started.tabId,
+      download: started.download,
+      method: started.method,
+    };
+  }
+
   getDownloads(): BrowserDownloadState[] {
     const active = Array.from(this.activeDownloads.values()).map(d => ({ ...d.entry }));
     return [...active, ...this.completedDownloads];
+  }
+
+  async waitForDownload(input: {
+    downloadId?: string;
+    filename?: string;
+    tabId?: string;
+    timeoutMs?: number;
+  } = {}): Promise<{
+    found: boolean;
+    completed: boolean;
+    timedOut: boolean;
+    download: BrowserDownloadState | null;
+  }> {
+    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 15_000, 250), 60_000);
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const downloads = this.getDownloads();
+      const candidates = downloads
+        .filter(download => !input.downloadId || download.id === input.downloadId)
+        .filter(download => !input.filename || download.filename === input.filename)
+        .filter(download => !input.tabId || download.sourceTabId === input.tabId)
+        .sort((a, b) => b.startedAt - a.startedAt);
+      const match = candidates[0] || null;
+      if (match) {
+        const completed = match.state === 'completed' || match.state === 'cancelled' || match.state === 'interrupted';
+        if (completed) {
+          return {
+            found: true,
+            completed: match.state === 'completed',
+            timedOut: false,
+            download: match,
+          };
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+
+    const finalMatch = this.getDownloads()
+      .filter(download => !input.downloadId || download.id === input.downloadId)
+      .filter(download => !input.filename || download.filename === input.filename)
+      .filter(download => !input.tabId || download.sourceTabId === input.tabId)
+      .sort((a, b) => b.startedAt - a.startedAt)[0] || null;
+    return {
+      found: Boolean(finalMatch),
+      completed: finalMatch?.state === 'completed',
+      timedOut: true,
+      download: finalMatch,
+    };
   }
 
   cancelDownload(downloadId: string): void {

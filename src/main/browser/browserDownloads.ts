@@ -24,6 +24,12 @@ export function createDownloadEntry(url: string, filename: string, savePath: str
     receivedBytes: 0,
     totalBytes: 0,
     startedAt: Date.now(),
+    completedAt: null,
+    sourceTabId: null,
+    sourcePageUrl: null,
+    existsOnDisk: false,
+    fileSize: null,
+    error: null,
   };
 }
 

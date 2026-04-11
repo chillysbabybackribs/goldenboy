@@ -599,6 +599,100 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
+      name: 'browser.download_link',
+      description: 'Start a tracked browser download from a page link selector without relying on normal click/navigation behavior.',
+      inputSchema: { type: 'object', required: ['selector'], properties: { selector: { type: 'string' }, tabId: { type: 'string' } } },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const selector = requireString(obj, 'selector');
+        const result = await browserService.downloadLink(selector, optionalString(obj, 'tabId'));
+        return {
+          summary: result.started
+            ? `Started browser download from ${result.href || selector}`
+            : `Download link failed for ${selector}: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
+      },
+    },
+    {
+      name: 'browser.download_url',
+      description: 'Start a tracked browser download from an explicit URL.',
+      inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' }, tabId: { type: 'string' } } },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const url = requireString(obj, 'url');
+        const result = await browserService.downloadUrl(url, optionalString(obj, 'tabId'));
+        return {
+          summary: result.started
+            ? `Started browser download for ${url}`
+            : `Download URL failed for ${url}: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
+      },
+    },
+    {
+      name: 'browser.get_downloads',
+      description: 'Return current and completed browser downloads.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          state: { type: 'string' },
+          filename: { type: 'string' },
+          tabId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const state = optionalString(obj, 'state');
+        const filename = optionalString(obj, 'filename');
+        const tabId = optionalString(obj, 'tabId');
+        const downloads = browserService.getDownloads()
+          .filter(download => !state || download.state === state)
+          .filter(download => !filename || download.filename === filename)
+          .filter(download => !tabId || download.sourceTabId === tabId);
+        return {
+          summary: downloads.length === 0
+            ? 'No browser downloads matched'
+            : `Found ${downloads.length} browser download${downloads.length === 1 ? '' : 's'}`,
+          data: { downloads },
+        };
+      },
+    },
+    {
+      name: 'browser.wait_for_download',
+      description: 'Wait for a browser download to complete or settle.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          downloadId: { type: 'string' },
+          filename: { type: 'string' },
+          tabId: { type: 'string' },
+          timeoutMs: { type: 'number' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const result = await browserService.waitForDownload({
+          downloadId: optionalString(obj, 'downloadId'),
+          filename: optionalString(obj, 'filename'),
+          tabId: optionalString(obj, 'tabId'),
+          timeoutMs: optionalNumber(obj, 'timeoutMs', 15_000),
+        });
+        return {
+          summary: result.timedOut
+            ? 'Timed out waiting for browser download'
+            : result.completed
+              ? `Browser download completed: ${result.download?.filename || 'unknown file'}`
+              : `Browser download settled without completion: ${result.download?.state || 'unknown state'}`,
+          data: { result },
+        };
+      },
+    },
+    {
       name: 'browser.drag',
       description: 'Drag one page element onto another by selector using native input plus DOM drag/drop events.',
       inputSchema: {
