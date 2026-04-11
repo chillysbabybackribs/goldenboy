@@ -38,6 +38,10 @@ npm start
 
 **Requirements**: Node.js 18+, Electron 28+, Anthropic API key.
 
+## Benchmarks
+
+Browser capability coverage and benchmark status are tracked in [BROWSER_BENCHMARKS.md](/home/dp/Desktop/v2workspace/BROWSER_BENCHMARKS.md).
+
 ## License
 
 MIT
