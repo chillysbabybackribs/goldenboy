@@ -27,6 +27,8 @@ export type AgentToolName =
   | 'browser.summarize_page'
   | 'browser.evaluate_js'
   | 'browser.run_intent_program'
+  | 'browser.get_console_events'
+  | 'browser.get_network_events'
   | 'browser.cache_current_page'
   | 'browser.answer_from_cache'
   | 'browser.search_page_cache'

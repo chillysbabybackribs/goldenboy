@@ -38,6 +38,8 @@ Use this skill when a task requires navigation, web search, page inspection, cli
 - `browser.click`
 - `browser.type`
 - `browser.drag`
+- `browser.get_console_events`
+- `browser.get_network_events`
 - `browser.run_intent_program`
 - `browser.extract_page`
 - `browser.get_actionable_elements`

@@ -21,6 +21,8 @@ export const UNRESTRICTED_DEV_TOOL_SCHEMAS: AgentToolSchemaSummary[] = [
   schema('browser.click', 'Click a page element.', { type: 'object', required: ['selector'], properties: { selector: { type: 'string' }, tabId: { type: 'string' } } }),
   schema('browser.type', 'Type text into a page element.', { type: 'object', required: ['selector', 'text'], properties: { selector: { type: 'string' }, text: { type: 'string' }, tabId: { type: 'string' } } }),
   schema('browser.drag', 'Drag one page element onto another by selector using native input plus DOM drag/drop events.', { type: 'object', required: ['sourceSelector', 'targetSelector'], properties: { sourceSelector: { type: 'string' }, targetSelector: { type: 'string' }, tabId: { type: 'string' } } }),
+  schema('browser.get_console_events', 'Return recent browser console events for diagnostics.', { type: 'object', properties: { tabId: { type: 'string' }, since: { type: 'number' }, level: { type: 'string' }, limit: { type: 'number' } } }),
+  schema('browser.get_network_events', 'Return recent browser network events for diagnostics.', { type: 'object', properties: { tabId: { type: 'string' }, since: { type: 'number' }, status: { type: 'string' }, failedOnly: { type: 'boolean' }, limit: { type: 'number' } } }),
   schema('browser.run_intent_program', 'Execute semantic Web Intent VM bytecode for login/drag-drop/cart/checkout/upload/extract/assert flows.', {
     type: 'object',
     required: ['instructions'],

@@ -969,6 +969,66 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
+      name: 'browser.get_console_events',
+      description: 'Return recent browser console events for diagnostics.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          since: { type: 'number' },
+          level: { type: 'string' },
+          limit: { type: 'number' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const level = optionalString(obj, 'level');
+        const limit = Math.min(Math.max(Math.floor(optionalNumber(obj, 'limit', 50)), 1), 250);
+        const events = browserService
+          .getConsoleEvents(optionalString(obj, 'tabId'), optionalNumber(obj, 'since', 0) || undefined)
+          .filter(event => !level || event.level === level)
+          .slice(-limit);
+        const errorCount = events.filter(event => event.level === 'error').length;
+        const warnCount = events.filter(event => event.level === 'warn').length;
+        return {
+          summary: `Read ${events.length} console event${events.length === 1 ? '' : 's'} (${errorCount} errors, ${warnCount} warnings)`,
+          data: { events },
+        };
+      },
+    },
+    {
+      name: 'browser.get_network_events',
+      description: 'Return recent browser network events for diagnostics.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          since: { type: 'number' },
+          status: { type: 'string' },
+          failedOnly: { type: 'boolean' },
+          limit: { type: 'number' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const status = optionalString(obj, 'status');
+        const failedOnly = obj.failedOnly === true;
+        const limit = Math.min(Math.max(Math.floor(optionalNumber(obj, 'limit', 80)), 1), 500);
+        const events = browserService
+          .getNetworkEvents(optionalString(obj, 'tabId'), optionalNumber(obj, 'since', 0) || undefined)
+          .filter(event => !status || event.status === status)
+          .filter(event => !failedOnly || event.status === 'failed' || (typeof event.statusCode === 'number' && event.statusCode >= 400))
+          .slice(-limit);
+        const failedCount = events.filter(event => event.status === 'failed' || (typeof event.statusCode === 'number' && event.statusCode >= 400)).length;
+        return {
+          summary: `Read ${events.length} network event${events.length === 1 ? '' : 's'} (${failedCount} failed/error responses)`,
+          data: { events },
+        };
+      },
+    },
+    {
       name: 'browser.run_intent_program',
       description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
       inputSchema: {
