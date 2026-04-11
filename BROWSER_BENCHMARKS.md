@@ -36,7 +36,7 @@ It is meant to answer four questions:
 | JavaScript alert handling | The Internet | JS Alert accept flow | `browser.get_dialogs` + `browser.accept_dialog` | PASS | Public benchmark; modal no longer blocks the agent. |
 | JavaScript confirm handling | The Internet | JS Confirm dismiss flow | `browser.get_dialogs` + `browser.dismiss_dialog` | PASS | Public benchmark; verified exact result text `You clicked: Cancel`. |
 | JavaScript prompt handling | The Internet | JS Prompt accept flow with typed input | `browser.get_dialogs` + `browser.accept_dialog` | PASS | Public benchmark; prompt captured through shim backend and verified exact result text `You entered: Goldenboy`. |
-| File upload | The Internet | Upload local file and verify echoed filename | `browser.upload_file` + `browser.click` | SOFT PASS | Public task succeeded before the primitive existed, but only through `browser.evaluate_js` `DataTransfer` injection. Rerun required with `browser.upload_file` for a real pass. |
+| File upload | The Internet | Upload local file and verify echoed filename | `browser.upload_file` + `browser.click` | PASS | Public benchmark rerun completed with the real upload primitive and explicit filename verification. |
 | Semantic dialog intents | Local dialog fixture | Accept prompt / dismiss confirm through VM bytecode | `browser.run_intent_program` -> `INTENT.ACCEPT_DIALOG` / `INTENT.DISMISS_DIALOG` | PASS | Deterministic local regression coverage for dialog workflows. |
 | Diagnostics: console | Any failure case | Inspect console after render/action failure | `browser.get_console_events` | PASS | Tool exists and is available to agent runtime. |
 | Diagnostics: network | Any failure case | Inspect failed requests after render/action failure | `browser.get_network_events` | PASS | Tool exists and is available to agent runtime. |
@@ -107,11 +107,10 @@ These should be run next, in roughly this order:
 
 | Priority | Capability | Site | Goal | Expected Tool Path |
 |---|---|---|---|---|
-| 1 | File upload rerun | The Internet or ExpandTesting | Revalidate upload without `evaluate_js` workaround | `browser.upload_file` + `browser.click` |
-| 2 | Iframes / nested frames | The Internet | Interact inside iframe content deterministically | likely needs frame-aware primitives |
-| 3 | New tabs / popups | The Internet | Open link in a new tab and continue work there | tab activation + navigation state verification |
-| 4 | Shadow DOM | ExpandTesting or custom fixture | Detect and interact with encapsulated elements | may need shadow-root traversal support |
-| 5 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
+| 1 | Iframes / nested frames | The Internet | Interact inside iframe content deterministically | likely needs frame-aware primitives |
+| 2 | New tabs / popups | The Internet | Open link in a new tab and continue work there | tab activation + navigation state verification |
+| 3 | Shadow DOM | ExpandTesting or custom fixture | Detect and interact with encapsulated elements | may need shadow-root traversal support |
+| 4 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
 
 ## Prompt Templates
 
