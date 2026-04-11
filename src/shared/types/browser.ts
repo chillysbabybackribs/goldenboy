@@ -145,6 +145,7 @@ export type BrowserJavaScriptDialog = {
   tabId: string;
   url: string;
   type: BrowserJavaScriptDialogType;
+  backend?: 'cdp' | 'shim';
   message: string;
   defaultPrompt: string;
   openedAt: number;

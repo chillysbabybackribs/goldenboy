@@ -19,6 +19,20 @@ import * as path from 'path';
 import * as os from 'os';
 
 export function registerIpc(): void {
+  ipcMain.on('browser:prompt-open-sync', (event, payload: { message?: string; defaultPrompt?: string; url?: string }) => {
+    event.returnValue = browserService.openPromptDialogFallback({
+      webContentsId: event.sender.id,
+      message: typeof payload?.message === 'string' ? payload.message : '',
+      defaultPrompt: typeof payload?.defaultPrompt === 'string' ? payload.defaultPrompt : '',
+      url: typeof payload?.url === 'string' ? payload.url : '',
+    });
+  });
+
+  ipcMain.on('browser:prompt-poll-sync', (event, payload: { dialogId?: string }) => {
+    const dialogId = typeof payload?.dialogId === 'string' ? payload.dialogId : '';
+    event.returnValue = browserService.pollPromptDialogFallback(dialogId);
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_STATE, () => {
     return appStateStore.getState();
   });

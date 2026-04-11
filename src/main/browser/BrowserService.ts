@@ -6,6 +6,7 @@
 // settings, zoom, find-in-page, downloads, and permissions.
 
 import { BrowserWindow, WebContentsView, session, DownloadItem, Event as ElectronEvent, Menu, MenuItem, clipboard } from 'electron';
+import * as path from 'path';
 import {
   BrowserState, BrowserNavigationState, BrowserSurfaceStatus,
   BrowserHistoryEntry, BrowserDownloadState, BrowserPermissionRequest,
@@ -74,6 +75,16 @@ type TabEntry = {
   info: TabInfo;
 };
 
+type PromptDialogResolution = {
+  dialogId: string;
+  resolved: boolean;
+  value: string | null;
+};
+
+function getBrowserTabPreloadPath(): string {
+  return path.join(__dirname, '..', '..', '..', 'preload', 'preload', 'browserTabPreload.js');
+}
+
 function sanitizeBrowserUserAgent(userAgent: string): string {
   return userAgent
     .replace(/\s*Electron\/[\d.]+/g, '')
@@ -97,6 +108,7 @@ export class BrowserService {
   private completedDownloads: BrowserDownloadState[] = [];
   private recentPermissions: BrowserPermissionRequest[] = [];
   private pendingDialogs: Map<string, BrowserJavaScriptDialog> = new Map();
+  private promptDialogResolutions: Map<string, PromptDialogResolution> = new Map();
   private extensions: ExtensionInfo[] = [];
   private findState: FindInPageState = { active: false, query: '', activeMatch: 0, totalMatches: 0 };
   private settings: BrowserSettings;
@@ -341,6 +353,7 @@ export class BrowserService {
     const view = new WebContentsView({
       webPreferences: {
         session: this.sessionInstance,
+        preload: getBrowserTabPreloadPath(),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -416,9 +429,7 @@ export class BrowserService {
       try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
     }
     this.instrumentation.detachTab(tabId, entry.view.webContents.id);
-    for (const [id, dialog] of this.pendingDialogs.entries()) {
-      if (dialog.tabId === tabId) this.pendingDialogs.delete(id);
-    }
+    this.clearPendingDialogsForTab(tabId);
     try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
     this.tabs.delete(tabId);
 
@@ -656,6 +667,7 @@ export class BrowserService {
         tabId: entry.id,
         url: typeof params?.url === 'string' ? params.url : entry.info.navigation.url,
         type,
+        backend: 'cdp',
         message: typeof params?.message === 'string' ? params.message : '',
         defaultPrompt: typeof params?.defaultPrompt === 'string' ? params.defaultPrompt : '',
         openedAt: Date.now(),
@@ -683,9 +695,21 @@ export class BrowserService {
     for (const [id, dialog] of this.pendingDialogs.entries()) {
       if (dialog.tabId !== tabId) continue;
       this.pendingDialogs.delete(id);
+      const resolution = this.promptDialogResolutions.get(id);
+      if (resolution && !resolution.resolved) {
+        resolution.resolved = true;
+        resolution.value = null;
+      }
       changed = true;
     }
     if (changed) this.syncState();
+  }
+
+  private resolveTabIdByWebContentsId(webContentsId: number): string | null {
+    for (const [tabId, entry] of this.tabs.entries()) {
+      if (entry.view.webContents.id === webContentsId) return tabId;
+    }
+    return null;
   }
 
   private syncTabAndMaybeNavigation(entry: TabEntry): void {
@@ -1300,6 +1324,58 @@ export class BrowserService {
     return tabId ? dialogs.filter(dialog => dialog.tabId === tabId) : dialogs;
   }
 
+  openPromptDialogFallback(input: {
+    webContentsId: number;
+    message: string;
+    defaultPrompt?: string;
+    url?: string;
+  }): { dialogId: string; created: boolean } {
+    const tabId = this.resolveTabIdByWebContentsId(input.webContentsId);
+    if (!tabId) {
+      return { dialogId: '', created: false };
+    }
+
+    const existing = this.getPendingDialogs(tabId).find(dialog => dialog.type === 'prompt' && dialog.backend === 'shim');
+    if (existing) {
+      return { dialogId: existing.id, created: false };
+    }
+
+    const dialog: BrowserJavaScriptDialog = {
+      id: generateId('dialog'),
+      tabId,
+      url: input.url || this.tabs.get(tabId)?.info.navigation.url || '',
+      type: 'prompt',
+      backend: 'shim',
+      message: input.message || '',
+      defaultPrompt: input.defaultPrompt || '',
+      openedAt: Date.now(),
+    };
+    this.pendingDialogs.set(dialog.id, dialog);
+    this.promptDialogResolutions.set(dialog.id, {
+      dialogId: dialog.id,
+      resolved: false,
+      value: null,
+    });
+    this.emitLog('info', `JavaScript prompt dialog opened via shim: ${dialog.message || '(empty)'}`);
+    this.syncState();
+    return { dialogId: dialog.id, created: true };
+  }
+
+  pollPromptDialogFallback(dialogId: string): { done: boolean; value: string | null } {
+    const resolution = this.promptDialogResolutions.get(dialogId);
+    if (!resolution) {
+      return { done: true, value: null };
+    }
+    if (resolution.resolved) {
+      this.promptDialogResolutions.delete(dialogId);
+      return { done: true, value: resolution.value };
+    }
+    return {
+      done: false,
+      value: null,
+    };
+  }
+
   async acceptDialog(input: {
     tabId?: string;
     dialogId?: string;
@@ -1330,6 +1406,17 @@ export class BrowserService {
       return { accepted: false, error: 'No active tab', dialog };
     }
     try {
+      if (dialog?.backend === 'shim' && dialog.type === 'prompt') {
+        const resolution = this.promptDialogResolutions.get(dialog.id);
+        if (!resolution) {
+          return { accepted: false, error: 'Prompt dialog resolution missing', dialog };
+        }
+        resolution.resolved = true;
+        resolution.value = input.accept ? (input.promptText ?? dialog.defaultPrompt ?? '') : null;
+        this.pendingDialogs.delete(dialog.id);
+        this.syncState();
+        return { accepted: true, error: null, dialog };
+      }
       if (!entry.view.webContents.debugger.isAttached()) {
         entry.view.webContents.debugger.attach('1.3');
         await entry.view.webContents.debugger.sendCommand('Page.enable');
