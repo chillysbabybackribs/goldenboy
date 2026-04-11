@@ -1080,6 +1080,79 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
+      name: 'browser.get_dialogs',
+      description: 'Return pending JavaScript alert/confirm/prompt dialogs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const tabId = optionalString(objectInput(input), 'tabId');
+        const dialogs = browserService.getPendingDialogs(tabId);
+        return {
+          summary: dialogs.length === 0
+            ? 'No pending JavaScript dialogs'
+            : `Found ${dialogs.length} pending JavaScript dialog${dialogs.length === 1 ? '' : 's'}`,
+          data: { dialogs },
+        };
+      },
+    },
+    {
+      name: 'browser.accept_dialog',
+      description: 'Accept a pending JavaScript alert/confirm/prompt dialog.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          dialogId: { type: 'string' },
+          promptText: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const result = await browserService.acceptDialog({
+          tabId: optionalString(obj, 'tabId'),
+          dialogId: optionalString(obj, 'dialogId'),
+          promptText: optionalString(obj, 'promptText'),
+        });
+        return {
+          summary: result.accepted
+            ? `Accepted JavaScript dialog${result.dialog?.message ? `: ${result.dialog.message}` : ''}`
+            : `Accept dialog failed: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
+      },
+    },
+    {
+      name: 'browser.dismiss_dialog',
+      description: 'Dismiss a pending JavaScript confirm/prompt dialog.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          dialogId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const result = await browserService.dismissDialog({
+          tabId: optionalString(obj, 'tabId'),
+          dialogId: optionalString(obj, 'dialogId'),
+        });
+        return {
+          summary: result.dismissed
+            ? `Dismissed JavaScript dialog${result.dialog?.message ? `: ${result.dialog.message}` : ''}`
+            : `Dismiss dialog failed: ${result.error || 'unknown error'}`,
+          data: { result },
+        };
+      },
+    },
+    {
       name: 'browser.run_intent_program',
       description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.HOVER, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
       inputSchema: {

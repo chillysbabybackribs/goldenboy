@@ -11,6 +11,7 @@ import {
   BrowserHistoryEntry, BrowserDownloadState, BrowserPermissionRequest,
   BrowserErrorInfo, BrowserProfile, TabInfo, BookmarkEntry, ExtensionInfo,
   FindInPageState, BrowserSettings, BrowserAuthDiagnostics,
+  BrowserJavaScriptDialog, BrowserJavaScriptDialogType,
   createDefaultBrowserState, createDefaultSettings,
 } from '../../shared/types/browser';
 import {
@@ -95,6 +96,7 @@ export class BrowserService {
   private activeDownloads: Map<string, { entry: BrowserDownloadState; item: DownloadItem }> = new Map();
   private completedDownloads: BrowserDownloadState[] = [];
   private recentPermissions: BrowserPermissionRequest[] = [];
+  private pendingDialogs: Map<string, BrowserJavaScriptDialog> = new Map();
   private extensions: ExtensionInfo[] = [];
   private findState: FindInPageState = { active: false, query: '', activeMatch: 0, totalMatches: 0 };
   private settings: BrowserSettings;
@@ -376,6 +378,7 @@ export class BrowserService {
 
     this.wireTabEvents(entry);
     this.instrumentation.attachTab(id, view.webContents);
+    this.attachDialogDebugger(entry);
 
     // Don't add to contentView yet — only the active tab is visible
     if (url && url !== 'about:blank') {
@@ -413,6 +416,9 @@ export class BrowserService {
       try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
     }
     this.instrumentation.detachTab(tabId, entry.view.webContents.id);
+    for (const [id, dialog] of this.pendingDialogs.entries()) {
+      if (dialog.tabId === tabId) this.pendingDialogs.delete(id);
+    }
     try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
     this.tabs.delete(tabId);
 
@@ -489,6 +495,7 @@ export class BrowserService {
     });
 
     wc.on('did-navigate', (_e: ElectronEvent, url: string) => {
+      this.clearPendingDialogsForTab(entry.id);
       nav.url = url;
       nav.canGoBack = wc.navigationHistory.canGoBack();
       nav.canGoForward = wc.navigationHistory.canGoForward();
@@ -499,6 +506,7 @@ export class BrowserService {
     });
 
     wc.on('did-navigate-in-page', (_e: ElectronEvent, url: string) => {
+      this.clearPendingDialogsForTab(entry.id);
       nav.url = url;
       nav.canGoBack = wc.navigationHistory.canGoBack();
       nav.canGoForward = wc.navigationHistory.canGoForward();
@@ -614,6 +622,70 @@ export class BrowserService {
       this.createTab(url);
       return { action: 'deny' };
     });
+  }
+
+  private attachDialogDebugger(entry: TabEntry): void {
+    const wc = entry.view.webContents;
+    const dbg = wc.debugger;
+    try {
+      if (!dbg.isAttached()) {
+        dbg.attach('1.3');
+      }
+      void dbg.sendCommand('Page.enable').catch(() => {});
+    } catch (err) {
+      this.emitLog('warn', `Browser dialog debugger unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    dbg.on('detach', () => {
+      for (const [id, dialog] of this.pendingDialogs.entries()) {
+        if (dialog.tabId === entry.id) this.pendingDialogs.delete(id);
+      }
+      this.syncState();
+    });
+
+    dbg.on('message', (_event, method: string, params: any) => {
+      if (method === 'Page.javascriptDialogClosed') {
+        this.clearPendingDialogsForTab(entry.id);
+        return;
+      }
+      if (method !== 'Page.javascriptDialogOpening') return;
+      const type = this.normalizeJavaScriptDialogType(params?.type);
+      const dialog: BrowserJavaScriptDialog = {
+        id: generateId('dialog'),
+        tabId: entry.id,
+        url: typeof params?.url === 'string' ? params.url : entry.info.navigation.url,
+        type,
+        message: typeof params?.message === 'string' ? params.message : '',
+        defaultPrompt: typeof params?.defaultPrompt === 'string' ? params.defaultPrompt : '',
+        openedAt: Date.now(),
+      };
+      this.pendingDialogs.set(dialog.id, dialog);
+      this.emitLog('info', `JavaScript ${dialog.type} dialog opened: ${dialog.message || '(empty)'}`);
+      this.syncState();
+    });
+  }
+
+  private normalizeJavaScriptDialogType(value: unknown): BrowserJavaScriptDialogType {
+    switch (value) {
+      case 'alert':
+      case 'confirm':
+      case 'prompt':
+      case 'beforeunload':
+        return value;
+      default:
+        return 'unknown';
+    }
+  }
+
+  private clearPendingDialogsForTab(tabId: string): void {
+    let changed = false;
+    for (const [id, dialog] of this.pendingDialogs.entries()) {
+      if (dialog.tabId !== tabId) continue;
+      this.pendingDialogs.delete(id);
+      changed = true;
+    }
+    if (changed) this.syncState();
   }
 
   private syncTabAndMaybeNavigation(entry: TabEntry): void {
@@ -1129,6 +1201,7 @@ export class BrowserService {
       activeDownloads: Array.from(this.activeDownloads.values()).map(d => ({ ...d.entry })),
       completedDownloads: [...this.completedDownloads],
       recentPermissions: [...this.recentPermissions],
+      pendingDialogs: this.getPendingDialogs(),
       extensions: [...this.extensions],
       findInPage: { ...this.findState },
       settings: { ...this.settings },
@@ -1220,6 +1293,59 @@ export class BrowserService {
     hitTest?: BrowserPointerHitTestResult;
   }> {
     return this.pageInteraction.hoverElement(selector, tabId);
+  }
+
+  getPendingDialogs(tabId?: string): BrowserJavaScriptDialog[] {
+    const dialogs = Array.from(this.pendingDialogs.values());
+    return tabId ? dialogs.filter(dialog => dialog.tabId === tabId) : dialogs;
+  }
+
+  async acceptDialog(input: {
+    tabId?: string;
+    dialogId?: string;
+    promptText?: string;
+  } = {}): Promise<{ accepted: boolean; error: string | null; dialog: BrowserJavaScriptDialog | null }> {
+    return this.resolveJavaScriptDialog({ ...input, accept: true });
+  }
+
+  async dismissDialog(input: {
+    tabId?: string;
+    dialogId?: string;
+  } = {}): Promise<{ dismissed: boolean; error: string | null; dialog: BrowserJavaScriptDialog | null }> {
+    const result = await this.resolveJavaScriptDialog({ ...input, accept: false });
+    return { dismissed: result.accepted, error: result.error, dialog: result.dialog };
+  }
+
+  private async resolveJavaScriptDialog(input: {
+    accept: boolean;
+    tabId?: string;
+    dialogId?: string;
+    promptText?: string;
+  }): Promise<{ accepted: boolean; error: string | null; dialog: BrowserJavaScriptDialog | null }> {
+    const dialog = input.dialogId
+      ? this.pendingDialogs.get(input.dialogId) || null
+      : this.getPendingDialogs(input.tabId || this.activeTabId)[0] || null;
+    const entry = this.resolveEntry(dialog?.tabId || input.tabId || this.activeTabId);
+    if (!entry) {
+      return { accepted: false, error: 'No active tab', dialog };
+    }
+    try {
+      if (!entry.view.webContents.debugger.isAttached()) {
+        entry.view.webContents.debugger.attach('1.3');
+        await entry.view.webContents.debugger.sendCommand('Page.enable');
+      }
+      await entry.view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', {
+        accept: input.accept,
+        promptText: input.promptText || '',
+      });
+      if (dialog) this.pendingDialogs.delete(dialog.id);
+      else this.clearPendingDialogsForTab(entry.id);
+      this.syncState();
+      return { accepted: true, error: null, dialog };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { accepted: false, error: message, dialog };
+    }
   }
 
   async typeInElement(

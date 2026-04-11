@@ -136,6 +136,20 @@ export type BrowserAuthDiagnostics = {
   activeTabHasElectronUA: boolean;
 };
 
+// ─── JavaScript Dialogs ─────────────────────────────────────────────────────
+
+export type BrowserJavaScriptDialogType = 'alert' | 'confirm' | 'prompt' | 'beforeunload' | 'unknown';
+
+export type BrowserJavaScriptDialog = {
+  id: string;
+  tabId: string;
+  url: string;
+  type: BrowserJavaScriptDialogType;
+  message: string;
+  defaultPrompt: string;
+  openedAt: number;
+};
+
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
 export type BrowserErrorInfo = {
@@ -158,6 +172,7 @@ export type BrowserState = {
   activeDownloads: BrowserDownloadState[];
   completedDownloads: BrowserDownloadState[];
   recentPermissions: BrowserPermissionRequest[];
+  pendingDialogs: BrowserJavaScriptDialog[];
   extensions: ExtensionInfo[];
   findInPage: FindInPageState;
   settings: BrowserSettings;
@@ -203,6 +218,7 @@ export function createDefaultBrowserState(): BrowserState {
     activeDownloads: [],
     completedDownloads: [],
     recentPermissions: [],
+    pendingDialogs: [],
     extensions: [],
     findInPage: { active: false, query: '', activeMatch: 0, totalMatches: 0 },
     settings: createDefaultSettings(),

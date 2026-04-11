@@ -42,6 +42,9 @@ Use this skill when a task requires navigation, web search, page inspection, cli
 - `browser.hit_test`
 - `browser.get_console_events`
 - `browser.get_network_events`
+- `browser.get_dialogs`
+- `browser.accept_dialog`
+- `browser.dismiss_dialog`
 - `browser.run_intent_program`
 - `browser.extract_page`
 - `browser.get_actionable_elements`

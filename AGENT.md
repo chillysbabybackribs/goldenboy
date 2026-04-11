@@ -212,6 +212,9 @@ Use stable dotted tool names:
 - `browser.hit_test`
 - `browser.get_console_events`
 - `browser.get_network_events`
+- `browser.get_dialogs`
+- `browser.accept_dialog`
+- `browser.dismiss_dialog`
 - `browser.run_intent_program`
 - `browser.extract_page`
 - `browser.answer_from_cache`
