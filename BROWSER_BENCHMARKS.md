@@ -37,6 +37,7 @@ It is meant to answer four questions:
 | JavaScript confirm handling | The Internet | JS Confirm dismiss flow | `browser.get_dialogs` + `browser.dismiss_dialog` | PASS | Public benchmark; verified exact result text `You clicked: Cancel`. |
 | JavaScript prompt handling | The Internet | JS Prompt accept flow with typed input | `browser.get_dialogs` + `browser.accept_dialog` | PASS | Public benchmark; prompt captured through shim backend and verified exact result text `You entered: Goldenboy`. |
 | File upload | The Internet | Upload local file and verify echoed filename | `browser.upload_file` + `browser.click` | PASS | Public benchmark rerun completed with the real upload primitive and explicit filename verification. |
+| Iframe reachability / extraction | The Internet | Inspect TinyMCE editor iframe and verify final content | frame inspection + `browser.evaluate_js` fallback | SOFT PASS | Same-origin iframe was reachable and content was verified, but normal click/type editing was blocked by TinyMCE read-only mode on the public page. |
 | Semantic dialog intents | Local dialog fixture | Accept prompt / dismiss confirm through VM bytecode | `browser.run_intent_program` -> `INTENT.ACCEPT_DIALOG` / `INTENT.DISMISS_DIALOG` | PASS | Deterministic local regression coverage for dialog workflows. |
 | Diagnostics: console | Any failure case | Inspect console after render/action failure | `browser.get_console_events` | PASS | Tool exists and is available to agent runtime. |
 | Diagnostics: network | Any failure case | Inspect failed requests after render/action failure | `browser.get_network_events` | PASS | Tool exists and is available to agent runtime. |
@@ -107,7 +108,7 @@ These should be run next, in roughly this order:
 
 | Priority | Capability | Site | Goal | Expected Tool Path |
 |---|---|---|---|---|
-| 1 | Iframes / nested frames | The Internet | Interact inside iframe content deterministically | likely needs frame-aware primitives |
+| 1 | Iframes / nested frames | The Internet or custom fixture | Interact inside iframe content deterministically without `evaluate_js` fallback | likely needs frame-aware primitives |
 | 2 | New tabs / popups | The Internet | Open link in a new tab and continue work there | tab activation + navigation state verification |
 | 3 | Shadow DOM | ExpandTesting or custom fixture | Detect and interact with encapsulated elements | may need shadow-root traversal support |
 | 4 | Downloads | The Internet | Trigger download and verify file landed on disk | browser download state + filesystem verification |
@@ -145,7 +146,7 @@ If the run fails, inspect console/network diagnostics before finalizing.
 
 These areas still need deeper work:
 
-- Frame-aware interaction and extraction
+- Frame-aware interaction and extraction without `evaluate_js` fallbacks
 - Shadow DOM traversal
 - Download verification integrated into browser benchmarks
 - Popup/new-tab intent abstraction
