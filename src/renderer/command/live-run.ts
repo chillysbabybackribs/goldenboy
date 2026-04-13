@@ -457,6 +457,11 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
   card.root.classList.remove('chat-msg-live');
   card.root.classList.add('chat-msg-done');
 
+  // Restore previous archived cards so the user can scroll back through history
+  card.root.parentElement?.querySelectorAll<HTMLElement>('.chat-msg-archived').forEach(el => {
+    el.classList.remove('chat-msg-archived');
+  });
+
   card.callbacks.scheduleChatScrollToBottom(false, 6);
 }
 
