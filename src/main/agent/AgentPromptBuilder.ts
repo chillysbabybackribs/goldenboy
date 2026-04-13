@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import { AgentRuntimeConfig, AgentSkill, AgentToolDefinition } from './AgentTypes';
+import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 import { APP_WORKSPACE_ROOT, resolveWorkspacePath } from '../workspaceRoot';
 import {
   ALWAYS_ON_SOURCE_VALIDATION_RULE,
@@ -66,6 +67,9 @@ export class AgentPromptBuilder {
         ? `\n\n## Additional Invocation Instructions\n\n${input.config.systemPromptAddendum.trim()}`
         : '',
       '\n\n## Tool Scope Recovery\n\nIf the current tool scope appears too narrow for the task, inspect the available packs with runtime.list_tool_packs, then expand with runtime.request_tool_pack. Do this immediately when the current tool subset is missing a browser, filesystem, terminal, chat, or subagent capability you need.',
+      input.config.agentId === PRIMARY_PROVIDER_ID
+        ? '\n\n## V2 Tool Priority\n\nYou are running inside V2 Workspace. All browser, filesystem, terminal, and research operations must go through the v2 MCP tools listed in your tool scope. These tools are first-class — they operate the real app-owned browser, real filesystem, and real terminal surfaces.\n\nDo not use any Codex-native capabilities: no built-in web search, no native file access, no built-in shell execution, no native browser control. If you need a capability not in your current tool scope, use runtime.list_tool_packs to find the right pack, then runtime.request_tool_pack to load it. Every action must produce a v2 tool record.'
+        : '',
       `\n\n## Available Tools\n\nTool schemas are provided separately. Available tool names: ${toolText}`,
       skillText,
     ].join('');
