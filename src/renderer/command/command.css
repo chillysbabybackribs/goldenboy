@@ -106,13 +106,15 @@
 }
 
 .cc-task-status-text {
-  font-family: var(--font-code);
+  font-family: var(--font-mono);
   font-size: 11px;
   color: #4a4a4a;
   letter-spacing: 0.3px;
   white-space: nowrap;
   overflow: hidden;
 }
+
+.cc-task-status[hidden] { display: none; }
 
 .cc-chat-empty {
   font-style: italic;
