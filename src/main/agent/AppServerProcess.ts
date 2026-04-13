@@ -86,7 +86,12 @@ export class AppServerProcess extends EventEmitter {
   async start(): Promise<void> {
     this.stopped = false;
     this.writeConfig();
-    await this.spawnAndWait();
+    try {
+      await this.spawnAndWait();
+    } catch (err) {
+      this.readyReject?.(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
   }
 
   stop(): void {
@@ -137,12 +142,20 @@ export class AppServerProcess extends EventEmitter {
       let portFound = false;
       let stderr = '';
 
+      const portTimer = setTimeout(() => {
+        if (!portFound) {
+          child.kill();
+          reject(new Error('codex app-server did not emit a listening port within 30s'));
+        }
+      }, READYZ_TIMEOUT_MS);
+
       child.stdout?.on('data', (data: Buffer) => {
         const text = data.toString();
         for (const line of text.split('\n')) {
           const port = parseListeningPort(line.trim());
           if (port && !portFound) {
             portFound = true;
+            clearTimeout(portTimer);
             resolve(port);
           }
         }
@@ -164,13 +177,6 @@ export class AppServerProcess extends EventEmitter {
           this.handleCrash(`process exited with code ${code}`);
         }
       });
-
-      setTimeout(() => {
-        if (!portFound) {
-          child.kill();
-          reject(new Error('codex app-server did not emit a listening port within 30s'));
-        }
-      }, READYZ_TIMEOUT_MS);
     });
   }
 
@@ -224,6 +230,7 @@ export class AppServerProcess extends EventEmitter {
 
       ws.addEventListener('error', (event: Event) => {
         clearTimeout(timer);
+        ws.close();
         reject(new Error(`WebSocket error: ${event.type}`));
       });
     });
@@ -241,6 +248,7 @@ export class AppServerProcess extends EventEmitter {
       this.writeConfig();
       void this.spawnAndWait().catch((err) => {
         console.error(`AppServerProcess: restart failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.readyReject?.(err instanceof Error ? err : new Error(String(err)));
         this.handleCrash('restart failed');
       });
     }, this.backoffMs);
