@@ -897,13 +897,24 @@ function switchToTask(taskId: string): void {
   // renderState will pick up the change and call refreshTaskConversation
 }
 
-chatHistoryBtn.addEventListener('click', openHistoryPopup);
+chatHistoryBtn.addEventListener('click', (e: MouseEvent) => {
+  e.stopPropagation();
+  if (!historyOverlay.hidden) {
+    closeHistoryPopup();
+  } else {
+    openHistoryPopup();
+  }
+});
 historyCloseBtn.addEventListener('click', closeHistoryPopup);
 historyNewBtn.addEventListener('click', () => { void startNewChat(); });
 
-// Close on overlay background click
-historyOverlay.addEventListener('click', (e: MouseEvent) => {
-  if (e.target === historyOverlay) closeHistoryPopup();
+// Close on outside click
+document.addEventListener('click', (e: MouseEvent) => {
+  if (historyOverlay.hidden) return;
+  const target = e.target as Node;
+  if (!historyOverlay.contains(target) && !chatHistoryBtn.contains(target)) {
+    closeHistoryPopup();
+  }
 });
 
 // Close on Escape

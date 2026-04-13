@@ -49,6 +49,16 @@
 
           <div class="cc-compose-shell">
 
+            <!-- History popup — anchored above input box -->
+            <div class="cc-history-overlay" id="historyOverlay" hidden>
+              <div class="cc-history-header">
+                <span class="cc-history-title">HISTORY</span>
+                <button class="cc-history-new" id="historyNewBtn" type="button">NEW</button>
+                <button class="cc-history-close" id="historyCloseBtn" type="button">✕</button>
+              </div>
+              <div class="cc-history-list" id="historyList"></div>
+            </div>
+
             <!-- Top bar: model chip only -->
             <div class="cc-compose-topbar">
               <button class="cc-model-chip" id="modelChip" type="button" aria-haspopup="true" aria-label="Select model">
@@ -104,17 +114,6 @@
           </div>
         </div>
 
-        <!-- History popup overlay -->
-        <div class="cc-history-overlay" id="historyOverlay" hidden>
-          <div class="cc-history-popup">
-            <div class="cc-history-header">
-              <span class="cc-history-title">CHAT HISTORY</span>
-              <button class="cc-history-new" id="historyNewBtn" type="button">NEW CHAT</button>
-              <button class="cc-history-close" id="historyCloseBtn" type="button">CLOSE</button>
-            </div>
-            <div class="cc-history-list" id="historyList"></div>
-          </div>
-        </div>
       </div>
 
       <!-- Right column: logs (full height) -->
