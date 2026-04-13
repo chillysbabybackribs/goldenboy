@@ -40,8 +40,8 @@ describe('web_search config enforcement', () => {
     const sentMessages: unknown[] = [];
     const mockWs = {
       send: (data: string) => {
-        sentMessages.push(JSON.parse(data));
         const msg = JSON.parse(data) as { id: number; method?: string };
+        sentMessages.push(msg);
         if (msg.method === 'thread/start') {
           setTimeout(() => {
             const handler = (mockWs as any)._messageHandlers?.[0];
@@ -55,7 +55,10 @@ describe('web_search config enforcement', () => {
           (mockWs as any)._messageHandlers.push(handler);
         }
       },
-      removeEventListener: () => {},
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
     } as unknown as WebSocket;
 
     const provider = new AppServerProvider({
@@ -74,8 +77,8 @@ describe('web_search config enforcement', () => {
     const sentMessages: unknown[] = [];
     const mockWs = {
       send: (data: string) => {
-        sentMessages.push(JSON.parse(data));
         const msg = JSON.parse(data) as { id: number; method?: string };
+        sentMessages.push(msg);
         if (msg.method === 'thread/resume') {
           setTimeout(() => {
             const handler = (mockWs as any)._messageHandlers?.[0];
@@ -89,7 +92,10 @@ describe('web_search config enforcement', () => {
           (mockWs as any)._messageHandlers.push(handler);
         }
       },
-      removeEventListener: () => {},
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
     } as unknown as WebSocket;
 
     const provider = new AppServerProvider({
