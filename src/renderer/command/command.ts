@@ -831,7 +831,6 @@ async function submitChat(): Promise<void> {
 
   chatInput.value = '';
   clearAttachments();
-  appendUserMessage(prompt, imagePreviewUrls.length > 0 ? imagePreviewUrls : undefined);
   chatStopBtn.hidden = false;
 
   let resolvedOwner: string = owner || '';
@@ -844,7 +843,7 @@ async function submitChat(): Promise<void> {
   }
 
   runningTaskId = taskId;
-  createLiveRunCard(taskId, resolvedOwner);
+  createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
 
   const invokeOptions = pendingAttachments.length > 0
     ? { attachments: pendingAttachments }

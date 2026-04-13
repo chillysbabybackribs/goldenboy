@@ -10,6 +10,7 @@ export interface LiveRunRenderCallbacks {
 export type LiveRunCard = {
   root: HTMLElement;
   meta: HTMLElement;
+  panel: HTMLElement;
   stream: HTMLElement;
   output: HTMLElement;
   /** Active tool line element (shimmer state) */
@@ -56,6 +57,11 @@ export function createLiveRunCard(
 ): LiveRunCard {
   container.querySelector('.cc-chat-empty')?.remove();
 
+  // Hide all existing cards — new task takes over the full space
+  container.querySelectorAll<HTMLElement>('.chat-msg').forEach(el => {
+    el.classList.add('chat-msg-archived');
+  });
+
   const root = document.createElement('div');
   root.className = 'chat-msg chat-msg-model chat-msg-live';
   root.dataset.taskId = taskId;
@@ -66,14 +72,17 @@ export function createLiveRunCard(
 
   root.innerHTML =
     promptHtml +
-    `<div class="chat-stream"></div>` +
-    `<div class="chat-msg-text chat-markdown"></div>`;
+    `<div class="chat-live-panel">` +
+      `<div class="chat-stream"></div>` +
+      `<div class="chat-msg-text chat-markdown"></div>` +
+    `</div>`;
   container.appendChild(root);
   callbacks.scheduleChatScrollToBottom(true, 5);
 
   const card: LiveRunCard = {
     root,
     meta: root.querySelector('.chat-msg-meta') as HTMLElement,
+    panel: root.querySelector('.chat-live-panel') as HTMLElement,
     stream: root.querySelector('.chat-stream') as HTMLElement,
     output: root.querySelector('.chat-msg-text') as HTMLElement,
     activeToolEl: null,
@@ -91,6 +100,7 @@ export function createLiveRunCard(
     callbacks,
   };
   liveRunCards.set(taskId, card);
+  syncLivePanelScroll(card);
   callbacks.scheduleChatScrollToBottom(true, 5);
   return card;
 }
@@ -104,6 +114,7 @@ export function appendToken(taskId: string, text: string): void {
 
   card.tokenBuffer += text;
   card.output.className = 'chat-msg-text chat-markdown chat-msg-streaming';
+  card.root.classList.toggle('chat-msg-live-has-output', card.tokenBuffer.trim().length > 0);
 
   // Kick off the typewriter loop if not already running
   if (card.tokenTypingTimer === null) {
@@ -136,6 +147,7 @@ function scheduleTypewriterTick(taskId: string, card: LiveRunCard): void {
     const visible = card.tokenBuffer.slice(0, card.tokenVisibleLength);
     card.output.innerHTML = card.callbacks.renderMarkdown(visible);
     card.callbacks.updateLastAgentResponseText(visible);
+    syncLivePanelScroll(card);
     card.callbacks.scheduleChatScrollToBottom(false, 1);
 
     // Keep ticking if there's more to show
@@ -204,6 +216,11 @@ function clearWaitingShimmer(card: LiveRunCard): void {
   }
 }
 
+function syncLivePanelScroll(card: LiveRunCard): void {
+  if (!card.panel.isConnected) return;
+  card.panel.scrollTop = card.panel.scrollHeight;
+}
+
 export function appendThought(taskId: string, text: string): void {
   const card = liveRunCards.get(taskId);
   if (!card) return;
@@ -248,6 +265,7 @@ function typeNextChunk(card: LiveRunCard, taskId: string): void {
     const event = card.deferredToolEvents.shift()!;
     renderToolLine(card, taskId, event.kind, event.text);
   }
+  syncLivePanelScroll(card);
   card.callbacks.scheduleChatScrollToBottom(false, 1);
 }
 
@@ -265,6 +283,7 @@ function renderToolLine(card: LiveRunCard, taskId: string, kind: 'start' | 'done
       `<span class="tool-text tool-text-shimmer">${escapeHtml(text)}</span>`;
     card.stream.appendChild(el);
     card.activeToolEl = el;
+    syncLivePanelScroll(card);
     card.callbacks.scheduleChatScrollToBottom(false, 1);
     return;
   }
@@ -287,6 +306,7 @@ function renderToolLine(card: LiveRunCard, taskId: string, kind: 'start' | 'done
       `<span class="tool-text">${escapeHtml(text)}</span>`;
     card.stream.appendChild(el);
   }
+  syncLivePanelScroll(card);
   card.callbacks.scheduleChatScrollToBottom(false, 1);
 }
 
@@ -421,12 +441,15 @@ function collapseStreamIntoDisclosure(card: LiveRunCard): void {
   streamEl.remove();
 }
 
-function isCompactFinalOutput(text: string): boolean {
-  const normalized = text.trim();
-  if (!normalized || normalized.length > 220) return false;
-  if (/\n\s*\n/.test(normalized)) return false;
-  if (/^(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```)/m.test(normalized)) return false;
-  return normalized.split('\n').filter(Boolean).length <= 2;
+function releaseLivePanel(card: LiveRunCard): void {
+  const panel = card.panel;
+  const parent = panel.parentNode;
+  if (!parent) return;
+
+  while (panel.firstChild) {
+    parent.insertBefore(panel.firstChild, panel);
+  }
+  panel.remove();
 }
 
 function flushFinalResult(taskId: string, result: any, _provider?: string): void {
@@ -434,11 +457,9 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
   if (!card) return;
 
   clearWaitingShimmer(card);
-  let compactFinalOutput = false;
 
   if (result.success) {
     const finalOutput = String(result.output || '');
-    compactFinalOutput = isCompactFinalOutput(finalOutput);
     if (finalOutput && finalOutput !== card.tokenBuffer) {
       card.output.className = 'chat-msg-text chat-markdown';
       card.output.innerHTML = card.callbacks.renderMarkdown(finalOutput);
@@ -455,14 +476,19 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
     card.callbacks.updateLastAgentResponseText(String(errorText));
   }
 
-  card.root.classList.toggle('chat-msg-done-compact', compactFinalOutput);
-
   // Remove the prompt line and collapse stream into disclosure
   card.root.querySelector('.chat-live-prompt')?.remove();
   collapseStreamIntoDisclosure(card);
+  releaseLivePanel(card);
   card.meta.closest('.chat-msg-header')?.remove();
   card.root.classList.remove('chat-msg-live');
+  card.root.classList.remove('chat-msg-live-has-output');
   card.root.classList.add('chat-msg-done');
+
+  // Restore previous archived cards so the user can scroll back through history
+  card.root.parentElement?.querySelectorAll<HTMLElement>('.chat-msg-archived').forEach(el => {
+    el.classList.remove('chat-msg-archived');
+  });
 
   card.callbacks.scheduleChatScrollToBottom(false, 6);
 }
@@ -488,6 +514,10 @@ function flushError(taskId: string, error: string): void {
   card.output.className = 'chat-msg-error';
   card.output.textContent = error;
   card.callbacks.updateLastAgentResponseText(String(error));
+  releaseLivePanel(card);
+  card.root.classList.remove('chat-msg-live');
+  card.root.classList.remove('chat-msg-live-has-output');
+  card.root.classList.add('chat-msg-done');
   card.callbacks.scheduleChatScrollToBottom(false, 6);
 }
 
