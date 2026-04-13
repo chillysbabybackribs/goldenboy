@@ -4,6 +4,7 @@ import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
 import type { AgentToolContext } from './AgentTypes';
+import type { AnyProviderId } from '../../shared/types/model';
 
 const MAX_TOOL_RESULT_CHARS = 8_000;
 
@@ -104,7 +105,7 @@ export class V2ToolBridge {
           chatKnowledgeStore.recordToolMessage(
             ctx.taskId,
             JSON.stringify({ tool: toolName, input: payload.arguments, result }, null, 2).slice(0, 50_000),
-            ctx.agentId,
+            ctx.agentId as AnyProviderId,
             ctx.runId,
           );
         }
