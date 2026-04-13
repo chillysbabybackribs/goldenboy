@@ -36,7 +36,8 @@ const chatEmptyState = document.getElementById('chatEmptyState')!;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
 const chatSubmitBtn = document.getElementById('chatSubmitBtn')!;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
-const modelToggleGroup = document.getElementById('modelToggleGroup') as HTMLDivElement;
+const modelChip = document.getElementById('modelChip') as HTMLButtonElement;
+const modelChipLabel = document.getElementById('modelChipLabel') as HTMLSpanElement;
 const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
 const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
 const chatZoomInBtn = document.getElementById('chatZoomInBtn') as HTMLButtonElement;
@@ -48,11 +49,8 @@ const historyList = document.getElementById('historyList')!;
 const historyNewBtn = document.getElementById('historyNewBtn')!;
 const historyCloseBtn = document.getElementById('historyCloseBtn')!;
 
-// Token usage (split labels)
-const tokenGauge = document.getElementById('tokenGauge') as HTMLDivElement;
-const tokenInLabel = document.getElementById('tokenInLabel')!;
-const tokenOutLabel = document.getElementById('tokenOutLabel')!;
-const tokenResetBtn = document.getElementById('tokenResetBtn')!;
+// Token usage — displayed in status bar
+const tokenStatusLabel = document.getElementById('tokenStatusLabel')!;
 
 // Stop
 const chatStopBtn = document.getElementById('chatStopBtn') as HTMLButtonElement;
@@ -156,35 +154,34 @@ function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as an
 }
 
 function syncModelToggleState(state: any = (window as any).__lastState): void {
-  const buttons = modelToggleGroup.querySelectorAll<HTMLButtonElement>('.cc-model-toggle-btn');
-  buttons.forEach((button) => {
-    const owner = button.dataset.owner;
-    if (!owner || !isExplicitSelectableOwner(owner)) return;
-    const runtime = getProviderRuntime(state, owner);
+  const isExplicit = selectedOwner !== 'auto';
+  modelChip.classList.toggle('cc-model-chip-explicit', isExplicit);
+  modelChipLabel.textContent = OWNER_LABELS[selectedOwner].toUpperCase();
+  modelChip.disabled = Boolean(runningTaskId);
+
+  if (isExplicit) {
+    const runtime = getProviderRuntime(state, selectedOwner as ExplicitSelectableOwner);
     const status = runtime?.status || 'unavailable';
-    const enabled = canSelectOwner(state, owner);
-    const isSelected = owner === selectedOwner;
-    button.setAttribute('aria-pressed', String(isSelected));
-    button.disabled = !enabled;
-    button.dataset.status = status;
-    const details = [
-      OWNER_LABELS[owner],
-      runtime?.model || status,
-      runtime?.errorDetail || '',
-    ].filter(Boolean);
-    button.title = details.join(' • ');
-  });
+    const details = [OWNER_LABELS[selectedOwner], runtime?.model || status, runtime?.errorDetail || '']
+      .filter(Boolean);
+    modelChip.title = details.join(' • ');
+  } else {
+    modelChip.title = 'Select model (auto)';
+  }
 }
 
 function initializeModelToggle(): void {
   selectedOwner = getStoredSelectedOwner();
-  modelToggleGroup.addEventListener('click', (event: Event) => {
-    const target = event.target as HTMLElement | null;
-    const button = target?.closest<HTMLButtonElement>('.cc-model-toggle-btn');
-    const owner = button?.dataset.owner;
-    if (!button || !owner || owner === 'auto' || !isSelectableOwner(owner)) return;
-    setSelectedOwner(owner === selectedOwner ? 'auto' : owner);
+
+  modelChip.addEventListener('click', () => {
+    // Cycle: auto → PRIMARY_PROVIDER_ID → HAIKU_PROVIDER_ID → auto
+    const state = (window as any).__lastState;
+    const cycle: SelectableOwner[] = ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+    const currentIdx = cycle.indexOf(selectedOwner);
+    const nextOwner = cycle[(currentIdx + 1) % cycle.length];
+    setSelectedOwner(nextOwner, state);
   });
+
   syncModelToggleState();
 }
 
@@ -741,7 +738,6 @@ async function submitChat(): Promise<void> {
   }
 
   runningTaskId = taskId;
-  tokenGauge.classList.add('cc-token-active');
   createLiveRunCard(taskId, resolvedOwner);
 
   const invokeOptions = pendingAttachments.length > 0
@@ -757,7 +753,6 @@ async function submitChat(): Promise<void> {
     replaceWithError(taskId, err.message || String(err));
   } finally {
     runningTaskId = null;
-    tokenGauge.classList.remove('cc-token-active');
     chatStopBtn.hidden = true;
     chatSubmitBtn.removeAttribute('disabled');
     chatInput.focus();
@@ -930,16 +925,8 @@ function formatTokenCount(n: number): string {
 function updateTokenUsageDisplay(state: any): void {
   const usage = state?.tokenUsage;
   if (!usage) return;
-  tokenInLabel.textContent = `${formatTokenCount(usage.inputTokens)} in`;
-  tokenOutLabel.textContent = `${formatTokenCount(usage.outputTokens)} out`;
+  tokenStatusLabel.textContent = `${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out`;
 }
-
-tokenResetBtn.addEventListener('click', () => {
-  const workspaceAPI = getWorkspaceAPI();
-  if (workspaceAPI) {
-    void workspaceAPI.resetTokenUsage();
-  }
-});
 
 // ─── Full State Render ─────────────────────────────────────────────────────
 
@@ -995,15 +982,7 @@ function renderState(state: any): void {
       : 'no providers';
   }
 
-  if (runningTaskId) {
-    const buttons = modelToggleGroup.querySelectorAll<HTMLButtonElement>('.cc-model-toggle-btn');
-    buttons.forEach((button) => {
-      if (selectedOwner !== 'auto' && button.dataset.owner === selectedOwner) return;
-      button.disabled = true;
-    });
-  } else {
-    syncModelToggleState(state);
-  }
+  syncModelToggleState(state);
 
   const nextTaskId = state.activeTaskId || null;
   if (nextTaskId !== currentRenderedTaskId) {

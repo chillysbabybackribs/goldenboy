@@ -538,221 +538,139 @@
   box-shadow: none;
 }
 
-/* ─── Top Bar — brushed aluminum dash trim ───────────────────────────── */
+/* ─── Compose Box — unified textarea container ───────────────────────── */
+
+.cc-compose-box {
+  background: #0f0f0f;
+  border: 1px solid #222;
+  border-radius: 7px;
+  overflow: hidden;
+  transition: border-color 200ms;
+}
+
+.cc-compose-box:focus-within {
+  border-color: #2e2e2e;
+}
+
+/* ─── Compose Inner Bar — attach + send inside the box ──────────────── */
+
+.cc-compose-innerbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-top: 1px solid #181818;
+  background: rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+}
+
+/* ─── Top Bar — slim model chip + history ────────────────────────────── */
 
 .cc-compose-topbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.10), rgba(0, 0, 0, 0.05));
+  justify-content: space-between;
+  padding: 6px 10px;
   flex-shrink: 0;
-  flex-wrap: nowrap;
-  min-width: 0;
-  overflow: hidden;
 }
 
-.cc-model-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  -webkit-app-region: no-drag;
-}
+/* ─── Model Chip ─────────────────────────────────────────────────────── */
 
-.cc-model-toggle-btn {
-  min-width: auto;
-  height: auto;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: #cccccc;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: color 140ms ease;
-}
-
-.cc-model-toggle-btn:hover:not(:disabled) {
-  color: #ffffff;
-  background: transparent;
-}
-
-.cc-model-toggle-btn:active:not(:disabled) {
-  transform: none;
-  color: #c9a227;
-}
-
-.cc-model-toggle-btn[aria-pressed="true"] {
-  color: #c9a227;
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.cc-model-toggle-btn[aria-pressed="true"]:hover:not(:disabled) {
-  color: #c9a227;
-}
-
-.cc-model-toggle-btn[data-status="busy"] {
-  color: #d0c8a0;
-}
-
-.cc-model-toggle-btn[data-status="unavailable"],
-.cc-model-toggle-btn[data-status="error"] {
-  color: #404040;
-}
-
-.cc-model-toggle-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-/* ─── Token Gauge — retro gauge cluster ──────────────────────────────── */
-
-.cc-token-gauge {
+.cc-model-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #2a2a2a;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: #181818;
+  border: 1px solid #252525;
+  border-radius: 5px;
+  padding: 3px 8px;
+  color: #888;
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms, color 140ms;
   -webkit-app-region: no-drag;
-  transition: border-color 200ms ease, background 200ms ease;
 }
 
-.cc-token-gauge:hover {
-  border-color: rgba(255, 255, 255, 0.14);
-  background: #333333;
+.cc-model-chip:hover {
+  border-color: #333;
+  background: #1e1e1e;
+  color: #aaa;
 }
 
-.cc-token-gauge.cc-token-active {
-  border-color: rgba(255, 255, 255, 0.15);
-  background: #333333;
+.cc-model-chip:active {
+  transform: scale(0.97);
 }
 
-.cc-token-icon {
-  width: 12px;
-  height: 12px;
-  color: #cccccc;
+.cc-model-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cc-model-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #3a3a3a;
+  flex-shrink: 0;
+  transition: background 200ms;
+}
+
+.cc-model-chip.cc-model-chip-explicit .cc-model-chip-dot {
+  background: #d4a017;
+}
+
+.cc-model-chip.cc-model-chip-explicit .cc-model-chip-label {
+  color: #d4a017;
+}
+
+.cc-model-chip-label {
+  color: inherit;
+  transition: color 200ms;
+}
+
+.cc-model-chip-chevron {
+  width: 8px;
+  height: 8px;
+  color: #444;
   flex-shrink: 0;
 }
 
-.cc-token-gauge.cc-token-active .cc-token-icon {
-  color: #999;
-  animation: cc-token-pulse 2s ease-in-out infinite;
-}
-
-@keyframes cc-token-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-
-.cc-token-in {
-  color: #e0e0e0;
-  font-weight: 500;
-  letter-spacing: 0.3px;
-}
-
-.cc-token-sep {
-  color: #888888;
-  font-weight: 300;
-}
-
-.cc-token-out {
-  color: #e0e0e0;
-  font-weight: 500;
-  letter-spacing: 0.3px;
-}
-
-.cc-token-gauge.cc-token-active .cc-token-in,
-.cc-token-gauge.cc-token-active .cc-token-out {
-  color: #d0d0d0;
-}
-
-.cc-token-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: #aaaaaa;
-  cursor: pointer;
-  transition: color 150ms, border-color 150ms, background 150ms;
-  -webkit-app-region: no-drag;
-}
-
-.cc-token-reset svg {
-  width: 10px;
-  height: 10px;
-}
-
-.cc-token-reset:hover {
-  color: #999;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.cc-token-reset:active {
-  color: #bbb;
-  transform: scale(0.92);
-}
-
-/* ─── History Button ─────────────────────────────────────────────────── */
+/* ─── History Button — icon only ────────────────────────────────────── */
 
 .cc-history-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  background: #2a2a2a;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 6px;
-  color: #e0e0e0;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: #555;
   cursor: pointer;
-  transition: color 150ms, border-color 150ms, background 150ms;
+  transition: color 140ms, background 140ms;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
+  padding: 0;
 }
 
 .cc-history-btn:hover {
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.14);
-  background: #333333;
+  color: #999;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .cc-history-btn:active {
-  color: #e0e0e0;
-  transform: scale(0.97);
+  color: #ccc;
+  transform: scale(0.94);
 }
 
-.cc-history-icon {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
+.cc-history-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ─── Attachment Preview Sidebar ─────────────────────────────────────── */
@@ -912,19 +830,9 @@
   min-height: 40px;
   max-height: 200px;
   resize: none;
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.008) 0px,
-      rgba(255, 255, 255, 0.008) 1px,
-      transparent 1px,
-      transparent 8px
-    ),
-    linear-gradient(180deg, #161616, #131313);
+  background: transparent;
   border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.3);
-  padding: 14px 18px;
+  padding: 12px 14px;
   color: #e8e8e8;
   font-family: var(--font-mono);
   font-size: 15px;
@@ -940,18 +848,6 @@
   color: rgba(255, 255, 255, 0.22);
   font-weight: 300;
   letter-spacing: 0.4px;
-}
-
-/* ─── Bottom Bar — aluminum lower trim ───────────────────────────────── */
-
-.cc-compose-bottombar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.10));
-  flex-shrink: 0;
 }
 
 .cc-attach-group {
