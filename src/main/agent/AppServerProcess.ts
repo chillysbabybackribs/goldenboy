@@ -49,10 +49,6 @@ type AppServerState =
   | { status: 'ready'; wsPort: number }
   | { status: 'error'; error: string };
 
-// Use the Node 24 built-in WebSocket global via type cast.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const NativeWebSocket = (globalThis as any).WebSocket as typeof WebSocket;
-
 export class AppServerProcess extends EventEmitter {
   private state: AppServerState = { status: 'stopped' };
   private child: ChildProcess | null = null;
@@ -127,7 +123,8 @@ export class AppServerProcess extends EventEmitter {
     this.wsPort = wsPort;
 
     await this.pollReadyz(wsPort);
-    await this.waitForMcpReady(wsPort);
+    // MCP server readiness is checked lazily on first thread/turn/start;
+    // no separate WS handshake needed here.
 
     this.state = { status: 'ready', wsPort };
     this.backoffMs = 1_000;
@@ -202,43 +199,6 @@ export class AppServerProcess extends EventEmitter {
         req.end();
       };
       poll();
-    });
-  }
-
-  private waitForMcpReady(wsPort: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const ws = new NativeWebSocket(`ws://127.0.0.1:${wsPort}`);
-      const timer = setTimeout(() => {
-        ws.close();
-        reject(new Error('v2-tools MCP server did not become ready within 30s'));
-      }, READYZ_TIMEOUT_MS);
-
-      ws.addEventListener('open', () => {
-        ws.send(JSON.stringify({ type: 'initialize', version: '2' }));
-      });
-
-      ws.addEventListener('message', (event: MessageEvent) => {
-        try {
-          const msg = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString()) as Record<string, unknown>;
-          if (
-            msg.type === 'mcpServer/startupStatus/updated' &&
-            (msg as { serverName?: string; status?: string }).serverName === 'v2-tools' &&
-            (msg as { serverName?: string; status?: string }).status === 'ready'
-          ) {
-            clearTimeout(timer);
-            ws.close();
-            resolve();
-          }
-        } catch {
-          // ignore parse errors
-        }
-      });
-
-      ws.addEventListener('error', (event: Event) => {
-        clearTimeout(timer);
-        ws.close();
-        reject(new Error(`WebSocket error: ${event.type}`));
-      });
     });
   }
 

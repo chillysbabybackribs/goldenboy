@@ -92,14 +92,11 @@ function toMcpName(toolName: string): string {
 
 type WsMsg = Record<string, unknown>;
 
-type TurnEvent =
-  | { type: 'item/agentMessage/delta'; delta: string }
-  | { type: 'item/started'; itemType: string; item: WsMsg }
-  | { type: 'item/completed'; itemType: string; item: WsMsg }
-  | { type: 'thread/tokenUsage/updated'; last: { inputTokens: number; outputTokens: number } }
-  | { type: 'turn/completed' }
-  | { type: 'turn/failed'; error: { message: string } }
-  | { type: string; [key: string]: unknown };
+// Codex app-server uses JSON-RPC 2.0 over WebSocket.
+// Responses: { id, result } or { id, error }
+// Push notifications: { method, params }
+type WsNotification = { method: string; params: Record<string, unknown> };
+type WsResponse = { id: number; result?: Record<string, unknown>; error?: { code: number; message: string } };
 
 // ─── Provider Options ────────────────────────────────────────────────────
 
@@ -120,6 +117,7 @@ export class AppServerProvider implements AgentProvider {
   private abortCurrentTurn: (() => void) | null = null;
   private ws: WebSocket | null = null;
   private threadRegistry: ThreadRegistry = loadThreadRegistry();
+  private nextId = 1;
 
   constructor(private readonly options: AppServerProviderOptions) {
     this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;
@@ -134,6 +132,7 @@ export class AppServerProvider implements AgentProvider {
   async connect(wsPort: number): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const ws = new NativeWebSocket(`ws://127.0.0.1:${wsPort}`);
+      const initId = this.nextId++;
 
       const timer = setTimeout(() => {
         ws.removeEventListener('message', messageHandler);
@@ -145,12 +144,17 @@ export class AppServerProvider implements AgentProvider {
         try {
           const msg = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
-          ) as WsMsg;
-          if (msg.type === 'initialized') {
+          ) as WsResponse;
+          if (msg.id === initId) {
             clearTimeout(timer);
             ws.removeEventListener('message', messageHandler);
-            this.ws = ws;
-            resolve();
+            if (msg.error) {
+              ws.close();
+              reject(new Error(`AppServerProvider: initialize failed: ${msg.error.message}`));
+            } else {
+              this.ws = ws;
+              resolve();
+            }
           }
         } catch {
           // ignore parse errors during handshake
@@ -160,7 +164,16 @@ export class AppServerProvider implements AgentProvider {
       ws.addEventListener('message', messageHandler);
 
       ws.addEventListener('open', () => {
-        ws.send(JSON.stringify({ type: 'initialize', version: '2' }));
+        ws.send(JSON.stringify({
+          jsonrpc: '2.0',
+          id: initId,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: { experimentalApi: true },
+            clientInfo: { name: 'v2', version: '1.0' },
+          },
+        }));
       });
 
       ws.addEventListener('error', (event: Event) => {
@@ -323,7 +336,7 @@ export class AppServerProvider implements AgentProvider {
     taskId: string,
     developerInstructions: string,
   ): Promise<string> {
-    const msgId = `thread-start-${Date.now()}`;
+    const reqId = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
@@ -334,14 +347,22 @@ export class AppServerProvider implements AgentProvider {
         try {
           const msg = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
-          ) as WsMsg;
-          if (msg.type === 'thread/started' && typeof msg.threadId === 'string') {
-            cleanup();
-            const threadId = msg.threadId;
-            this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };
-            saveThreadRegistry(this.threadRegistry);
-            resolve(threadId);
+          ) as WsResponse;
+          if (msg.id !== reqId) return;
+          cleanup();
+          if (msg.error) {
+            reject(new Error(`AppServerProvider: thread/start failed: ${msg.error.message}`));
+            return;
           }
+          const thread = msg.result?.thread as { id?: string } | undefined;
+          const threadId = thread?.id;
+          if (!threadId) {
+            reject(new Error('AppServerProvider: thread/start response missing thread.id'));
+            return;
+          }
+          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };
+          saveThreadRegistry(this.threadRegistry);
+          resolve(threadId);
         } catch {
           // ignore parse errors
         }
@@ -354,12 +375,15 @@ export class AppServerProvider implements AgentProvider {
 
       ws.addEventListener('message', handler);
       ws.send(JSON.stringify({
-        type: 'thread/start',
-        id: msgId,
-        developerInstructions,
-        approvalPolicy: 'never',
-        sandbox: 'danger-full-access',
-        persistExtendedHistory: true,
+        jsonrpc: '2.0',
+        id: reqId,
+        method: 'thread/start',
+        params: {
+          instructions: developerInstructions,
+          approvalPolicy: 'never',
+          sandboxPolicy: { type: 'dangerFullAccess' },
+          persistFullHistory: true,
+        },
       }));
     });
   }
@@ -370,7 +394,7 @@ export class AppServerProvider implements AgentProvider {
     threadId: string,
     developerInstructions: string,
   ): Promise<string> {
-    const msgId = `thread-resume-${Date.now()}`;
+    const reqId = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
@@ -381,18 +405,17 @@ export class AppServerProvider implements AgentProvider {
         try {
           const msg = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
-          ) as WsMsg;
-          if (msg.type === 'thread/resumed') {
-            cleanup();
-            this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };
-            saveThreadRegistry(this.threadRegistry);
-            resolve(threadId);
+          ) as WsResponse;
+          if (msg.id !== reqId) return;
+          cleanup();
+          // If resume fails, reject so acquireThread falls back to start
+          if (msg.error) {
+            reject(new Error(`thread/resume failed: ${msg.error.message}`));
+            return;
           }
-          // If resume fails with an error, reject so acquireThread falls back to start
-          if (msg.type === 'error' || msg.type === 'thread/error') {
-            cleanup();
-            reject(new Error(`thread/resume failed: ${String(msg.message || msg.error || 'unknown')}`));
-          }
+          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };
+          saveThreadRegistry(this.threadRegistry);
+          resolve(threadId);
         } catch {
           // ignore parse errors
         }
@@ -405,13 +428,16 @@ export class AppServerProvider implements AgentProvider {
 
       ws.addEventListener('message', handler);
       ws.send(JSON.stringify({
-        type: 'thread/resume',
-        id: msgId,
-        threadId,
-        developerInstructions,
-        approvalPolicy: 'never',
-        sandbox: 'danger-full-access',
-        persistExtendedHistory: true,
+        jsonrpc: '2.0',
+        id: reqId,
+        method: 'thread/resume',
+        params: {
+          threadId,
+          instructions: developerInstructions,
+          approvalPolicy: 'never',
+          sandboxPolicy: { type: 'dangerFullAccess' },
+          persistFullHistory: true,
+        },
       }));
     });
   }
@@ -438,7 +464,6 @@ export class AppServerProvider implements AgentProvider {
     codexItems: CodexItem[];
   }> {
     const { threadId, task, request, currentTools, toolCatalog } = params;
-    const turnId = `turn-${Date.now()}`;
 
     return new Promise((resolve, reject) => {
       let message = '';
@@ -455,29 +480,42 @@ export class AppServerProvider implements AgentProvider {
         reject(new Error('AppServerProvider: turn timed out'));
       }, TURN_TIMEOUT_MS);
 
-      // Wire abort
+      // Wire abort — JSON-RPC notification (no id)
       this.abortCurrentTurn = (): void => {
-        ws.send(JSON.stringify({ type: 'turn/interrupt', threadId }));
+        ws.send(JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'turn/interrupt',
+          params: { threadId },
+        }));
       };
 
       const handler = (event: MessageEvent): void => {
         try {
-          const msg = JSON.parse(
+          const raw = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
-          ) as TurnEvent;
+          ) as WsMsg;
 
-          switch (msg.type) {
+          // Codex pushes notifications as { method, params } (no id field)
+          const method = typeof raw.method === 'string' ? raw.method : null;
+          if (!method) return; // skip responses (they have id, not method)
+          const params = (raw.params && typeof raw.params === 'object')
+            ? raw.params as Record<string, unknown>
+            : {};
+
+          switch (method) {
             case 'item/agentMessage/delta': {
-              const delta = typeof msg.delta === 'string' ? msg.delta : '';
+              const delta = typeof params.delta === 'string' ? params.delta : '';
               message += delta;
               request.onToken?.(delta);
               break;
             }
 
             case 'item/started': {
-              if (msg.itemType === 'mcpToolCall') {
+              const item = (params.item && typeof params.item === 'object')
+                ? params.item as WsMsg
+                : null;
+              if (item?.type === 'mcpToolCall') {
                 toolsCalled = true;
-                const item = msg.item as WsMsg;
                 const rawToolName = typeof item.tool === 'string' ? item.tool : '';
                 const toolName = fromMcpName(rawToolName);
                 const toolInput = (item.arguments && typeof item.arguments === 'object')
@@ -506,8 +544,10 @@ export class AppServerProvider implements AgentProvider {
             }
 
             case 'item/completed': {
-              if (msg.itemType === 'mcpToolCall') {
-                const item = msg.item as WsMsg;
+              const item = (params.item && typeof params.item === 'object')
+                ? params.item as WsMsg
+                : null;
+              if (item?.type === 'mcpToolCall') {
                 const rawToolName = typeof item.tool === 'string' ? item.tool : '';
                 const toolName = fromMcpName(rawToolName);
                 const toolInput = (item.arguments && typeof item.arguments === 'object')
@@ -563,9 +603,13 @@ export class AppServerProvider implements AgentProvider {
             }
 
             case 'thread/tokenUsage/updated': {
-              // Each event is a running total for the current turn (snapshot, not delta).
-              // Overwrite rather than accumulate to avoid double-counting.
-              const last = msg.last as { inputTokens?: number; outputTokens?: number } | undefined;
+              // Each event is a snapshot for the current turn (not a delta).
+              const tokenUsage = (params.tokenUsage && typeof params.tokenUsage === 'object')
+                ? params.tokenUsage as Record<string, unknown>
+                : null;
+              const last = (tokenUsage?.last && typeof tokenUsage.last === 'object')
+                ? tokenUsage.last as { inputTokens?: number; outputTokens?: number }
+                : null;
               if (last) {
                 lastInputTokens = last.inputTokens ?? 0;
                 lastOutputTokens = last.outputTokens ?? 0;
@@ -590,8 +634,10 @@ export class AppServerProvider implements AgentProvider {
 
             case 'turn/failed': {
               cleanup();
-              const errMsg = (msg.error as { message?: string } | undefined)?.message
-                || 'Turn failed';
+              const turnData = (params.turn && typeof params.turn === 'object')
+                ? params.turn as { error?: { message?: string } }
+                : null;
+              const errMsg = turnData?.error?.message || 'Turn failed';
               reject(new Error(`AppServerProvider: turn failed: ${errMsg}`));
               break;
             }
@@ -610,14 +656,18 @@ export class AppServerProvider implements AgentProvider {
         ws.removeEventListener('message', handler);
       };
 
+      const turnReqId = this.nextId++;
       ws.addEventListener('message', handler);
       ws.send(JSON.stringify({
-        type: 'turn/start',
-        id: turnId,
-        threadId,
-        input: [{ type: 'message', role: 'user', content: task }],
-        approvalPolicy: 'never',
-        sandboxPolicy: { type: 'danger-full-access' },
+        jsonrpc: '2.0',
+        id: turnReqId,
+        method: 'turn/start',
+        params: {
+          threadId,
+          input: [{ type: 'text', text: task }],
+          approvalPolicy: 'never',
+          sandboxPolicy: { type: 'dangerFullAccess' },
+        },
       }));
     });
   }
