@@ -387,21 +387,30 @@ function renderInlineMarkdown(text: string): string {
 }
 
 function renderMarkdown(text: string): string {
-  const lines = text.replace(/\r\n/g, '\n').trim().split('\n');
+  // Normalize: convert literal <br> tags and \r\n to newlines before splitting
+  const normalized = text
+    .replace(/\r\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .trim();
+
+  const lines = normalized.split('\n');
   const parts: string[] = [];
   let paragraph: string[] = [];
   let listItems: string[] = [];
+  let listOrdered = false;
 
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
-    parts.push(`<p>${renderInlineMarkdown(paragraph.join('<br>'))}</p>`);
+    parts.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
     paragraph = [];
   };
 
   const flushList = () => {
     if (listItems.length === 0) return;
-    parts.push(`<ul>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>`);
+    const tag = listOrdered ? 'ol' : 'ul';
+    parts.push(`<${tag}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
     listItems = [];
+    listOrdered = false;
   };
 
   for (const line of lines) {
@@ -421,9 +430,22 @@ function renderMarkdown(text: string): string {
       continue;
     }
 
-    if (trimmed.startsWith('- ')) {
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      // If we were building an ordered list, flush it first
+      if (listItems.length > 0 && listOrdered) flushList();
       flushParagraph();
+      listOrdered = false;
       listItems.push(trimmed.slice(2));
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      // If we were building an unordered list, flush it first
+      if (listItems.length > 0 && !listOrdered) flushList();
+      flushParagraph();
+      listOrdered = true;
+      listItems.push(orderedMatch[1]);
       continue;
     }
 
