@@ -1305,12 +1305,14 @@
 /* Live card — task in progress, centered in the chat area */
 .chat-msg-live {
   margin: auto;
-  width: 100%;
+  width: 75%;
   animation: cc-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Done card — only final response visible */
 .chat-msg-done {
+  margin: auto;
+  width: 75%;
   animation: cc-fade-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
