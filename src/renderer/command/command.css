@@ -523,8 +523,8 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 .cc-compose-shell {
-  width: 100%;
-  max-width: 680px;
+  width: 75%;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   border: none;
