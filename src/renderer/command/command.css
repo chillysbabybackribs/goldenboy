@@ -69,19 +69,6 @@
   border-right: 1px solid #1a1a1a;
 }
 
-.cc-chat-toolbar {
-  position: absolute;
-  top: 16px;
-  right: clamp(84px, 10vw, 180px);
-  z-index: 2;
-  display: flex;
-  justify-content: flex-end;
-  pointer-events: none;
-}
-
-.cc-chat-toolbar .cc-zoom-controls {
-  pointer-events: auto;
-}
 
 /* ─── Chat Thread ─────────────────────────────────────────────────────── */
 
@@ -473,49 +460,41 @@
 .cc-zoom-controls {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid #222;
-  border-radius: 8px;
-  background: #0d0d0d;
+  gap: 0;
 }
 
 .cc-zoom-btn {
-  min-width: 36px;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  padding: 0 5px;
+  border: none;
   background: none;
-  color: #7b7b7b;
+  color: #404040;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  transition: color 120ms;
   -webkit-app-region: no-drag;
+  line-height: 1;
 }
 
 .cc-zoom-btn:hover {
-  color: #d0d0d0;
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.08);
+  color: #888;
 }
 
 .cc-zoom-btn:active {
-  transform: translateY(1px) scale(0.96);
+  color: #bbb;
 }
 
 .cc-zoom-btn:disabled {
-  opacity: 0.32;
+  opacity: 0.25;
   cursor: not-allowed;
-  background: none;
-  border-color: transparent;
-  color: #5a5a5a;
+  color: #333;
 }
 
 .cc-zoom-btn-reset {
-  min-width: 58px;
-  color: #9a9a9a;
+  color: #505050;
+  min-width: 34px;
+  text-align: center;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
