@@ -47,6 +47,7 @@ export function createLiveRunCard(
   _provider: string,
   container: HTMLElement,
   callbacks: LiveRunRenderCallbacks,
+  prompt?: string,
 ): LiveRunCard {
   container.querySelector('.chat-empty-state')?.remove();
 
@@ -58,7 +59,13 @@ export function createLiveRunCard(
   const root = document.createElement('div');
   root.className = 'chat-msg chat-msg-model chat-msg-live';
   root.dataset.taskId = taskId;
+
+  const promptHtml = prompt
+    ? `<div class="chat-live-prompt">${escapeHtml(prompt.trim())}</div>`
+    : '';
+
   root.innerHTML =
+    promptHtml +
     `<div class="chat-stream"></div>` +
     `<div class="chat-msg-text chat-markdown"></div>`;
   container.appendChild(root);
@@ -404,7 +411,8 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
     card.callbacks.updateLastAgentResponseText(String(errorText));
   }
 
-  // Collapse thoughts/tool lines into a disclosure, hide the header meta line
+  // Remove the prompt line and collapse stream into disclosure
+  card.root.querySelector('.chat-live-prompt')?.remove();
   collapseStreamIntoDisclosure(card);
   card.meta.closest('.chat-msg-header')?.remove();
   card.root.classList.remove('chat-msg-live');

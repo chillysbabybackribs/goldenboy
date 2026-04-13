@@ -182,6 +182,55 @@
   white-space: pre-wrap;
 }
 
+/* ─── Live prompt line — shown during run, removed on completion ──────── */
+
+.chat-live-prompt {
+  font-family: var(--font-reading);
+  font-size: calc(12px * var(--cc-chat-zoom));
+  font-weight: 400;
+  color: #3a3a3a;
+  letter-spacing: 0.2px;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* ─── Done response — Option C hierarchy ─────────────────────────────── */
+
+.chat-msg-done .chat-msg-text p:first-child,
+.chat-msg-done .chat-msg-text > p:first-child {
+  font-size: calc(16px * var(--cc-chat-zoom));
+  font-weight: 500;
+  color: #e8e8e8;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.chat-msg-done .chat-msg-text p,
+.chat-msg-done .chat-msg-text li {
+  font-size: calc(14px * var(--cc-chat-zoom));
+  color: #888;
+  line-height: 1.75;
+}
+
+.chat-msg-done .chat-msg-text strong {
+  color: #bbb;
+  font-weight: 500;
+}
+
+.chat-msg-done .chat-msg-text ol,
+.chat-msg-done .chat-msg-text ul {
+  padding-left: 1.2em;
+  margin-bottom: 10px;
+}
+
+.chat-msg-done .chat-msg-text li {
+  margin-bottom: 5px;
+}
+
+.chat-msg-done .chat-msg-text p + p {
+  margin-top: 8px;
+}
+
 .chat-msg-streaming::after {
   content: '|';
   color: #d8d8d8;

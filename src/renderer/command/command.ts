@@ -546,12 +546,12 @@ async function copyLastAgentResponse(): Promise<void> {
   getWorkspaceAPI()?.addLog('error', 'system', 'Failed to copy last agent response');
 }
 
-function createLiveRunCard(taskId: string, _provider: string): void {
+function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
   createLiveRunCardInternal(taskId, _provider, chatThread, {
     renderMarkdown,
     updateLastAgentResponseText,
     scheduleChatScrollToBottom,
-  });
+  }, prompt);
 }
 
 function appendToken(taskId: string, text: string): void {
@@ -716,8 +716,6 @@ async function submitChat(): Promise<void> {
   clearAttachments();
   chatStopBtn.hidden = false;
 
-  appendUserMessage(prompt, imagePreviewUrls.length > 0 ? imagePreviewUrls : undefined);
-
   let resolvedOwner: string = owner || '';
   if (!resolvedOwner) {
     try {
@@ -728,7 +726,7 @@ async function submitChat(): Promise<void> {
   }
 
   runningTaskId = taskId;
-  createLiveRunCard(taskId, resolvedOwner);
+  createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
 
   const invokeOptions = pendingAttachments.length > 0
     ? { attachments: pendingAttachments }
@@ -939,7 +937,6 @@ function renderState(state: any): void {
   }
   syncModelToggleState(state);
   const active = state.tasks.find((t: any) => t.id === state.activeTaskId);
-  taskSummary.textContent = active ? active.title : 'No active task';
   renderLogs(state.logs);
 
   if (state.executionSplit) {
