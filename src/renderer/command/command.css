@@ -1302,8 +1302,10 @@
   display: none;
 }
 
-/* Live card — task in progress, full space */
+/* Live card — task in progress, centered in the chat area */
 .chat-msg-live {
+  margin: auto;
+  width: 100%;
   animation: cc-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
