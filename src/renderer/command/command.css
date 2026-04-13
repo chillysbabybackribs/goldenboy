@@ -74,16 +74,21 @@
 .cc-chat {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
+}
+
+/* Inner wrapper: grows to fill height, pushes content to bottom */
+.cc-chat-inner {
+  min-height: 100%;
   padding: 24px clamp(48px, 6vw, 100px);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   gap: 20px;
-  min-height: 0;
 }
 
-/* When there is only one item, push it to vertical center */
-.cc-chat > :first-child:last-child {
+/* When there is only one item, center it vertically */
+.cc-chat-inner > :first-child:last-child {
   margin-top: auto;
   margin-bottom: auto;
 }

@@ -33,6 +33,7 @@ const logsCloseBtn = document.getElementById('logsCloseBtn')!;
 
 // Chat
 const chatThread = document.getElementById('chatThread')!;
+const chatInner = document.getElementById('chatInner')!;
 const chatEmptyState = document.getElementById('chatEmptyState')!;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
@@ -382,7 +383,7 @@ chatResizeObserver.observe(chatThread);
 const chatMutationObserver = new MutationObserver(() => {
   scheduleChatScrollToBottom(false, 1);
 });
-chatMutationObserver.observe(chatThread, {
+chatMutationObserver.observe(chatInner, {
   childList: true,
 });
 
@@ -510,13 +511,13 @@ function appendUserMessage(text: string, imageDataUrls?: string[]): void {
     el.appendChild(imgContainer);
   }
 
-  chatThread.appendChild(el);
+  chatInner.appendChild(el);
   scheduleChatScrollToBottom(true);
 }
 
 function clearChatThread(): void {
-  chatThread.innerHTML = '';
-  chatThread.appendChild(chatEmptyState);
+  chatInner.innerHTML = '';
+  chatInner.appendChild(chatEmptyState);
   updateLastAgentResponseText('');
 }
 
@@ -577,7 +578,7 @@ async function copyLastAgentResponse(): Promise<void> {
 }
 
 function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
-  createLiveRunCardInternal(taskId, _provider, chatThread, {
+  createLiveRunCardInternal(taskId, _provider, chatInner, {
     renderMarkdown,
     updateLastAgentResponseText,
     scheduleChatScrollToBottom,
@@ -618,7 +619,7 @@ function appendMemoryEntry(entry: TaskMemoryEntry): void {
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-model chat-msg-done';
   el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
-  chatThread.appendChild(el);
+  chatInner.appendChild(el);
   scheduleChatScrollToBottom(true);
 }
 
