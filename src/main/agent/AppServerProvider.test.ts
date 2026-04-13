@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { pruneExpiredEntries } from './AppServerProvider';
+import { AppServerProvider } from './AppServerProvider';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -31,5 +32,75 @@ describe('MCP name translation', () => {
   it('dots become __ (round-trip)', () => {
     expect('filesystem.list'.replace(/\./g, '__')).toBe('filesystem__list');
     expect('filesystem__list'.replace(/__/g, '.')).toBe('filesystem.list');
+  });
+});
+
+describe('web_search config enforcement', () => {
+  it('includes web_search disabled in thread/start params', async () => {
+    const sentMessages: unknown[] = [];
+    const mockWs = {
+      send: (data: string) => {
+        sentMessages.push(JSON.parse(data));
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'thread/start') {
+          setTimeout(() => {
+            const handler = (mockWs as any)._messageHandlers?.[0];
+            handler?.({ data: JSON.stringify({ id: msg.id, result: { thread: { id: 'thread-1' } } }) });
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: () => {},
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+    await (provider as any).startThread(mockWs, 'task-1', 'system instructions');
+
+    const threadStart = sentMessages.find((m: any) => m.method === 'thread/start') as any;
+    expect(threadStart).toBeDefined();
+    expect(threadStart.params.config).toEqual({ web_search: 'disabled' });
+  });
+
+  it('includes web_search disabled in thread/resume params', async () => {
+    const sentMessages: unknown[] = [];
+    const mockWs = {
+      send: (data: string) => {
+        sentMessages.push(JSON.parse(data));
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'thread/resume') {
+          setTimeout(() => {
+            const handler = (mockWs as any)._messageHandlers?.[0];
+            handler?.({ data: JSON.stringify({ id: msg.id, result: {} }) });
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: () => {},
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+    await (provider as any).resumeThread(mockWs, 'task-1', 'thread-1', 'system instructions');
+
+    const threadResume = sentMessages.find((m: any) => m.method === 'thread/resume') as any;
+    expect(threadResume).toBeDefined();
+    expect(threadResume.params.config).toEqual({ web_search: 'disabled' });
   });
 });

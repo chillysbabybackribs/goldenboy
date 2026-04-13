@@ -392,6 +392,7 @@ export class AppServerProvider implements AgentProvider {
           approvalPolicy: 'never',
           sandboxPolicy: { type: 'dangerFullAccess' },
           persistFullHistory: true,
+          config: { web_search: 'disabled' },
         },
       }));
     });
@@ -446,6 +447,7 @@ export class AppServerProvider implements AgentProvider {
           approvalPolicy: 'never',
           sandboxPolicy: { type: 'dangerFullAccess' },
           persistFullHistory: true,
+          config: { web_search: 'disabled' },
         },
       }));
     });
