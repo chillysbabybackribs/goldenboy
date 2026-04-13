@@ -22,9 +22,14 @@ export type LiveRunCard = {
   activeThoughtEl: HTMLElement | null;
   /** Tool events that arrived while a thought was typing */
   deferredToolEvents: Array<{ kind: 'start' | 'done'; text: string }>;
+  /** Full received token text */
   tokenBuffer: string;
+  /** How many chars of tokenBuffer have been rendered to screen */
   tokenVisibleLength: number;
+  /** rAF handle for the typewriter tick */
   tokenTypingTimer: number | null;
+  /** Chars rendered per rAF tick — adapts to keep up with fast models */
+  tokenChunkSize: number;
   pendingFinalResult: { result: any; provider?: string } | null;
   pendingErrorText: string | null;
   callbacks: LiveRunRenderCallbacks;
@@ -85,6 +90,7 @@ export function createLiveRunCard(
     tokenBuffer: '',
     tokenVisibleLength: 0,
     tokenTypingTimer: null,
+    tokenChunkSize: 8,
     pendingFinalResult: null,
     pendingErrorText: null,
     callbacks,
@@ -94,7 +100,7 @@ export function createLiveRunCard(
   return card;
 }
 
-// ─── Token Streaming (final response text) ──────────────────────────────────
+// ─── Token Streaming (typewriter) ───────────────────────────────────────────
 
 export function appendToken(taskId: string, text: string): void {
   const card = liveRunCards.get(taskId);
@@ -103,26 +109,59 @@ export function appendToken(taskId: string, text: string): void {
 
   card.tokenBuffer += text;
   card.output.className = 'chat-msg-text chat-markdown chat-msg-streaming';
-  if (card.tokenTypingTimer !== null) return;
 
+  // Kick off the typewriter loop if not already running
+  if (card.tokenTypingTimer === null) {
+    scheduleTypewriterTick(taskId, card);
+  }
+}
+
+function scheduleTypewriterTick(taskId: string, card: LiveRunCard): void {
   card.tokenTypingTimer = window.requestAnimationFrame(() => {
     card.tokenTypingTimer = null;
-    card.tokenVisibleLength = card.tokenBuffer.length;
-    const visible = card.tokenBuffer;
+
+    const lag = card.tokenBuffer.length - card.tokenVisibleLength;
+    if (lag <= 0) {
+      // Caught up — check for pending flush
+      flushPendingIfReady(taskId, card);
+      return;
+    }
+
+    // Adapt chunk size: larger when lagging behind to catch up, smaller when close
+    if (lag > 200) {
+      card.tokenChunkSize = Math.min(card.tokenChunkSize + 4, 60);
+    } else if (lag < 30) {
+      card.tokenChunkSize = Math.max(card.tokenChunkSize - 2, 6);
+    }
+
+    card.tokenVisibleLength = Math.min(
+      card.tokenVisibleLength + card.tokenChunkSize,
+      card.tokenBuffer.length,
+    );
+    const visible = card.tokenBuffer.slice(0, card.tokenVisibleLength);
     card.output.innerHTML = card.callbacks.renderMarkdown(visible);
     card.callbacks.updateLastAgentResponseText(visible);
     card.callbacks.scheduleChatScrollToBottom(false, 1);
 
-    if (card.pendingErrorText !== null) {
-      flushError(taskId, card.pendingErrorText);
-      return;
-    }
-    if (card.pendingFinalResult) {
-      const pending = card.pendingFinalResult;
-      card.pendingFinalResult = null;
-      flushFinalResult(taskId, pending.result, pending.provider);
+    // Keep ticking if there's more to show
+    if (card.tokenVisibleLength < card.tokenBuffer.length) {
+      scheduleTypewriterTick(taskId, card);
+    } else {
+      flushPendingIfReady(taskId, card);
     }
   });
+}
+
+function flushPendingIfReady(taskId: string, card: LiveRunCard): void {
+  if (card.pendingErrorText !== null) {
+    flushError(taskId, card.pendingErrorText);
+    return;
+  }
+  if (card.pendingFinalResult) {
+    const pending = card.pendingFinalResult;
+    card.pendingFinalResult = null;
+    flushFinalResult(taskId, pending.result, pending.provider);
+  }
 }
 
 // ─── Thought Lines (model reasoning, typed out) ─────────────────────────────
