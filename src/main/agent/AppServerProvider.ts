@@ -249,6 +249,8 @@ export class AppServerProvider implements AgentProvider {
       // Apply explicit tool pack expansion (from runtime.request_tool_pack)
       if (turnResult.toolPackExpanded && turnResult.expandedTools && turnResult.expansion) {
         currentTools = mergeExpandedTools(currentTools, toolCatalog, turnResult.expansion);
+        // Update context file so MCP shim exposes the expanded tool set on the next turn
+        this.writeContextFile(request, currentTools);
       }
 
       // Check for auto tool pack expansion
@@ -260,6 +262,8 @@ export class AppServerProvider implements AgentProvider {
         );
         if (autoExpansion) {
           currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
+          // Update context file so MCP shim exposes the expanded tool set on the next turn
+          this.writeContextFile(request, currentTools);
           request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
           const expandedNames = autoExpansion.scope === 'all'
             ? ['all eligible tools']
@@ -679,9 +683,12 @@ export class AppServerProvider implements AgentProvider {
 
   // ─── Private: Helpers ────────────────────────────────────────────────────
 
-  private writeContextFile(request: AgentProviderRequest): void {
+  private writeContextFile(
+    request: AgentProviderRequest,
+    currentTools?: Array<{ name: string }>,
+  ): void {
     try {
-      const toolNames = request.tools.map((t) => t.name);
+      const toolNames = (currentTools ?? request.tools).map((t) => t.name);
       fs.writeFileSync(
         CONTEXT_PATH,
         JSON.stringify({
