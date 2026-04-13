@@ -51,11 +51,11 @@ process.stdin.on('data', (chunk) => {
     let msg;
     try { msg = JSON.parse(line); } catch { continue; }
     const { id, method, params } = msg;
+    // JSON-RPC notifications have no id — never respond to them
+    if (id === undefined || id === null) continue;
     if (method === 'initialize') {
       respond(id, { protocolVersion: '2024-11-05', capabilities: { tools: {} },
         serverInfo: { name: 'v2-tools', version: '1.0.0' } });
-    } else if (method === 'notifications/initialized') {
-      // no response needed for notifications
     } else if (method === 'tools/list') {
       postBridge('/tools/list', {})
         .then((r) => respond(id, r))
