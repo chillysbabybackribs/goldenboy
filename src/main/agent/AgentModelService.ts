@@ -18,6 +18,11 @@ import { AgentProvider } from './AgentTypes';
 import { AgentRuntime } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
 import { HaikuProvider } from './HaikuProvider';
+import { V2ToolBridge } from './V2ToolBridge';
+import { AppServerProcess } from './AppServerProcess';
+import { AppServerProvider } from './AppServerProvider';
+import * as path from 'path';
+import * as os from 'os';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
@@ -59,6 +64,7 @@ const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }
 class AgentModelService {
   private providers = new Map<ProviderId, ProviderEntry>();
   private activeTaskProviders = new Map<string, ProviderId>();
+  private appServerProvider: AppServerProvider | null = null;
 
   init(): void {
     agentToolExecutor.registerMany([
@@ -70,7 +76,11 @@ class AgentModelService {
       ...createSubAgentToolDefinitions((input) => this.createPreferredSubAgentProvider(input)),
     ]);
 
-    this.initializeCodexProvider(PROVIDER_CONFIGS[0]);
+    if (process.env.CODEX_PROVIDER === 'exec') {
+      this.initializeCodexProvider(PROVIDER_CONFIGS[0]);
+    } else {
+      void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
+    }
     this.initializeHaikuProvider(PROVIDER_CONFIGS[1]);
 
     if (this.providers.size === 0) {
@@ -288,6 +298,59 @@ class AgentModelService {
     this.log(config.id, 'info', `${config.label} ready`);
   }
 
+  private async initializeAppServerProvider(config: { id: ProviderId; label: string; modelId: string }): Promise<void> {
+    const probe = CodexProvider.isAvailable();
+    if (!probe.available) {
+      this.setRuntime(config.id, {
+        status: 'unavailable',
+        activeTaskId: null,
+        errorDetail: probe.error || 'Codex CLI is not installed.',
+      }, config.modelId);
+      this.log(config.id, 'warn', `${config.label} unavailable: ${probe.error || 'Codex CLI is not installed.'}`);
+      return;
+    }
+
+    this.setRuntime(config.id, { status: 'unavailable', activeTaskId: null, errorDetail: 'Starting...' }, config.modelId);
+
+    try {
+      const contextPath = path.join(os.tmpdir(), 'v2-tool-context.json');
+
+      const bridge = new V2ToolBridge(contextPath);
+      await bridge.start();
+      const bridgePort = bridge.getPort();
+      this.log(config.id, 'info', `V2ToolBridge started on port ${bridgePort}`);
+
+      const shimPath = path.join(__dirname, 'v2-mcp-shim.js');
+      const appServerProcess = new AppServerProcess(bridgePort, shimPath, contextPath);
+      await appServerProcess.start();
+      const { wsPort } = await appServerProcess.waitUntilReady();
+      this.log(config.id, 'info', `codex app-server ready on ws port ${wsPort}`);
+
+      const provider = new AppServerProvider({
+        providerId: config.id,
+        modelId: config.modelId,
+        process: appServerProcess,
+      });
+      await provider.connect(wsPort);
+
+      this.appServerProvider = provider;
+
+      this.providers.set(config.id, {
+        id: config.id,
+        label: config.label,
+        modelId: provider.modelId,
+        supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
+        runtime: new AgentRuntime(provider),
+      });
+      this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, provider.modelId);
+      this.log(config.id, 'info', `${config.label} ready (app-server mode)`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.setRuntime(config.id, { status: 'error', activeTaskId: null, errorDetail: message }, config.modelId);
+      this.log(config.id, 'error', `${config.label} startup failed: ${message}`);
+    }
+  }
+
   private initializeHaikuProvider(config: { id: ProviderId; label: string; modelId: string }): void {
     try {
       const provider = new HaikuProvider();
@@ -371,10 +434,11 @@ class AgentModelService {
     if (providerId === HAIKU_PROVIDER_ID) {
       return new HaikuProvider();
     }
-    return new CodexProvider({
-      providerId: config.id,
-      modelId: config.modelId,
-    });
+    // Reuse the persistent app-server provider for sub-agents if available
+    if (this.appServerProvider) {
+      return this.appServerProvider;
+    }
+    return new CodexProvider({ providerId: config.id, modelId: config.modelId });
   }
 
   private buildUnavailableProviderMessage(providerId: ProviderId): string {
