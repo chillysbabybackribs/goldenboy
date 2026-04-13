@@ -87,14 +87,11 @@
               </button>
               <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
               <div class="cc-compose-innerbar">
-                <!-- Left: model chip -->
-                <button class="cc-model-chip" id="modelChip" type="button" aria-haspopup="true" aria-label="Select model">
-                  <span class="cc-model-chip-dot" aria-hidden="true"></span>
-                  <span class="cc-model-chip-label" id="modelChipLabel">AUTO</span>
-                  <svg class="cc-model-chip-chevron" viewBox="0 0 10 10" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-                    <path d="M2 3.5l3 3 3-3"/>
-                  </svg>
-                </button>
+                <!-- Left: model selector -->
+                <div class="cc-model-selector" id="modelSelector" role="group" aria-label="Select model">
+                  <button class="cc-model-btn" id="modelBtnPrimary" type="button" data-owner="gpt-5.4">GPT-5.4</button>
+                  <button class="cc-model-btn" id="modelBtnHaiku" type="button" data-owner="haiku">Haiku 4.5</button>
+                </div>
                 <!-- Center: zoom controls -->
                 <div class="cc-zoom-controls" aria-label="Chat zoom controls">
                   <button class="cc-zoom-btn" id="chatZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">−</button>

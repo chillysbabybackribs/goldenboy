@@ -39,8 +39,8 @@ const chatScrollTopBtn = document.getElementById('chatScrollTopBtn') as HTMLButt
 const chatScrollBottomBtn = document.getElementById('chatScrollBottomBtn') as HTMLButtonElement;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
-const modelChip = document.getElementById('modelChip') as HTMLButtonElement;
-const modelChipLabel = document.getElementById('modelChipLabel') as HTMLSpanElement;
+const modelBtnPrimary = document.getElementById('modelBtnPrimary') as HTMLButtonElement;
+const modelBtnHaiku = document.getElementById('modelBtnHaiku') as HTMLButtonElement;
 const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
 const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
 const chatZoomInBtn = document.getElementById('chatZoomInBtn') as HTMLButtonElement;
@@ -69,8 +69,8 @@ const imgFileInput = document.getElementById('imgFileInput') as HTMLInputElement
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-type SelectableOwner = 'auto' | typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID;
-type ExplicitSelectableOwner = Exclude<SelectableOwner, 'auto'>;
+type SelectableOwner = typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID;
+type ExplicitSelectableOwner = SelectableOwner;
 type ProviderRuntimeView = {
   status?: string;
   model?: string;
@@ -78,10 +78,9 @@ type ProviderRuntimeView = {
   errorDetail?: string | null;
 };
 
-const SELECTABLE_OWNERS: SelectableOwner[] = ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
 const SELECTED_OWNER_STORAGE_KEY = 'command-center-selected-owner';
 const OWNER_LABELS: Record<SelectableOwner, string> = {
-  auto: 'Default',
   [PRIMARY_PROVIDER_ID]: 'GPT-5.4',
   [HAIKU_PROVIDER_ID]: 'Haiku 4.5',
 };
@@ -90,7 +89,7 @@ function getOwnerDisplayLabel(owner: SelectableOwner): string {
   return OWNER_LABELS[owner].toLowerCase();
 }
 
-let selectedOwner: SelectableOwner = 'auto';
+let selectedOwner: SelectableOwner = PRIMARY_PROVIDER_ID;
 let chatCounter = 0;
 let renderedTaskMemoryKey: string | null = null;
 let currentRenderedTaskId: string | null = null;
@@ -138,7 +137,7 @@ function getStoredSelectedOwner(): SelectableOwner {
   } catch {
     // Ignore storage failures in restricted renderer environments.
   }
-  return 'auto';
+  return PRIMARY_PROVIDER_ID;
 }
 
 function persistSelectedOwner(): void {
@@ -149,9 +148,13 @@ function persistSelectedOwner(): void {
   }
 }
 
+function getFallbackSelectableOwner(state: any, preferredOwner: SelectableOwner = PRIMARY_PROVIDER_ID): SelectableOwner {
+  if (canSelectOwner(state, preferredOwner)) return preferredOwner;
+  return SELECTABLE_OWNERS.find((owner) => canSelectOwner(state, owner)) ?? preferredOwner;
+}
+
 function normalizeSelectedOwner(nextOwner: SelectableOwner, state: any): SelectableOwner {
-  if (nextOwner === 'auto') return 'auto';
-  return canSelectOwner(state, nextOwner) ? nextOwner : 'auto';
+  return canSelectOwner(state, nextOwner) ? nextOwner : getFallbackSelectableOwner(state, nextOwner);
 }
 
 function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as any).__lastState): void {
@@ -160,34 +163,38 @@ function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as an
   syncModelToggleState(state);
 }
 
-function syncModelToggleState(state: any = (window as any).__lastState): void {
-  const isExplicit = selectedOwner !== 'auto';
-  modelChip.classList.toggle('cc-model-chip-explicit', isExplicit);
-  modelChipLabel.textContent = OWNER_LABELS[selectedOwner].toUpperCase();
-  modelChip.disabled = Boolean(runningTaskId);
+function getModelBtn(owner: ExplicitSelectableOwner): HTMLButtonElement {
+  return owner === PRIMARY_PROVIDER_ID ? modelBtnPrimary : modelBtnHaiku;
+}
 
-  if (isExplicit) {
-    const runtime = getProviderRuntime(state, selectedOwner as ExplicitSelectableOwner);
-    const status = runtime?.status || 'unavailable';
-    const details = [OWNER_LABELS[selectedOwner], runtime?.model || status, runtime?.errorDetail || '']
+function syncModelToggleState(state: any = (window as any).__lastState): void {
+  const busy = Boolean(runningTaskId);
+  for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
+    const btn = getModelBtn(owner);
+    const runtime = getProviderRuntime(state, owner);
+    const status = runtime?.status ?? 'unavailable';
+    const available = status !== 'unavailable' && status !== 'error';
+    const active = selectedOwner === owner;
+
+    btn.classList.toggle('cc-model-btn-active', active);
+    btn.classList.toggle('cc-model-btn-unavailable', !available && !active);
+    btn.disabled = busy || (active && !available);
+
+    const details = [OWNER_LABELS[owner], runtime?.model || status, runtime?.errorDetail || '']
       .filter(Boolean);
-    modelChip.title = details.join(' • ');
-  } else {
-    modelChip.title = 'Select model (auto)';
+    btn.title = details.join(' • ');
   }
 }
 
 function initializeModelToggle(): void {
   selectedOwner = getStoredSelectedOwner();
 
-  modelChip.addEventListener('click', () => {
-    // Cycle: auto → PRIMARY_PROVIDER_ID → HAIKU_PROVIDER_ID → auto
-    const state = (window as any).__lastState;
-    const cycle: SelectableOwner[] = ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
-    const currentIdx = cycle.indexOf(selectedOwner);
-    const nextOwner = cycle[(currentIdx + 1) % cycle.length];
-    setSelectedOwner(nextOwner, state);
-  });
+  for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
+    getModelBtn(owner).addEventListener('click', () => {
+      if (runningTaskId) return;
+      setSelectedOwner(owner, (window as any).__lastState);
+    });
+  }
 
   syncModelToggleState();
 }
@@ -668,6 +675,10 @@ function createLiveRunCard(taskId: string, _provider: string, prompt?: string): 
     renderMarkdown,
     updateLastAgentResponseText,
     scheduleChatScrollToBottom,
+    disableChatAutoPin: () => {
+      chatAutoPinned = false;
+      updateChatScrollControls();
+    },
   }, prompt);
 }
 
@@ -812,7 +823,7 @@ async function submitChat(): Promise<void> {
 
   chatCounter++;
   let taskId = getActiveTaskIdFromState();
-  const owner = selectedOwner === 'auto' ? undefined : selectedOwner;
+  const owner = selectedOwner;
 
   if (!taskId) {
     const workspaceAPI = getWorkspaceAPI();
@@ -833,14 +844,7 @@ async function submitChat(): Promise<void> {
   clearAttachments();
   chatStopBtn.hidden = false;
 
-  let resolvedOwner: string = owner || '';
-  if (!resolvedOwner) {
-    try {
-      resolvedOwner = modelApi.resolve ? await modelApi.resolve(prompt) : PRIMARY_PROVIDER_ID;
-    } catch {
-      resolvedOwner = PRIMARY_PROVIDER_ID;
-    }
-  }
+  const resolvedOwner: string = owner;
 
   runningTaskId = taskId;
   createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
@@ -1068,9 +1072,7 @@ function renderState(state: any): void {
     ? active.owner
     : null;
   const activeProvider = activeProviderId ? state.providers?.[activeProviderId] : null;
-  const selectedRuntime = selectedOwner !== 'auto'
-    ? getProviderRuntime(state, selectedOwner)
-    : null;
+  const selectedRuntime = getProviderRuntime(state, selectedOwner);
 
   targetLabel.textContent = `target ${getOwnerDisplayLabel(selectedOwner)}`;
 
@@ -1081,14 +1083,12 @@ function renderState(state: any): void {
     } else {
       sessionLabel.textContent = activeProvider.model || activeProvider.status || 'unavailable';
     }
-  } else if (selectedOwner !== 'auto' && selectedRuntime) {
+  } else if (selectedRuntime) {
     modelLabel.textContent = `ready ${getOwnerDisplayLabel(selectedOwner)}`;
     sessionLabel.textContent = selectedRuntime.model || selectedRuntime.status || 'unavailable';
   } else {
-    const availableProviders = SELECTABLE_OWNERS
-      .filter((owner): owner is Exclude<SelectableOwner, 'auto'> => owner !== 'auto')
-      .filter((owner) => canSelectOwner(state, owner));
-    modelLabel.textContent = 'ready default';
+    const availableProviders = SELECTABLE_OWNERS.filter((owner) => canSelectOwner(state, owner));
+    modelLabel.textContent = `ready ${getOwnerDisplayLabel(selectedOwner)}`;
     sessionLabel.textContent = availableProviders.length > 0
       ? availableProviders.map((owner) => getOwnerDisplayLabel(owner)).join(' / ')
       : 'no providers';

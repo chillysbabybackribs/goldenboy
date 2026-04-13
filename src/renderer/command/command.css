@@ -246,6 +246,9 @@
   line-height: 1.75;
   letter-spacing: 0.01em;
   font-weight: 400;
+  transition:
+    opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .chat-msg-streaming {
@@ -277,11 +280,22 @@
   box-shadow: none !important;
   outline: none !important;
   scrollbar-width: none;
+  transition:
+    opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    max-height 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    height 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    padding 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    margin 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .chat-msg-live-has-output .chat-live-panel {
-  height: min(280px, 38vh);
-  max-height: min(280px, 38vh);
+  height: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
 }
 
 .chat-live-panel::-webkit-scrollbar {
@@ -297,8 +311,15 @@
   background: transparent;
 }
 
-.chat-live-panel .chat-msg-text:not(:empty) {
-  margin-top: 12px;
+.chat-msg-live .chat-msg-text:not(:empty) {
+  margin-top: 6px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chat-msg-live .chat-msg-text:empty {
+  opacity: 0;
+  transform: translateY(4px);
 }
 
 /* ─── Done response — Option C hierarchy ─────────────────────────────── */
@@ -704,69 +725,61 @@
   flex-shrink: 0;
 }
 
-/* ─── Model Chip ─────────────────────────────────────────────────────── */
+/* ─── Model Selector (segmented toggle) ──────────────────────────────── */
 
-.cc-model-chip {
+.cc-model-selector {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
   background: #181818;
   border: 1px solid #2a2a2a;
   border-radius: 6px;
-  padding: 5px 12px;
-  color: #888;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.7px;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: border-color 140ms, background 140ms, color 140ms;
+  padding: 2px;
+  gap: 2px;
   -webkit-app-region: no-drag;
 }
 
-.cc-model-chip:hover {
-  border-color: #363636;
-  background: #1e1e1e;
-  color: #b0b0b0;
+.cc-model-btn {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 10px;
+  color: #555;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+  white-space: nowrap;
 }
 
-.cc-model-chip:active {
+.cc-model-btn:hover:not(:disabled):not(.cc-model-btn-active) {
+  color: #999;
+  background: #1e1e1e;
+}
+
+.cc-model-btn:active:not(:disabled) {
   transform: scale(0.97);
 }
 
-.cc-model-chip:disabled {
-  opacity: 0.4;
+.cc-model-btn.cc-model-btn-active {
+  background: #222;
+  border-color: #3a3a3a;
+  color: #d4a017;
+  cursor: default;
+}
+
+.cc-model-btn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
-.cc-model-chip-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #3a3a3a;
-  flex-shrink: 0;
-  transition: background 200ms;
-}
-
-.cc-model-chip.cc-model-chip-explicit .cc-model-chip-dot {
-  background: #d4a017;
-}
-
-.cc-model-chip.cc-model-chip-explicit .cc-model-chip-label {
-  color: #d4a017;
-}
-
-.cc-model-chip-label {
-  color: inherit;
-  transition: color 200ms;
-}
-
-.cc-model-chip-chevron {
-  width: 9px;
-  height: 9px;
-  color: #505050;
-  flex-shrink: 0;
+.cc-model-btn.cc-model-btn-unavailable {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* ─── History Button — inside box, top-right ────────────────────────── */
@@ -1371,6 +1384,7 @@
 .cc-status {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 14px;
   padding: 0 14px;
@@ -1381,6 +1395,7 @@
   font-size: 12px;
   color: #666;
   flex-shrink: 0;
+  text-align: center;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────────────────── */
