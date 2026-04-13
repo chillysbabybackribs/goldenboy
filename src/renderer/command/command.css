@@ -857,7 +857,7 @@
   resize: none;
   background: transparent;
   border: none;
-  padding: 12px 44px 12px 14px;
+  padding: 12px 90px 12px 14px;
   color: #e8e8e8;
   font-family: var(--font-mono);
   font-size: 15px;
@@ -1132,25 +1132,33 @@
   text-transform: uppercase;
 }
 
-/* ─── Logs Button (in compose innerbar) ──────────────────────────────── */
+/* ─── Logs Button — inside box, top-right (left of history btn) ──────── */
 
 .cc-logs-btn {
+  position: absolute;
+  top: 8px;
+  right: 44px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.8px;
   text-transform: uppercase;
-  color: #444;
+  color: #3a3a3a;
   background: none;
   border: none;
-  padding: 4px 10px;
+  padding: 0 6px;
   cursor: pointer;
   transition: color 140ms;
+  -webkit-app-region: no-drag;
+  z-index: 1;
 }
 
-.cc-logs-btn:hover { color: #888; }
-.cc-logs-btn:active { color: #ccc; }
-.cc-logs-btn.active { color: #888; }
+.cc-logs-btn:hover { color: #777; }
+.cc-logs-btn:active { color: #aaa; }
+.cc-logs-btn.active { color: #666; }
 
 /* ─── Logs Popup Overlay ─────────────────────────────────────────────── */
 

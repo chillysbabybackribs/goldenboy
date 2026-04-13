@@ -63,8 +63,9 @@
               <div class="cc-history-list" id="historyList"></div>
             </div>
 
-            <!-- Unified input box: history icon (top-right) + textarea + inner bar -->
+            <!-- Unified input box: logs + history icons (top-right) + textarea + inner bar -->
             <div class="cc-compose-box">
+              <button class="cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
               <button class="cc-history-btn" id="chatHistoryBtn" type="button" title="Chat history" aria-label="Chat history">
                 <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
                   <path d="M2 4h12M2 8h8M2 12h10"/>
@@ -72,8 +73,7 @@
               </button>
               <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
               <div class="cc-compose-innerbar">
-                <!-- Left: logs button + model chip -->
-                <button class="cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
+                <!-- Left: model chip -->
                 <button class="cc-model-chip" id="modelChip" type="button" aria-haspopup="true" aria-label="Select model">
                   <span class="cc-model-chip-dot" aria-hidden="true"></span>
                   <span class="cc-model-chip-label" id="modelChipLabel">AUTO</span>
