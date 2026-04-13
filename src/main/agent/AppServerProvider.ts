@@ -119,7 +119,6 @@ export class AppServerProvider implements AgentProvider {
   private aborted = false;
   private abortCurrentTurn: (() => void) | null = null;
   private ws: WebSocket | null = null;
-  private wsPort = 0;
   private threadRegistry: ThreadRegistry = loadThreadRegistry();
 
   constructor(private readonly options: AppServerProviderOptions) {
@@ -133,43 +132,47 @@ export class AppServerProvider implements AgentProvider {
   }
 
   async connect(wsPort: number): Promise<void> {
-    this.wsPort = wsPort;
-
     return new Promise<void>((resolve, reject) => {
       const ws = new NativeWebSocket(`ws://127.0.0.1:${wsPort}`);
 
       const timer = setTimeout(() => {
+        ws.removeEventListener('message', messageHandler);
         ws.close();
         reject(new Error('AppServerProvider: initialize handshake timed out'));
       }, 30_000);
 
-      ws.addEventListener('open', () => {
-        ws.send(JSON.stringify({ type: 'initialize', version: '2' }));
-      });
-
-      ws.addEventListener('message', (event: MessageEvent) => {
+      const messageHandler = (event: MessageEvent): void => {
         try {
           const msg = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
           ) as WsMsg;
           if (msg.type === 'initialized') {
             clearTimeout(timer);
+            ws.removeEventListener('message', messageHandler);
             this.ws = ws;
             resolve();
           }
         } catch {
           // ignore parse errors during handshake
         }
+      };
+
+      ws.addEventListener('message', messageHandler);
+
+      ws.addEventListener('open', () => {
+        ws.send(JSON.stringify({ type: 'initialize', version: '2' }));
       });
 
       ws.addEventListener('error', (event: Event) => {
         clearTimeout(timer);
+        ws.removeEventListener('message', messageHandler);
         ws.close();
         reject(new Error(`AppServerProvider: WebSocket error during connect: ${event.type}`));
       });
 
       ws.addEventListener('close', () => {
         clearTimeout(timer);
+        ws.removeEventListener('message', messageHandler);
         if (!this.ws) {
           reject(new Error('AppServerProvider: WebSocket closed before initialized'));
         }
@@ -307,7 +310,9 @@ export class AppServerProvider implements AgentProvider {
       try {
         return await this.resumeThread(ws, taskId, existing.threadId, systemPrompt);
       } catch {
-        // resume failed; fall through to start new thread
+        // resume failed; delete stale entry and fall through to start new thread
+        delete this.threadRegistry[taskId];
+        saveThreadRegistry(this.threadRegistry);
       }
     }
     return this.startThread(ws, taskId, systemPrompt);
@@ -437,8 +442,8 @@ export class AppServerProvider implements AgentProvider {
 
     return new Promise((resolve, reject) => {
       let message = '';
-      let turnInputTokens = 0;
-      let turnOutputTokens = 0;
+      let lastInputTokens = 0;
+      let lastOutputTokens = 0;
       let toolsCalled = false;
       let toolPackExpanded = false;
       let expansion: { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | undefined;
@@ -558,10 +563,12 @@ export class AppServerProvider implements AgentProvider {
             }
 
             case 'thread/tokenUsage/updated': {
+              // Each event is a running total for the current turn (snapshot, not delta).
+              // Overwrite rather than accumulate to avoid double-counting.
               const last = msg.last as { inputTokens?: number; outputTokens?: number } | undefined;
               if (last) {
-                turnInputTokens += last.inputTokens ?? 0;
-                turnOutputTokens += last.outputTokens ?? 0;
+                lastInputTokens = last.inputTokens ?? 0;
+                lastOutputTokens = last.outputTokens ?? 0;
               }
               break;
             }
@@ -571,8 +578,8 @@ export class AppServerProvider implements AgentProvider {
               resolve({
                 kind: toolsCalled ? 'tool_calls' : 'final',
                 message,
-                inputTokens: turnInputTokens,
-                outputTokens: turnOutputTokens,
+                inputTokens: lastInputTokens,
+                outputTokens: lastOutputTokens,
                 toolPackExpanded,
                 expansion,
                 expandedTools,
