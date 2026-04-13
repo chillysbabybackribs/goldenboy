@@ -619,7 +619,7 @@ function appendMemoryEntry(entry: TaskMemoryEntry): void {
 
   if (entry.kind === 'user_prompt') {
     const el = document.createElement('div');
-    el.className = 'chat-msg chat-msg-user';
+    el.className = 'chat-history-prompt';
     el.textContent = entry.text;
     chatInner.appendChild(el);
     return;
@@ -1056,7 +1056,6 @@ if (commandWindowAPI && modelApi?.onProgress) {
     }
     if (progress.type === 'status') {
       const text = String(progress.data || '');
-      taskStatusBar.push(text);
       if (text.startsWith('tool-start:') || text.startsWith('tool-done:')) {
         appendToolStatusInternal(progress.taskId, text);
       } else if (text.startsWith('Calling ')) {

@@ -1,35 +1,31 @@
 // ─── TaskStatusBar ────────────────────────────────────────────────────────
-// Typewriter-style progress indicator shown during agent runs.
-// Sits above the input box; driven by progress events from onProgress.
+// Self-contained typewriter status bar shown while a task is running.
+// Rotates through a fixed phrase list independently — no event wiring needed.
+// Usage: call start() when a run begins, end() when it finishes.
 
-const PHRASE_MAP: Array<{ pattern: RegExp; phrase: string }> = [
-  { pattern: /filesystem\.read|read_file_chunk/i,       phrase: 'reading files' },
-  { pattern: /filesystem\.search|search_file_cache/i,   phrase: 'searching files' },
-  { pattern: /filesystem\.index_workspace/i,            phrase: 'indexing workspace' },
-  { pattern: /filesystem\.answer_from_cache/i,          phrase: 'checking file cache' },
-  { pattern: /browser\.navigate/i,                      phrase: 'navigating' },
-  { pattern: /browser\.search_page_cache|browser\.read_cached_chunk/i, phrase: 'reading page cache' },
-  { pattern: /browser\.research_search|browser\.search_web/i,          phrase: 'searching the web' },
-  { pattern: /browser\.extract_page/i,                  phrase: 'reading page' },
-  { pattern: /terminal\.exec/i,                         phrase: 'running command' },
-  { pattern: /subagent\.spawn/i,                        phrase: 'spawning agent' },
-  { pattern: /subagent\.wait/i,                         phrase: 'waiting for agent' },
+const PHRASES = [
+  'working',
+  'thinking',
+  'reading files',
+  'searching',
+  'planning next step',
+  'processing',
+  'checking results',
+  'almost there',
 ];
 
-const CHAR_INTERVAL_MS = 38;
-const HOLD_MS = 1500;
-const GAP_MS = 120;
+const CHAR_INTERVAL_MS = 45;  // ms per character typed
+const HOLD_MS = 2000;         // how long the full phrase is visible
+const GAP_MS = 150;           // blank gap before next phrase
 
 export class TaskStatusBar {
   private root: HTMLElement;
   private textEl: HTMLElement;
 
-  private currentPhrase = '';
-  private pendingPhrase: string | null = null;
-  private phase: 'idle' | 'typing' | 'holding' | 'gap' = 'idle';
+  private phraseIndex = 0;
   private charIndex = 0;
   private timerId: ReturnType<typeof setTimeout> | null = null;
-  private runEnding = false;
+  private running = false;
 
   constructor(rootEl: HTMLElement) {
     this.root = rootEl;
@@ -38,128 +34,58 @@ export class TaskStatusBar {
     this.root.appendChild(this.textEl);
   }
 
-  /** Call when a run starts. Shows the bar (empty) and resets state. */
+  /** Call when a run starts. Reveals the bar and begins the phrase loop. */
   start(): void {
-    this.runEnding = false;
-    this.currentPhrase = '';
-    this.pendingPhrase = null;
-    this.phase = 'idle';
-    this.charIndex = 0;
     this.clearTimer();
+    this.running = true;
+    this.phraseIndex = 0;
+    this.charIndex = 0;
     this.textEl.textContent = '';
     this.root.hidden = false;
+    this.tick();
   }
 
   /**
-   * Feed a raw progress status string. The bar maps it to a friendly phrase
-   * and queues it. Skips tool-result events and unknown strings.
-   */
-  push(rawText: string): void {
-    if (this.runEnding) return;
-    const phrase = this.mapPhrase(rawText);
-    if (!phrase) return;
-    if (phrase === this.currentPhrase && this.phase !== 'idle') return; // dedupe
-
-    if (this.phase === 'idle') {
-      this.currentPhrase = phrase;
-      this.startTyping();
-    } else {
-      // Queue — will be picked up after current phrase exits
-      this.pendingPhrase = phrase;
-    }
-  }
-
-  /**
-   * Call when a run ends (success, error, or cancel).
-   * - cancel=true: hide immediately.
-   * - cancel=false: let current phrase finish its hold then hide.
+   * Call when a run ends.
+   * cancel=true  → hide immediately (STOP button)
+   * cancel=false → finish the current phrase then hide
    */
   end(cancel = false): void {
+    this.running = false;
     if (cancel) {
       this.clearTimer();
       this.hide();
-      return;
     }
-    this.runEnding = true;
-    this.pendingPhrase = null;
-    // If already idle (no phrase ever arrived), hide immediately
-    if (this.phase === 'idle') {
-      this.hide();
-    }
-    // Otherwise the normal hold→snap cycle will call afterHold() which hides
+    // non-cancel: let the current tick() / afterHold() cycle call hide() naturally
   }
 
   // ── private ────────────────────────────────────────────────────────────
 
-  private mapPhrase(raw: string): string | null {
-    // Skip result events entirely
-    if (raw.startsWith('Tool result:')) return null;
-    if (raw.startsWith('tool-start:') || raw.startsWith('tool-done:')) return null;
-    if (/^Turn completed/.test(raw)) return null;
-
-    // Check Calling ... prefix first (strip it for matching)
-    const stripped = raw.replace(/^Calling\s+/, '').replace(/\.\.\.$/, '').trim();
-
-    for (const { pattern, phrase } of PHRASE_MAP) {
-      if (pattern.test(stripped) || pattern.test(raw)) return phrase;
-    }
-
-    // Thoughts/reasoning that don't match a tool pattern
-    if (!raw.startsWith('Calling ') && raw.trim().length > 0) return 'thinking';
-
-    return null;
-  }
-
-  private startTyping(): void {
-    this.phase = 'typing';
-    this.charIndex = 0;
-    this.tick();
-  }
-
   private tick(): void {
-    const phrase = this.currentPhrase;
+    if (!this.running) { this.hide(); return; }
+
+    const phrase = PHRASES[this.phraseIndex];
     if (this.charIndex <= phrase.length) {
       this.textEl.textContent = phrase.slice(0, this.charIndex);
       this.charIndex++;
       this.timerId = setTimeout(() => this.tick(), CHAR_INTERVAL_MS);
     } else {
-      // Done typing — hold
-      this.phase = 'holding';
+      // Fully typed — hold
       this.timerId = setTimeout(() => this.afterHold(), HOLD_MS);
     }
   }
 
   private afterHold(): void {
-    // Snap off
+    if (!this.running) { this.hide(); return; }
+    // Snap off, advance to next phrase
     this.textEl.textContent = '';
-    this.phase = 'gap';
-
-    if (this.runEnding) {
-      this.hide();
-      return;
-    }
-
-    this.timerId = setTimeout(() => this.afterGap(), GAP_MS);
-  }
-
-  private afterGap(): void {
-    const next = this.pendingPhrase;
-    this.pendingPhrase = null;
-
-    if (next && next !== this.currentPhrase) {
-      this.currentPhrase = next;
-      this.startTyping();
-    } else if (next) {
-      // Same phrase — skip dedupe, just wait for more events
-      this.phase = 'idle';
-    } else {
-      this.phase = 'idle';
-    }
+    this.phraseIndex = (this.phraseIndex + 1) % PHRASES.length;
+    this.charIndex = 0;
+    this.timerId = setTimeout(() => this.tick(), GAP_MS);
   }
 
   private hide(): void {
     this.clearTimer();
-    this.phase = 'idle';
     this.textEl.textContent = '';
     this.root.hidden = true;
   }

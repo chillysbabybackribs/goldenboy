@@ -108,7 +108,7 @@
 .cc-task-status-text {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: #4a4a4a;
+  color: #666;
   letter-spacing: 0.3px;
   white-space: nowrap;
   overflow: hidden;
@@ -219,6 +219,16 @@
 /* ─── Live prompt line — shown during run, removed on completion ──────── */
 
 .chat-live-prompt {
+  font-family: var(--font-reading);
+  font-size: calc(12px * var(--cc-chat-zoom));
+  font-weight: 400;
+  color: #3a3a3a;
+  letter-spacing: 0.2px;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.chat-history-prompt {
   font-family: var(--font-reading);
   font-size: calc(12px * var(--cc-chat-zoom));
   font-weight: 400;
