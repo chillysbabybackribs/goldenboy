@@ -34,7 +34,6 @@ const logsToggleBtn = document.getElementById('logsToggleBtn')!;
 const chatThread = document.getElementById('chatThread')!;
 const chatEmptyState = document.getElementById('chatEmptyState')!;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
-const chatSubmitBtn = document.getElementById('chatSubmitBtn')!;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
 const modelChip = document.getElementById('modelChip') as HTMLButtonElement;
 const modelChipLabel = document.getElementById('modelChipLabel') as HTMLSpanElement;
@@ -723,7 +722,6 @@ async function submitChat(): Promise<void> {
 
   chatInput.value = '';
   clearAttachments();
-  chatSubmitBtn.setAttribute('disabled', '');
   chatStopBtn.hidden = false;
 
   appendUserMessage(prompt, imagePreviewUrls.length > 0 ? imagePreviewUrls : undefined);
@@ -754,12 +752,9 @@ async function submitChat(): Promise<void> {
   } finally {
     runningTaskId = null;
     chatStopBtn.hidden = true;
-    chatSubmitBtn.removeAttribute('disabled');
     chatInput.focus();
   }
 }
-
-chatSubmitBtn.addEventListener('click', submitChat);
 chatStopBtn.addEventListener('click', () => {
   const modelApi = getModelAPI();
   if (runningTaskId && modelApi?.cancel) {
