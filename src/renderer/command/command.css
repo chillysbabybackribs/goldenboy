@@ -96,20 +96,18 @@
 /* ─── Task Status Bar ─────────────────────────────────────── */
 
 .cc-task-status {
-  padding: 0 clamp(48px, 6vw, 100px);
-  height: 24px;
+  padding: 0 2px 6px;
   display: flex;
   align-items: center;
-  background: #0a0a0a;
+  background: transparent;
   flex-shrink: 0;
-  /* no border-top */
 }
 
 .cc-task-status-text {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: #666;
-  letter-spacing: 0.3px;
+  font-size: 13px;
+  color: #555;
+  letter-spacing: 0.2px;
   white-space: nowrap;
   overflow: hidden;
 }
