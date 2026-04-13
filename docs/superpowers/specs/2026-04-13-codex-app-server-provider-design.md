@@ -185,7 +185,7 @@ AgentModelService.init()
 | `resolveAutoExpandedToolPack()` | Called post-turn on accumulated message text; triggers follow-up turn |
 | `usage.inputTokens / outputTokens` | Summed from `thread/tokenUsage/updated` per turn |
 | `codexItems[]` | Built from `item/started` + `item/completed` notifications |
-| Session continuity | `Map<taskId, threadId>` — threads persist across invocations |
+| Session continuity | `Map<taskId, threadId>` — threads persist across invocations AND app restarts (via `codex-threads.json`) |
 | Abort | `turn/interrupt { threadId, turnId }` |
 | `--dangerously-bypass-approvals-and-sandbox` | `approvalPolicy: 'never'`, `sandbox: 'danger-full-access'` |
 | `--output-schema <tempfile>` | `outputSchema` field on `turn/start` — no temp file |
@@ -239,10 +239,30 @@ AgentModelService.init()
 
 ---
 
+## Thread Persistence
+
+Thread IDs survive V2 app restarts via a dedicated JSON file in Electron's `userData` directory — the same location `taskMemoryStore` uses for `task-memory.json`.
+
+**File:** `app.getPath('userData')/codex-threads.json`  
+**Shape:** `{ [taskId: string]: { threadId: string, savedAt: number } }`
+
+**Managed by `AppServerProvider`:**
+
+- On `thread/start` success → write `{ threadId, savedAt: Date.now() }` keyed by `taskId`
+- On `thread/resume` success → update `savedAt`
+- On `thread/resume` failure (thread expired) → delete the entry, fall back to `thread/start`, write new entry
+- On V2 startup → load file into memory as the initial thread registry
+
+**Eviction:** Entries older than 7 days are pruned on load. Codex threads expire after prolonged inactivity; 7 days is a conservative bound that avoids accumulating stale entries indefinitely.
+
+**Implementation note:** Reads/writes are synchronous (same pattern as `taskMemoryStore`). The file is small — one line per active task — so synchronous I/O is acceptable. `AppServerProvider` owns this file exclusively; no other module reads or writes it.
+
+---
+
 ## Constraints
 
 - `v2-mcp-shim.js` must use only Node.js built-ins — no npm dependencies
 - `V2ToolBridge` binds `127.0.0.1` only — never `0.0.0.0`
 - `AppServerProcess` writes config.toml non-destructively — merges only the `v2-tools` entry, preserves all existing entries
 - `CodexProvider` stays in the codebase, activated by `CODEX_PROVIDER=exec` env var
-- Thread IDs are not persisted across V2 app restarts — `Map<taskId, threadId>` is in-memory only; on restart, `thread/start` is used for all tasks
+- Thread IDs are persisted across V2 app restarts — see Thread Persistence section below
