@@ -57,7 +57,7 @@ type ProviderEntry = {
 };
 
 const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }> = [
-  { id: PRIMARY_PROVIDER_ID, label: 'GPT-5.4', modelId: PRIMARY_PROVIDER_ID },
+  { id: PRIMARY_PROVIDER_ID, label: 'Codex', modelId: PRIMARY_PROVIDER_ID },
   { id: HAIKU_PROVIDER_ID, label: 'Haiku 4.5', modelId: HAIKU_PROVIDER_ID },
 ];
 

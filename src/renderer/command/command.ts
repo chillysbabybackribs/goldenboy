@@ -18,10 +18,7 @@ const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
 // ─── DOM ────────────────────────────────────────────────────────────────────
 
 const taskSummary = document.getElementById('taskSummary')!;
-const splitLabel = document.getElementById('splitLabel')!;
-const targetLabel = document.getElementById('targetLabel')!;
 const modelLabel = document.getElementById('modelLabel')!;
-const sessionLabel = document.getElementById('sessionLabel')!;
 const taskCount = document.getElementById('taskCount')!;
 const commandShell = document.querySelector('.cc-shell') as HTMLElement;
 const logStream = document.getElementById('logStream')!;
@@ -81,7 +78,7 @@ type ProviderRuntimeView = {
 const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
 const SELECTED_OWNER_STORAGE_KEY = 'command-center-selected-owner';
 const OWNER_LABELS: Record<SelectableOwner, string> = {
-  [PRIMARY_PROVIDER_ID]: 'GPT-5.4',
+  [PRIMARY_PROVIDER_ID]: 'Codex',
   [HAIKU_PROVIDER_ID]: 'Haiku 4.5',
 };
 
@@ -98,6 +95,7 @@ let chatScrollRaf: number | null = null;
 let chatScrollFramesRemaining = 0;
 let suppressChatScrollEvent = false;
 let suppressNextChatScrollActivation = false;
+let suppressNextChatAutoScrollPasses = 0;
 let chatScrollControlsActivated = false;
 let chatScrollControlsDimmed = false;
 let chatScrollControlsIdleTimer: number | null = null;
@@ -399,6 +397,10 @@ function performChatScrollToBottom(): void {
   });
 }
 
+function suppressUpcomingChatAutoScroll(passes = 2): void {
+  suppressNextChatAutoScrollPasses = Math.max(suppressNextChatAutoScrollPasses, passes);
+}
+
 function scheduleChatScrollToBottom(force = false, frames = 3): void {
   if (!force && !chatAutoPinned) return;
   if (force) chatAutoPinned = true;
@@ -452,11 +454,21 @@ chatThread.addEventListener('toggle', (event: Event) => {
 }, true);
 
 const chatResizeObserver = new ResizeObserver(() => {
+  if (suppressNextChatAutoScrollPasses > 0) {
+    suppressNextChatAutoScrollPasses -= 1;
+    updateChatScrollControls();
+    return;
+  }
   scheduleChatScrollToBottom(false, 4);
 });
 chatResizeObserver.observe(chatThread);
 
 const chatMutationObserver = new MutationObserver(() => {
+  if (suppressNextChatAutoScrollPasses > 0) {
+    suppressNextChatAutoScrollPasses -= 1;
+    updateChatScrollControls();
+    return;
+  }
   scheduleChatScrollToBottom(false, 1);
   updateChatScrollControls();
 });
@@ -671,6 +683,7 @@ async function copyLastAgentResponse(): Promise<void> {
 }
 
 function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
+  suppressUpcomingChatAutoScroll(4);
   createLiveRunCardInternal(taskId, _provider, chatInner, {
     renderMarkdown,
     updateLastAgentResponseText,
@@ -1060,39 +1073,16 @@ function renderState(state: any): void {
   const active = state.tasks.find((t: any) => t.id === state.activeTaskId);
   renderLogs(state.logs);
 
-  if (state.executionSplit) {
-    const ratio = state.executionSplit.ratio;
-    splitLabel.textContent = `split ${Math.round(ratio * 100)}/${Math.round((1 - ratio) * 100)}`;
-  }
-
   taskCount.textContent = `tasks: ${state.tasks.length}`;
   updateTokenUsageDisplay(state);
 
   const activeProviderId = active?.owner && active.owner !== 'user'
     ? active.owner
     : null;
-  const activeProvider = activeProviderId ? state.providers?.[activeProviderId] : null;
-  const selectedRuntime = getProviderRuntime(state, selectedOwner);
-
-  targetLabel.textContent = `target ${getOwnerDisplayLabel(selectedOwner)}`;
-
-  if (activeProviderId && activeProvider) {
-    modelLabel.textContent = `active ${getOwnerDisplayLabel(activeProviderId)}`;
-    if (activeProvider.sessionId) {
-      sessionLabel.textContent = `session ${activeProvider.sessionId.slice(0, 12)}`;
-    } else {
-      sessionLabel.textContent = activeProvider.model || activeProvider.status || 'unavailable';
-    }
-  } else if (selectedRuntime) {
-    modelLabel.textContent = `ready ${getOwnerDisplayLabel(selectedOwner)}`;
-    sessionLabel.textContent = selectedRuntime.model || selectedRuntime.status || 'unavailable';
-  } else {
-    const availableProviders = SELECTABLE_OWNERS.filter((owner) => canSelectOwner(state, owner));
-    modelLabel.textContent = `ready ${getOwnerDisplayLabel(selectedOwner)}`;
-    sessionLabel.textContent = availableProviders.length > 0
-      ? availableProviders.map((owner) => getOwnerDisplayLabel(owner)).join(' / ')
-      : 'no providers';
-  }
+  const footerOwner = activeProviderId && isExplicitSelectableOwner(activeProviderId)
+    ? activeProviderId
+    : selectedOwner;
+  modelLabel.textContent = OWNER_LABELS[footerOwner];
 
   syncModelToggleState(state);
 
