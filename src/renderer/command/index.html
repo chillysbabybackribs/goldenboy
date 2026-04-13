@@ -33,6 +33,9 @@
           </div>
         </div>
 
+        <!-- Task status bar — sits above input footer, aligned to compose shell width -->
+        <div id="taskStatusBar" class="cc-task-status" hidden></div>
+
         <!-- Input footer — Command Center -->
         <div class="cc-input-footer">
           <button class="cc-copy-btn" id="chatCopyLastBtn" type="button" title="No agent response yet" aria-label="No agent response yet" disabled hidden>Copy</button>
@@ -43,9 +46,6 @@
           </div>
 
           <div class="cc-compose-shell">
-
-            <!-- Task status bar — typewriter progress indicator -->
-            <div id="taskStatusBar" class="cc-task-status" hidden></div>
 
             <!-- Logs popup — anchored above input box -->
             <div class="cc-logs-overlay" id="logsOverlay" hidden>

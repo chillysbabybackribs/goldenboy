@@ -96,7 +96,10 @@
 /* ─── Task Status Bar ─────────────────────────────────────── */
 
 .cc-task-status {
-  padding: 0 2px 6px;
+  /* Mirror compose shell: 75% width, centered */
+  width: 75%;
+  margin: 0 auto;
+  padding: 0 0 8px 2px;
   display: flex;
   align-items: center;
   background: transparent;
@@ -106,10 +109,21 @@
 .cc-task-status-text {
   font-family: var(--font-mono);
   font-size: 13px;
-  color: #555;
   letter-spacing: 0.2px;
   white-space: nowrap;
   overflow: hidden;
+  /* shimmer sweep across the text */
+  background: linear-gradient(90deg, #444 0%, #444 30%, #888 50%, #444 70%, #444 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: cc-status-shimmer 2.4s linear infinite;
+}
+
+@keyframes cc-status-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .cc-task-status[hidden] { display: none; }
