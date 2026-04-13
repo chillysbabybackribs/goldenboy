@@ -80,11 +80,15 @@ export class V2ToolBridge {
 
     try {
       if (req.url === '/tools/list') {
-        const tools = agentToolExecutor.list().map((t) => ({
-          name: toMcpName(t.name),
-          description: t.description,
-          inputSchema: t.inputSchema,
-        }));
+        const ctx = readContext(this.contextPath);
+        const allowed = ctx.toolNames?.length ? new Set(ctx.toolNames) : null;
+        const tools = agentToolExecutor.list()
+          .filter((t) => !allowed || allowed.has(t.name))
+          .map((t) => ({
+            name: toMcpName(t.name),
+            description: t.description,
+            inputSchema: t.inputSchema,
+          }));
         send({ tools });
         return;
       }

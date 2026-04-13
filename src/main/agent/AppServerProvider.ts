@@ -218,11 +218,16 @@ export class AppServerProvider implements AgentProvider {
     let accumulatedMessage = '';
     let nextTurnInput: string | null = null;
 
+    // Build the first turn's input text — prepend contextPrompt if present (same pattern as HaikuProvider)
+    const firstTurnInput = request.contextPrompt?.trim()
+      ? `${request.contextPrompt.trim()}\n\n## Current User Request\n\n${request.task}`
+      : request.task;
+
     // Turn loop
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
 
-      const turnInput = nextTurnInput ?? (turn === 0 ? request.task : accumulatedMessage);
+      const turnInput = nextTurnInput ?? (turn === 0 ? firstTurnInput : accumulatedMessage);
       nextTurnInput = null;
 
       const turnResult = await this.runOneTurn(ws, {

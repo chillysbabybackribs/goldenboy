@@ -121,6 +121,7 @@ export type AgentToolContext = {
   agentId: string;
   mode: AgentMode;
   taskId?: string;
+  toolNames?: string[];
 };
 
 export type ConstraintStatus = 'PASS' | 'FAIL' | 'UNKNOWN' | 'ESTIMATED' | 'CONDITIONAL';
