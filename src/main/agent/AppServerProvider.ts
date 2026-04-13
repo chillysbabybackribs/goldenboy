@@ -388,7 +388,7 @@ export class AppServerProvider implements AgentProvider {
         id: reqId,
         method: 'thread/start',
         params: {
-          instructions: developerInstructions,
+          developerInstructions,
           approvalPolicy: 'never',
           sandboxPolicy: { type: 'dangerFullAccess' },
           persistFullHistory: true,
@@ -443,7 +443,7 @@ export class AppServerProvider implements AgentProvider {
         method: 'thread/resume',
         params: {
           threadId,
-          instructions: developerInstructions,
+          developerInstructions,
           approvalPolicy: 'never',
           sandboxPolicy: { type: 'dangerFullAccess' },
           persistFullHistory: true,

@@ -71,6 +71,8 @@ describe('web_search config enforcement', () => {
     const threadStart = sentMessages.find((m: any) => m.method === 'thread/start') as any;
     expect(threadStart).toBeDefined();
     expect(threadStart.params.config).toEqual({ web_search: 'disabled' });
+    expect(threadStart.params.developerInstructions).toBe('system instructions');
+    expect(threadStart.params.instructions).toBeUndefined();
   });
 
   it('includes web_search disabled in thread/resume params', async () => {
@@ -108,5 +110,7 @@ describe('web_search config enforcement', () => {
     const threadResume = sentMessages.find((m: any) => m.method === 'thread/resume') as any;
     expect(threadResume).toBeDefined();
     expect(threadResume.params.config).toEqual({ web_search: 'disabled' });
+    expect(threadResume.params.developerInstructions).toBe('system instructions');
+    expect(threadResume.params.instructions).toBeUndefined();
   });
 });
