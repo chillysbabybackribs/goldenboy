@@ -57,17 +57,19 @@ export class V2ToolBridge {
   }
 
   stop(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (!this.server) { resolve(); return; }
       this.server.close(() => resolve());
+      this.server.once('error', reject);
     });
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    let body = '';
+    const chunks: Buffer[] = [];
     for await (const chunk of req) {
-      body += (chunk as Buffer).toString();
+      chunks.push(chunk as Buffer);
     }
+    const body = Buffer.concat(chunks).toString('utf-8');
 
     const send = (data: unknown, status = 200): void => {
       const payload = JSON.stringify(data);
