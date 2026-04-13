@@ -49,7 +49,7 @@ export function createLiveRunCard(
   callbacks: LiveRunRenderCallbacks,
   prompt?: string,
 ): LiveRunCard {
-  container.querySelector('.chat-empty-state')?.remove();
+  container.querySelector('.cc-chat-empty')?.remove();
 
   // Hide all existing cards — new task takes over the full space
   container.querySelectorAll<HTMLElement>('.chat-msg').forEach(el => {
