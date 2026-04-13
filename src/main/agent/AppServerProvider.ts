@@ -200,14 +200,18 @@ export class AppServerProvider implements AgentProvider {
     const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);
 
     let accumulatedMessage = '';
+    let nextTurnInput: string | null = null;
 
     // Turn loop
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
 
+      const turnInput = nextTurnInput ?? (turn === 0 ? request.task : accumulatedMessage);
+      nextTurnInput = null;
+
       const turnResult = await this.runOneTurn(ws, {
         threadId,
-        task: turn === 0 ? request.task : accumulatedMessage,
+        task: turnInput,
         request,
         currentTools,
         toolCatalog,
@@ -236,6 +240,15 @@ export class AppServerProvider implements AgentProvider {
         if (autoExpansion) {
           currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
           request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
+          const expandedNames = autoExpansion.scope === 'all'
+            ? ['all eligible tools']
+            : autoExpansion.tools;
+          nextTurnInput = [
+            `Host auto-expanded tool pack "${autoExpansion.pack}".`,
+            `Reason: ${autoExpansion.reason}`,
+            `Description: ${autoExpansion.description}`,
+            `Expanded tools: ${expandedNames.join(', ')}`,
+          ].join('\n');
           continue;
         }
 
