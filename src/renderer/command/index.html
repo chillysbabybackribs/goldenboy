@@ -42,6 +42,17 @@
 
           <div class="cc-compose-shell">
 
+            <!-- Logs popup — anchored above input box -->
+            <div class="cc-logs-overlay" id="logsOverlay" hidden>
+              <div class="cc-logs-overlay-header">
+                <span class="cc-logs-overlay-title">LOGS</span>
+                <button class="cc-logs-overlay-copy" id="logsCopyBtn" type="button" title="Copy logs" aria-label="Copy logs">Copy</button>
+                <button class="cc-logs-overlay-clear" id="logsClearBtn" type="button">Clear</button>
+                <button class="cc-logs-overlay-close" id="logsCloseBtn" type="button">✕</button>
+              </div>
+              <div class="cc-logs-stream" id="logStream"></div>
+            </div>
+
             <!-- History popup — anchored above input box -->
             <div class="cc-history-overlay" id="historyOverlay" hidden>
               <div class="cc-history-header">
@@ -61,7 +72,8 @@
               </button>
               <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
               <div class="cc-compose-innerbar">
-                <!-- Left: model chip -->
+                <!-- Left: logs button + model chip -->
+                <button class="cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
                 <button class="cc-model-chip" id="modelChip" type="button" aria-haspopup="true" aria-label="Select model">
                   <span class="cc-model-chip-dot" aria-hidden="true"></span>
                   <span class="cc-model-chip-label" id="modelChipLabel">AUTO</span>
@@ -106,23 +118,6 @@
 
       </div>
 
-      <!-- Right column: logs (full height) -->
-      <div class="cc-logs" id="logsPanel">
-        <div class="cc-logs-header">
-          <span class="cc-logs-title">Logs</span>
-          <div class="cc-logs-actions">
-            <button class="cc-logs-action cc-logs-toggle" id="logsToggleBtn" type="button" title="Expand logs" aria-label="Expand logs" aria-expanded="false">▸</button>
-            <button class="cc-logs-action cc-logs-copy" id="logsCopyBtn" type="button" title="Copy visible logs" aria-label="Copy visible logs">
-              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                <rect x="5" y="3" width="8" height="10" rx="1.2"></rect>
-                <path d="M3 11.5V5.2C3 4.5 3.5 4 4.2 4H10"></path>
-              </svg>
-            </button>
-            <button class="cc-logs-action cc-logs-clear" id="logsClearBtn" type="button">Clear</button>
-          </div>
-        </div>
-        <div class="cc-logs-stream" id="logStream"></div>
-      </div>
     </div>
 
     <!-- Status bar — full width -->

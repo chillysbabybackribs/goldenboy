@@ -27,8 +27,9 @@ const commandShell = document.querySelector('.cc-shell') as HTMLElement;
 const logStream = document.getElementById('logStream')!;
 const logsCopyBtn = document.getElementById('logsCopyBtn')!;
 const logsClearBtn = document.getElementById('logsClearBtn')!;
-const logsPanel = document.getElementById('logsPanel') as HTMLDivElement;
-const logsToggleBtn = document.getElementById('logsToggleBtn')!;
+const logsBtn = document.getElementById('logsBtn') as HTMLButtonElement;
+const logsOverlay = document.getElementById('logsOverlay') as HTMLDivElement;
+const logsCloseBtn = document.getElementById('logsCloseBtn')!;
 
 // Chat
 const chatThread = document.getElementById('chatThread')!;
@@ -240,19 +241,26 @@ function initializeChatZoom(): void {
 
 let lastLogCount = 0;
 let logsCopyFeedbackTimer: number | null = null;
-let logsCollapsed = true;
+let logsOpen = false;
 
-function setLogsCollapsed(collapsed: boolean): void {
-  logsCollapsed = collapsed;
-  logsPanel.classList.toggle('collapsed', collapsed);
-  logsToggleBtn.setAttribute('aria-expanded', String(!collapsed));
-  logsToggleBtn.textContent = collapsed ? '▸' : '◂';
-  logsToggleBtn.title = collapsed ? 'Expand logs' : 'Collapse logs';
-  logsToggleBtn.setAttribute('aria-label', collapsed ? 'Expand logs' : 'Collapse logs');
+function setLogsOpen(open: boolean): void {
+  logsOpen = open;
+  logsOverlay.hidden = !open;
+  logsBtn.classList.toggle('active', open);
+  if (open) logStream.scrollTop = logStream.scrollHeight;
 }
 
-logsToggleBtn.addEventListener('click', () => {
-  setLogsCollapsed(!logsCollapsed);
+logsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setLogsOpen(!logsOpen);
+});
+
+logsCloseBtn.addEventListener('click', () => setLogsOpen(false));
+
+document.addEventListener('click', (e) => {
+  if (logsOpen && !logsOverlay.contains(e.target as Node) && e.target !== logsBtn) {
+    setLogsOpen(false);
+  }
 });
 
 function renderLogs(logs: any[]): void {
@@ -1144,7 +1152,7 @@ attachPreviewList.addEventListener('click', (e: MouseEvent) => {
 
 // ─── Init ──────────────────────────────────────────────────────────────────
 
-setLogsCollapsed(true);
+setLogsOpen(false);
 initializeChatZoom();
 initializeModelToggle();
 
