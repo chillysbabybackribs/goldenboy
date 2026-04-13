@@ -148,18 +148,14 @@ function compactText(text: string, maxChars: number): string {
 export class GeminiSidecar {
   private readonly apiKey: string | null;
   private readonly models: string[];
-  private readonly anthropicApiKey: string | null;
-  private readonly haikuModelId: string;
 
   constructor() {
     this.apiKey = loadEnvValue('GEMINI_API_KEY');
     this.models = configuredModels();
-    this.anthropicApiKey = loadEnvValue('ANTHROPIC_API_KEY');
-    this.haikuModelId = loadEnvValue('ANTHROPIC_MODEL') || 'claude-haiku-4-5-20251001';
   }
 
   isConfigured(): boolean {
-    return Boolean((this.apiKey && this.models.length > 0) || this.anthropicApiKey);
+    return Boolean(this.apiKey && this.models.length > 0);
   }
 
   async rankSearchResults(query: string, results: SearchRankInput[]): Promise<{ results: SearchRankInput[]; modelId: string | null; reason: string | null }> {
@@ -258,61 +254,6 @@ export class GeminiSidecar {
           continue;
         }
       }
-    }
-
-    // Final fallback: Haiku 4.5
-    return this.generateJsonHaiku<T>(prompt, maxOutputTokens);
-  }
-
-  private async generateJsonHaiku<T>(prompt: string, maxOutputTokens: number): Promise<{ json: T; modelId: string } | null> {
-    if (!this.anthropicApiKey) return null;
-
-    try {
-      const result = await new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
-        const payload = JSON.stringify({
-          model: this.haikuModelId,
-          max_tokens: maxOutputTokens,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        const req = https.request({
-          method: 'POST',
-          hostname: 'api.anthropic.com',
-          path: '/v1/messages',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': this.anthropicApiKey!,
-            'anthropic-version': '2023-06-01',
-            'content-length': Buffer.byteLength(payload),
-          },
-          timeout: 15_000,
-        }, (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-          res.on('end', () => resolve({
-            statusCode: res.statusCode || 0,
-            body: Buffer.concat(chunks).toString('utf-8'),
-          }));
-        });
-        req.on('timeout', () => req.destroy(new Error('Haiku fallback request timed out')));
-        req.on('error', reject);
-        req.write(payload);
-        req.end();
-      });
-
-      if (result.statusCode >= 400) return null;
-
-      const body = JSON.parse(result.body) as {
-        content?: Array<{ type: string; text?: string }>;
-      };
-      const text = body.content
-        ?.filter(block => block.type === 'text')
-        .map(block => block.text || '')
-        .join('')
-        .trim() || '';
-      const json = parseJsonObject<T>(text);
-      if (json) return { json, modelId: this.haikuModelId };
-    } catch {
-      // Haiku fallback failed
     }
 
     return null;

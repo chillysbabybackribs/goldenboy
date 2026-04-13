@@ -17,6 +17,24 @@ describe('normalizeNavigationTarget', () => {
     expect(result.url).toBe('https://example.com/pricing');
   });
 
+  it('converts unsupported URL schemes to search', () => {
+    const result = normalizeNavigationTarget('mailto:test@example.com', { searchEngine: 'google' });
+    expect(result.kind).toBe('search');
+    expect(result.url).toBe('https://www.google.com/search?q=mailto%3Atest%40example.com');
+  });
+
+  it('preserves explicit URLs with uppercase schemes', () => {
+    const result = normalizeNavigationTarget('HTTP://example.com/path', { searchEngine: 'google' });
+    expect(result.kind).toBe('direct-url');
+    expect(result.url).toBe('HTTP://example.com/path');
+  });
+
+  it('keeps explicit file URLs as direct targets', () => {
+    const result = normalizeNavigationTarget('file:///tmp/example.html', { searchEngine: 'google' });
+    expect(result.kind).toBe('direct-url');
+    expect(result.url).toBe('file:///tmp/example.html');
+  });
+
   it('normalizes localhost and IP targets to http', () => {
     const localhost = normalizeNavigationTarget('localhost:5173/dashboard', { searchEngine: 'google' });
     const loopback = normalizeNavigationTarget('127.0.0.1:3000', { searchEngine: 'google' });

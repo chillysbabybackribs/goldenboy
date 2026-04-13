@@ -2,7 +2,14 @@ import { PhysicalWindowRole, SurfaceRole, LogSourceRole } from './windowRoles';
 import { TerminalSessionState, createDefaultTerminalState, TerminalCommandState, createDefaultTerminalCommandState } from './terminal';
 import { BrowserState, createDefaultBrowserState } from './browser';
 import { SurfaceActionRecord } from '../actions/surfaceActionTypes';
-import { ProviderId, ProviderRuntime, ModelOwner, createDefaultProviderRuntime } from './model';
+import {
+  HAIKU_PROVIDER_ID,
+  PRIMARY_PROVIDER_ID,
+  ProviderId,
+  ProviderRuntime,
+  ModelOwner,
+  createDefaultProviderRuntime,
+} from './model';
 
 export type WindowBounds = { x: number; y: number; width: number; height: number };
 
@@ -53,6 +60,11 @@ export type ExecutionSplitState = {
   ratio: number; // browser width fraction, 0.0 - 1.0
 };
 
+export type TokenUsageCumulative = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
 export type AppState = {
   windows: Record<PhysicalWindowRole, WindowState>;
   executionSplit: ExecutionSplitState;
@@ -66,6 +78,7 @@ export type AppState = {
   browserRuntime: BrowserState;
   surfaceActions: SurfaceActionRecord[];
   providers: Record<ProviderId, ProviderRuntime>;
+  tokenUsage: TokenUsageCumulative;
 };
 
 export function createDefaultWindowState(role: PhysicalWindowRole): WindowState {
@@ -95,10 +108,10 @@ export function createDefaultAppState(): AppState {
     browserRuntime: createDefaultBrowserState(),
     surfaceActions: [],
     providers: {
-      codex: createDefaultProviderRuntime('codex'),
-      haiku: createDefaultProviderRuntime('haiku'),
-      sonnet: createDefaultProviderRuntime('sonnet'),
+      [PRIMARY_PROVIDER_ID]: createDefaultProviderRuntime(PRIMARY_PROVIDER_ID),
+      [HAIKU_PROVIDER_ID]: createDefaultProviderRuntime(HAIKU_PROVIDER_ID),
     },
+    tokenUsage: { inputTokens: 0, outputTokens: 0 },
   };
 }
 

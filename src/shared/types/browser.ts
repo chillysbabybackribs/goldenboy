@@ -174,6 +174,8 @@ export type BrowserState = {
   profile: BrowserProfile;
   tabs: TabInfo[];
   activeTabId: string;
+  splitLeftTabId: string | null;
+  splitRightTabId: string | null;
   history: BrowserHistoryEntry[];
   bookmarks: BookmarkEntry[];
   activeDownloads: BrowserDownloadState[];
@@ -217,13 +219,15 @@ export function createDefaultBrowserState(): BrowserState {
       partition: 'persist:workspace-browser',
       persistent: true,
       userAgent: null,
-    },
-    tabs: [],
-    activeTabId: '',
-    history: [],
-    bookmarks: [],
-    activeDownloads: [],
-    completedDownloads: [],
+  },
+  tabs: [],
+  activeTabId: '',
+  splitLeftTabId: null,
+  splitRightTabId: null,
+  history: [],
+  bookmarks: [],
+  activeDownloads: [],
+  completedDownloads: [],
     recentPermissions: [],
     pendingDialogs: [],
     extensions: [],

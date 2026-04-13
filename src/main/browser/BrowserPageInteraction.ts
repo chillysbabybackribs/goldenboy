@@ -13,7 +13,6 @@ type TabEntry = {
 };
 
 type ResolveEntry = (tabId?: string) => TabEntry | undefined;
-
 export type BrowserPointerHitTestResult = {
   ok: boolean;
   error: string | null;

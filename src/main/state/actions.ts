@@ -21,6 +21,8 @@ export enum ActionType {
   ADD_SURFACE_ACTION = 'ADD_SURFACE_ACTION',
   UPDATE_SURFACE_ACTION = 'UPDATE_SURFACE_ACTION',
   SET_PROVIDER_RUNTIME = 'SET_PROVIDER_RUNTIME',
+  ACCUMULATE_TOKEN_USAGE = 'ACCUMULATE_TOKEN_USAGE',
+  RESET_TOKEN_USAGE = 'RESET_TOKEN_USAGE',
   REPLACE_STATE = 'REPLACE_STATE',
 }
 
@@ -30,7 +32,7 @@ export type Action =
   | { type: ActionType.SET_WINDOW_VISIBLE; role: PhysicalWindowRole; isVisible: boolean }
   | { type: ActionType.SET_EXECUTION_SPLIT; split: ExecutionSplitState }
   | { type: ActionType.ADD_TASK; task: TaskRecord }
-  | { type: ActionType.UPDATE_TASK; taskId: string; updates: Partial<Pick<TaskRecord, 'status' | 'updatedAt'>> }
+  | { type: ActionType.UPDATE_TASK; taskId: string; updates: Partial<Pick<TaskRecord, 'owner' | 'status' | 'updatedAt'>> }
   | { type: ActionType.SET_ACTIVE_TASK; taskId: string | null }
   | { type: ActionType.ADD_LOG; log: LogRecord }
   | { type: ActionType.SET_SURFACE_STATUS; surface: 'browser' | 'terminal'; status: SurfaceExecutionState }
@@ -40,4 +42,6 @@ export type Action =
   | { type: ActionType.ADD_SURFACE_ACTION; record: SurfaceActionRecord }
   | { type: ActionType.UPDATE_SURFACE_ACTION; id: string; updates: Partial<Pick<SurfaceActionRecord, 'status' | 'resultSummary' | 'resultData' | 'error' | 'updatedAt'>> }
   | { type: ActionType.SET_PROVIDER_RUNTIME; providerId: ProviderId; runtime: ProviderRuntime }
+  | { type: ActionType.ACCUMULATE_TOKEN_USAGE; inputTokens: number; outputTokens: number }
+  | { type: ActionType.RESET_TOKEN_USAGE }
   | { type: ActionType.REPLACE_STATE; state: AppState };

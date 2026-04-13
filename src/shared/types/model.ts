@@ -4,7 +4,13 @@
 
 // ─── Provider Identity ────────────────────────────────────────────────────
 
-export type ProviderId = 'codex' | 'haiku' | 'sonnet';
+export const PRIMARY_PROVIDER_ID = 'gpt-5.4' as const;
+export const HAIKU_PROVIDER_ID = 'haiku' as const;
+export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;
+
+export type ProviderId = typeof PROVIDER_IDS[number];
+export type LegacyProviderId = 'codex';
+export type AnyProviderId = ProviderId | LegacyProviderId;
 
 export type ProviderKind = 'cli-process' | 'api-streaming';
 
@@ -63,9 +69,55 @@ export function createDefaultProviderRuntime(id: ProviderId): ProviderRuntime {
   };
 }
 
+export function isProviderId(value: string): value is ProviderId {
+  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
+}
+
+export function isLegacyProviderId(value: string): value is LegacyProviderId {
+  return value === 'codex';
+}
+
 // ─── Task Ownership ───────────────────────────────────────────────────────
 
 export type ModelOwner = ProviderId | 'user';
+
+export type AgentTaskKind =
+  | 'orchestration'
+  | 'research'
+  | 'implementation'
+  | 'debug'
+  | 'review'
+  | 'delegation'
+  | 'browser-search'
+  | 'local-code'
+  | 'general';
+
+export const AGENT_TOOL_PACK_PRESETS = ['all', 'mode-6', 'mode-4'] as const;
+export type AgentToolPackPreset = typeof AGENT_TOOL_PACK_PRESETS[number];
+
+export type AgentTaskProfileOverride = {
+  kind?: AgentTaskKind;
+  skillNames?: string[];
+  toolPackPreset?: AgentToolPackPreset;
+  canSpawnSubagents?: boolean;
+  maxToolTurns?: number;
+  requiresBrowserSearchDirective?: boolean;
+};
+
+export type InvocationAttachment = {
+  type: 'image';
+  mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+  /** Base64-encoded image data (no data-URL prefix). */
+  data: string;
+  name?: string;
+};
+
+export type AgentInvocationOptions = {
+  systemPrompt?: string;
+  cwd?: string;
+  taskProfile?: AgentTaskProfileOverride;
+  attachments?: InvocationAttachment[];
+};
 
 // ─── Codex CLI Event Types (from `codex exec --json`) ─────────────────────
 
@@ -231,16 +283,4 @@ export const DEFAULT_HAIKU_CONFIG: HaikuInvocationConfig = {
   modelId: 'claude-haiku-4-5-20251001',
   maxTokens: 4096,
   streaming: true,
-};
-
-// ─── Sonnet Configuration ─────────────────────────────────────────────
-
-export type SonnetInvocationConfig = {
-  modelId: string;
-  maxTokens: number;
-};
-
-export const DEFAULT_SONNET_CONFIG: SonnetInvocationConfig = {
-  modelId: 'claude-sonnet-4-6-20250514',
-  maxTokens: 1024,
 };

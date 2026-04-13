@@ -18,10 +18,9 @@ export async function executeTerminalAction(
       if (!session || session.status !== 'running') {
         throw new Error('Terminal session not running');
       }
-      terminalService.write(command + '\n');
 
       // Wait for command to finish via shell integration (or timeout)
-      const result = await terminalService.waitForCommandFinish(10_000);
+      const result = await terminalService.executeCommand(command, 10_000);
 
       if (result) {
         return {

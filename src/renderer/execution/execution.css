@@ -6,12 +6,14 @@ html, body { overflow: hidden; }
 
 .execution-shell {
   display: flex; flex-direction: row;
+  width: 100%;
   height: calc(100vh - 34px); overflow: hidden;
   background: var(--bg-primary);
 }
 
 /* ── Panes ──────────────────────────────────────────────────────────────── */
-.pane { display: flex; flex-direction: column; overflow: hidden; min-width: 120px; flex: none; }
+.pane { display: flex; flex-direction: column; overflow: hidden; min-width: 120px; flex: 1 1 auto; }
+.terminal-pane { flex: 0 0 auto; }
 .pane-header { display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; height: 40px; }
 .pane-identity { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .pane-dot { width: 6px; height: 6px; border-radius: 50%; transition: all var(--duration-normal) var(--ease-out); }
@@ -23,13 +25,46 @@ html, body { overflow: hidden; }
 .btn-pane:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-hover); }
 .btn-pane:active { transform: scale(0.92); }
 .pane-content { flex: 1; overflow: hidden; position: relative; background: var(--bg-primary); }
+.btn-pane-collapse { font-size: 18px; }
+.terminal-pane.collapsed {
+  min-width: 42px;
+  border-left: 1px solid var(--border);
+}
+.terminal-pane.collapsed .pane-header {
+  height: 100%;
+  width: 42px;
+  padding: 8px 0;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.terminal-pane.collapsed .pane-identity {
+  flex-direction: column;
+  gap: 8px;
+}
+.terminal-pane.collapsed .pane-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+.terminal-pane.collapsed .pane-meta,
+.terminal-pane.collapsed .pane-status,
+.terminal-pane.collapsed #termRestartBtn,
+.terminal-pane.collapsed .pane-content {
+  display: none;
+}
+.terminal-pane.collapsed .btn-pane-collapse {
+  transform: rotate(180deg);
+}
+.execution-shell.terminal-collapsed .splitter {
+  display: none;
+}
 
 /* ── Tab Bar ──────────────────────────────────────────────────────────── */
 .tab-bar {
-  display: flex; align-items: flex-end; height: 42px;
+  display: flex; align-items: flex-start; min-height: 56px; flex-wrap: wrap;
   background: var(--bg-secondary);
   border-bottom: none;
-  flex-shrink: 0; padding: 0 4px; gap: 0; overflow: hidden;
+  flex-shrink: 0; padding: 0 4px; gap: 0; overflow: visible;
   position: relative;
 }
 /* Continuous baseline border that active tab breaks through */
@@ -38,75 +73,112 @@ html, body { overflow: hidden; }
   height: 1px; background: var(--border); z-index: 0;
 }
 .tab-list {
-  display: flex; align-items: flex-end; flex: 1;
-  overflow-x: auto; gap: 2px; min-width: 0;
-  scrollbar-width: none; padding-bottom: 0;
+  display: flex; align-items: center; flex: 1;
+  overflow-x: auto; overflow-y: hidden; gap: 2px; min-width: 0;
+  scrollbar-width: none; padding-bottom: 0; height: 56px;
 }
 .tab-list::-webkit-scrollbar { display: none; }
 
 /* ── Inactive Tab ── */
 .browser-tab {
   display: flex; align-items: center; gap: 5px;
-  padding: 0 12px; height: 34px; min-width: 72px; max-width: 240px;
+  padding: 0 12px; height: 40px; min-width: 72px; max-width: 240px;
   background: transparent;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
   cursor: pointer; flex-shrink: 0;
   font-family: var(--font-mono); font-size: 12px;
-  color: var(--text-ghost);
+  line-height: 1;
+  color: var(--text-secondary);
   transition: color 0.18s var(--ease-out),
               background 0.18s var(--ease-out),
               border-color 0.18s var(--ease-out),
               box-shadow 0.18s var(--ease-out);
   position: relative; z-index: 1;
-  margin-bottom: -1px;
+  margin-bottom: 0;
 }
 
 /* Inactive hover — ghost lifts slightly */
 .browser-tab:hover:not(.active) {
   background: rgba(255, 255, 255, 0.025);
-  color: var(--text-muted);
-  border-color: var(--border-subtle);
+  color: var(--text-primary);
+  border-color: transparent;
 }
 
 /* ── Active Tab — the lit surface ── */
 .browser-tab.active {
-  background: var(--bg-primary);
+  background: rgba(255, 255, 255, 0.02);
   color: var(--text-primary);
-  border-color: var(--border);
+  border-color: rgba(255, 255, 255, 0.6);
   border-bottom-color: var(--bg-primary);
   z-index: 2;
-  height: 38px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.3) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 10px 20px rgba(0, 0, 0, 0.45),
+    0 0 16px rgba(255, 255, 255, 0.06);
 }
 
-/* Green accent edge — thin top-light on active tab */
+/* Split-side tabs */
+.browser-tab.split-left,
+.browser-tab.split-right {
+  border-color: rgba(255, 255, 255, 0.26);
+  color: rgba(237, 237, 237, 0.88);
+}
+
+.browser-tab.split-active-side {
+  border-width: 2px;
+  border-bottom-width: 1px;
+  border-color: rgba(255, 255, 255, 0.9) !important;
+  border-bottom-color: var(--bg-primary) !important;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.22) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 10px 20px rgba(0, 0, 0, 0.4),
+    0 0 18px rgba(255, 255, 255, 0.1);
+}
+
+/* Premium active highlight — subtle neutral top edge */
 .browser-tab.active::before {
   content: ''; position: absolute;
-  top: -1px; left: 8px; right: 8px; height: 2px;
-  background: var(--accent-green);
+  top: -1px; left: 8px; right: 8px; height: 1px;
+  background: rgba(255, 255, 255, 0.16);
   border-radius: 0 0 2px 2px;
-  box-shadow: 0 0 8px rgba(0, 212, 123, 0.25),
-              0 0 20px rgba(0, 212, 123, 0.08);
-  animation: tab-light-in 0.25s var(--ease-out);
-}
-
-@keyframes tab-light-in {
-  from { opacity: 0; left: 40%; right: 40%; }
-  to { opacity: 1; left: 8px; right: 8px; }
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.14);
 }
 
 /* Subtle inner glow on active tab */
 .browser-tab.active::after {
-  content: ''; position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  content: '';
+  position: absolute;
+  inset: 0;
   border-radius: 6px 6px 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   background: linear-gradient(
-    180deg,
-    rgba(0, 212, 123, 0.03) 0%,
-    transparent 50%
+    100deg,
+    rgba(255, 255, 255, 0) 22%,
+    rgba(255, 255, 255, 0.04) 38%,
+    rgba(255, 255, 255, 0.16) 50%,
+    rgba(255, 255, 255, 0.04) 62%,
+    rgba(255, 255, 255, 0) 80%
   );
+  background-size: 200% 100%;
   pointer-events: none;
+}
+
+.browser-tab.active.tab-shimmer-on::after {
+  animation: tab-shimmer 4.2s linear forwards;
+}
+
+.browser-tab.split-left.active::after,
+.browser-tab.split-right.active::after {
+  opacity: 1;
+}
+
+@keyframes tab-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
 }
 
 /* ── Tab internals ── */
@@ -128,7 +200,7 @@ html, body { overflow: hidden; }
   display: flex; align-items: center; justify-content: center;
   width: 18px; height: 18px;
   border: none; background: transparent;
-  color: var(--text-ghost); font-size: 11px;
+  color: #ffffff; font-size: 11px;
   cursor: pointer; border-radius: 3px; padding: 0;
   flex-shrink: 0; opacity: 0;
   transition: opacity 0.12s, background 0.12s, color 0.12s;
@@ -139,47 +211,77 @@ html, body { overflow: hidden; }
   opacity: 1; background: rgba(238, 68, 68, 0.1); color: var(--accent-red);
 }
 
-/* ── Loading spinner ── */
-.tab-loading {
-  width: 14px; height: 14px; flex-shrink: 0;
-  border: 1.5px solid var(--accent-orange);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
 /* ── New Tab Button ── */
 .btn-tab-new {
-  display: flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px;
+  display: none; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
   border: 1px solid transparent; background: transparent;
-  color: var(--text-ghost); font-size: 18px; font-weight: 300;
+  color: #ffffff; font-size: 18px; font-weight: 300;
   cursor: pointer; border-radius: 6px 6px 0 0;
   flex-shrink: 0;
+  line-height: 1;
   transition: all 0.15s var(--ease-out);
-  margin-left: 2px; margin-bottom: -1px;
+  margin-left: 2px; margin-bottom: 0;
   position: relative; z-index: 1;
+  padding: 0;
 }
 .btn-tab-new:hover {
   background: rgba(255, 255, 255, 0.03);
-  color: var(--text-secondary);
+  color: #ffffff;
   border-color: var(--border-subtle);
+}
+
+.tab-context-menu {
+  position: static;
+  min-height: 1px;
+  min-width: 178px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 4px;
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.tab-context-menu.open {
+  display: flex;
+}
+
+.tab-context-item {
+  border: none;
+  border-radius: 4px;
+  padding: 6px 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tab-context-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 /* ── Tab Scroll Arrows ───────────────────────────────────────────────── */
 .tab-scroll-btn {
   display: none; align-items: center; justify-content: center;
-  width: 24px; height: 34px; flex-shrink: 0;
+  width: 24px; height: 40px; flex-shrink: 0;
   border: none; background: transparent;
-  color: var(--text-ghost); font-size: 18px; font-weight: 300;
+  color: #ffffff; font-size: 18px; font-weight: 300;
   cursor: pointer; z-index: 3;
   transition: color 0.12s, background 0.12s;
   font-family: var(--font-sans);
   position: relative;
+  line-height: 1;
+  padding: 0;
 }
 .tab-scroll-btn.visible { display: flex; }
-.tab-scroll-btn:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); }
+.tab-scroll-btn:hover { color: #ffffff; background: rgba(255, 255, 255, 0.08); }
 .tab-scroll-btn:active { color: var(--text-primary); }
 
 /* Fade edges on scroll */
@@ -191,20 +293,23 @@ html, body { overflow: hidden; }
 /* ── Tab Overflow Button ─────────────────────────────────────────────── */
 .btn-tab-overflow {
   display: none; align-items: center; justify-content: center;
-  width: 26px; height: 32px; flex-shrink: 0;
+  width: 28px; height: 40px; flex-shrink: 0;
   border: 1px solid transparent; border-radius: 4px;
   background: transparent;
-  color: var(--text-ghost); font-size: 14px;
+  color: #ffffff; font-size: 14px;
   cursor: pointer; z-index: 3;
   transition: all 0.12s var(--ease-out);
   margin-left: 2px;
   font-family: var(--font-sans);
+  line-height: 1;
+  padding: 0;
 }
 .btn-tab-overflow.visible { display: flex; }
-.btn-tab-overflow:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); border-color: var(--border-subtle); }
+.btn-tab-overflow:hover { color: #ffffff; background: rgba(255, 255, 255, 0.08); border-color: var(--border-subtle); }
 .btn-tab-overflow.active {
-  color: var(--accent-green); background: rgba(0, 212, 123, 0.06);
-  border-color: rgba(0, 212, 123, 0.15);
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 /* ── Tab Overflow Panel (in-flow, same pattern as dropdown-panel) ───── */
@@ -273,8 +378,8 @@ html, body { overflow: hidden; }
 /* ── Navigation Bar ──────────────────────────────────────────────────── */
 .browser-header { gap: 6px; padding: 0 8px; }
 .browser-nav-controls { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
-.btn-nav { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text-muted); font-size: 15px; cursor: pointer; padding: 0; line-height: 1; transition: all var(--duration-fast) var(--ease-out); font-family: var(--font-sans); }
-.btn-nav:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.btn-nav { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: none; border-radius: var(--radius-xs); background: transparent; color: #ffffff; font-size: 15px; cursor: pointer; padding: 0; line-height: 1; transition: all var(--duration-fast) var(--ease-out); font-family: var(--font-sans); }
+.btn-nav:hover:not(:disabled) { background: var(--bg-hover); color: #ffffff; }
 .btn-nav:active:not(:disabled) { transform: scale(0.9); }
 .btn-nav:disabled { color: var(--text-ghost); cursor: default; opacity: 0.4; }
 .btn-nav.btn-stop { color: var(--accent-red); font-size: 13px; }
@@ -282,8 +387,9 @@ html, body { overflow: hidden; }
 .btn-nav.btn-menu { font-size: 16px; }
 
 .browser-address-bar { flex: 1; min-width: 0; }
-.address-input { width: 100%; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--text-secondary); font-family: var(--font-mono); font-size: 13px; padding: 4px 10px; outline: none; height: 28px; transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
-.address-input:focus { border-color: var(--border-active); color: var(--text-primary); box-shadow: 0 0 0 1px var(--border-active); }
+.address-input { width: 100%; background: #151515; border: 1px solid #2a2a2a; border-radius: var(--radius-xs); color: #cfcfcf; -webkit-text-fill-color: #cfcfcf; caret-color: #f2f2f2; font-family: var(--font-mono); font-size: 13px; padding: 4px 10px; outline: none; height: 28px; transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), -webkit-text-fill-color var(--duration-fast) var(--ease-out); }
+.address-input:focus { background: #1b1b1b; border-color: #4a4a4a; color: #f2f2f2; -webkit-text-fill-color: #f2f2f2; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.address-input::selection { background: rgba(255, 255, 255, 0.2); color: #f8f8f8; -webkit-text-fill-color: #f8f8f8; }
 .address-input::placeholder { color: var(--text-ghost); }
 
 .browser-toolbar-actions { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
@@ -314,6 +420,24 @@ html, body { overflow: hidden; }
 .panel-item .item-action:hover { color: var(--accent-red); background: var(--bg-hover); }
 .panel-empty { text-align: center; padding: 16px; color: var(--text-ghost); }
 
+.diagnostics-block { margin-bottom: 16px; }
+.diagnostics-title { font-size: 12px; color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.diagnostics-summary { color: var(--text-secondary); font-size: 12px; margin-bottom: 8px; word-break: break-word; }
+.diagnostics-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.diagnostics-item.error { border-color: rgba(238, 68, 68, 0.35); }
+.diagnostics-item.warn { border-color: rgba(255, 149, 0, 0.35); }
+.diagnostics-item-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.diagnostics-badge { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; color: var(--text-primary); }
+.diagnostics-meta { font-size: 11px; color: var(--text-ghost); flex-shrink: 0; }
+.diagnostics-message, .diagnostics-url { font-size: 12px; color: var(--text-secondary); word-break: break-word; }
+.diagnostics-url { color: var(--text-ghost); margin-top: 4px; }
+
 .panel-dl-progress { width: 60px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
 .panel-dl-progress-fill { height: 100%; background: var(--accent-green); transition: width 0.2s; }
 
@@ -343,7 +467,24 @@ html, body { overflow: hidden; }
 .ext-load-btn:hover { background: var(--bg-elevated); }
 
 /* ── Browser Surface ──────────────────────────────────────────────────── */
-.browser-surface-area { width: 100%; height: 100%; background: var(--bg-primary); }
+.browser-surface-area {
+  width: 100%;
+  height: 100%;
+  background: var(--bg-primary);
+  position: relative;
+}
+
+.browser-surface-area.split-active-left::after,
+.browser-surface-area.split-active-right::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  left: calc(50% - 1px);
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, 0.2) 50%, transparent 100%);
+}
 
 /* ── Terminal Surface ──────────────────────────────────────────────────── */
 .terminal-surface { width: 100%; height: 100%; overflow: hidden; background: #000000; padding: 4px 2px 2px 4px; }

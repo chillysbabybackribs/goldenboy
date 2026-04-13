@@ -6,11 +6,12 @@ export type CachedFileChunk = {
   language: string;
   startLine: number;
   endLine: number;
-  text: string;
   ordinal: number;
+  charCount: number;
   tokenEstimate: number;
   contentHash: string;
   indexedAt: number;
+  text?: string;
 };
 
 export type CachedFileRecord = {
@@ -20,6 +21,7 @@ export type CachedFileRecord = {
   language: string;
   contentHash: string;
   sizeBytes: number;
+  mtimeMs: number;
   chunkIds: string[];
   indexedAt: number;
 };

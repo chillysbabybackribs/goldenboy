@@ -16,7 +16,8 @@ A locally-hosted agent workbench that runs AI-driven browser automation and term
 ```
 V2 Workspace (Electron)
 ├─ Main Process
-│  ├─ AgentRuntime → HaikuProvider (Anthropic Haiku 4.5)
+│  ├─ AgentRuntime → CodexProvider (`gpt-5.4`, `gpt-5.3-codex-spark`)
+│  ├─ AgentRuntime → HaikuProvider (`claude-haiku-4-5-20251001`)
 │  ├─ AgentToolExecutor → ConstraintValidator
 │  ├─ SubAgentManager
 │  ├─ BrowserService + BrowserPerception
@@ -36,7 +37,7 @@ npm install
 npm start
 ```
 
-**Requirements**: Node.js 18+, Electron 28+, Anthropic API key.
+**Requirements**: Node.js 18+, Electron 28+, Codex CLI installed and authenticated. For Haiku, set `ANTHROPIC_API_KEY`.
 
 ## Benchmarks
 

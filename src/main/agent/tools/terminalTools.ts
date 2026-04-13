@@ -69,8 +69,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
         const maxOutputChars = Math.min(Math.max(optionalNumber(obj, 'maxOutputChars', 12_000), 1_000), 64_000);
         const effectiveCommand = commandWithCwd(command, cwd);
 
-        terminalService.write(`${effectiveCommand}\n`);
-        const result = await terminalService.waitForCommandFinish(timeoutMs);
+        const result = await terminalService.executeCommand(effectiveCommand, timeoutMs);
 
         if (!result) {
           const output = terminalService.getRecentOutput(80);

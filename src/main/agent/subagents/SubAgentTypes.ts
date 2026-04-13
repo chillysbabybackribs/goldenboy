@@ -1,4 +1,5 @@
-import { AgentMode, AgentToolName } from '../AgentTypes';
+import type { ProviderId } from '../../../shared/types/model';
+import { AgentMode, AgentToolName, AgentToolStatus, ValidationStatus } from '../AgentTypes';
 
 export type SubAgentStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -8,6 +9,7 @@ export type SubAgentSpawnInput = {
   role?: string;
   mode?: AgentMode;
   inheritedContext?: 'full' | 'summary' | 'none';
+  providerId?: ProviderId | 'auto';
   allowedTools?: 'all' | AgentToolName[];
   canSpawnSubagents?: boolean;
 };
@@ -32,6 +34,24 @@ export type SubAgentResult = {
   summary: string;
   findings: string[];
   changedFiles: string[];
+  commands: string[];
+  blockers: string[];
+  toolCalls: SubAgentToolCallSummary[];
+  validation: SubAgentValidationSummary;
+};
+
+export type SubAgentToolCallSummary = {
+  toolName: AgentToolName;
+  status: AgentToolStatus;
+  summary: string;
+  validationStatus?: ValidationStatus;
+};
+
+export type SubAgentValidationSummary = {
+  total: number;
+  valid: number;
+  invalid: number;
+  incomplete: number;
 };
 
 export type SubAgentWaitInput = {

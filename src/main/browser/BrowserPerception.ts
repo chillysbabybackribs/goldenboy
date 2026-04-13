@@ -40,8 +40,8 @@ function normalizeActionable(raw: any, tabId: string): BrowserActionableElement 
   return {
     id: raw.id || generateId('act'),
     ref: {
-      tabId,
-      frameId: null,
+      tabId: typeof raw.tabId === 'string' && raw.tabId ? raw.tabId : tabId,
+      frameId: typeof raw.frameId === 'string' ? raw.frameId : null,
       selector: raw.selector || '',
     },
     role: raw.role || '',
@@ -61,8 +61,8 @@ function normalizeField(raw: any, tabId: string): BrowserFormFieldModel {
   return {
     id: raw.id || generateId('field'),
     ref: {
-      tabId,
-      frameId: null,
+      tabId: typeof raw.tabId === 'string' && raw.tabId ? raw.tabId : tabId,
+      frameId: typeof raw.frameId === 'string' ? raw.frameId : null,
       selector: raw.selector || '',
     },
     kind: raw.kind || 'unknown',
@@ -78,7 +78,11 @@ function normalizeField(raw: any, tabId: string): BrowserFormFieldModel {
 function normalizeForm(raw: any, tabId: string): BrowserFormModel {
   return {
     id: raw.id || generateId('form'),
-    formRef: raw.selector ? { tabId, frameId: null, selector: raw.selector } : null,
+    formRef: raw.selector ? {
+      tabId: typeof raw.tabId === 'string' && raw.tabId ? raw.tabId : tabId,
+      frameId: typeof raw.frameId === 'string' ? raw.frameId : null,
+      selector: raw.selector,
+    } : null,
     purpose: raw.purpose || 'unknown',
     method: raw.method || 'GET',
     action: raw.action || '',

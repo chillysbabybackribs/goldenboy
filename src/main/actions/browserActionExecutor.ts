@@ -136,8 +136,8 @@ export async function executeBrowserAction(
     }
 
     case 'browser.create-tab': {
-      const { url } = payload as BrowserCreateTabPayload;
-      const tab = browserService.createTab(url);
+      const { url, insertAfterTabId } = payload as BrowserCreateTabPayload;
+      const tab = browserService.createTab(url, insertAfterTabId);
       return {
         summary: url ? `Opened tab: ${url}` : `Opened new tab (${tab.id})`,
         data: { tabId: tab.id, url: url || '', totalTabs: browserService.getTabs().length },

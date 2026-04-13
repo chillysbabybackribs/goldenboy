@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import { generateId } from '../../shared/utils/ids';
-import type { ProviderId } from '../../shared/types/model';
+import type { AnyProviderId } from '../../shared/types/model';
 
 export type ChatMessageRole = 'user' | 'assistant' | 'tool' | 'system';
 
@@ -10,7 +10,7 @@ export type ChatMessageMeta = {
   id: string;
   taskId: string;
   role: ChatMessageRole;
-  providerId?: ProviderId;
+  providerId?: AnyProviderId;
   runId?: string;
   createdAt: number;
   charCount: number;
@@ -22,7 +22,7 @@ export type ChatMessageMeta = {
 export type ChatSearchResult = {
   messageId: string;
   role: ChatMessageRole;
-  providerId?: ProviderId;
+  providerId?: AnyProviderId;
   createdAt: number;
   preview: string;
   snippet: string;
@@ -146,11 +146,11 @@ export class ChatKnowledgeStore {
     return this.recordMessage({ taskId, role: 'user', text });
   }
 
-  recordAssistantMessage(taskId: string, text: string, providerId?: ProviderId, runId?: string): ChatMessageMeta {
+  recordAssistantMessage(taskId: string, text: string, providerId?: AnyProviderId, runId?: string): ChatMessageMeta {
     return this.recordMessage({ taskId, role: 'assistant', providerId, runId, text });
   }
 
-  recordToolMessage(taskId: string, text: string, providerId?: ProviderId, runId?: string): ChatMessageMeta {
+  recordToolMessage(taskId: string, text: string, providerId?: AnyProviderId, runId?: string): ChatMessageMeta {
     return this.recordMessage({ taskId, role: 'tool', providerId, runId, text });
   }
 
@@ -158,7 +158,7 @@ export class ChatKnowledgeStore {
     taskId: string;
     role: ChatMessageRole;
     text: string;
-    providerId?: ProviderId;
+    providerId?: AnyProviderId;
     runId?: string;
   }): ChatMessageMeta {
     const text = input.text || '';

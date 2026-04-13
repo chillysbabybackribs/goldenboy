@@ -27,6 +27,16 @@ function broadcastState(): void {
   broadcastOnChannel(IPC_CHANNELS.STATE_UPDATE, appStateStore.getState());
 }
 
+let stateBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleStateBroadcast(): void {
+  if (stateBroadcastTimer) return;
+  stateBroadcastTimer = setTimeout(() => {
+    stateBroadcastTimer = null;
+    broadcastState();
+  }, 16);
+}
+
 export function initEventRouter(): void {
   // Every event gets broadcast to renderers
   eventBus.onAny((event) => {
@@ -35,7 +45,7 @@ export function initEventRouter(): void {
 
   // State changes trigger state broadcast
   appStateStore.subscribe(() => {
-    broadcastState();
+    scheduleStateBroadcast();
   });
 
   // Wire specific events to state mutations

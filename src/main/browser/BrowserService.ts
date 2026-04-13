@@ -5,16 +5,14 @@
 // Manages multiple tabs (each a WebContentsView), bookmarks, extensions,
 // settings, zoom, find-in-page, downloads, and permissions.
 
-import { BrowserWindow, WebContentsView, session, DownloadItem, Event as ElectronEvent, Menu, MenuItem, clipboard } from 'electron';
-import * as fs from 'fs';
+import { BrowserWindow, WebContentsView, session, shell, Event as ElectronEvent, Menu, MenuItem, clipboard, WebContents } from 'electron';
 import * as path from 'path';
 import {
   BrowserState, BrowserNavigationState, BrowserSurfaceStatus,
   BrowserHistoryEntry, BrowserDownloadState, BrowserPermissionRequest,
   BrowserErrorInfo, BrowserProfile, TabInfo, BookmarkEntry, ExtensionInfo,
   FindInPageState, BrowserSettings, BrowserAuthDiagnostics,
-  BrowserJavaScriptDialog, BrowserJavaScriptDialogType,
-  createDefaultBrowserState, createDefaultSettings,
+  BrowserJavaScriptDialog, createDefaultSettings,
 } from '../../shared/types/browser';
 import {
   BrowserActionableElement,
@@ -37,9 +35,10 @@ import {
   loadBookmarks, saveBookmarks, loadSettings, saveSettings, flushAll,
 } from './browserSessionStore';
 import { resolvePermission, classifyPermission } from './browserPermissions';
-import { createDownloadEntry, resolveDownloadPath } from './browserDownloads';
 import { importChromeCookies, isChromeAvailable, promptCookieImport } from './chromeCookieImporter';
 import { BrowserInstrumentation } from './BrowserInstrumentation';
+import { BrowserDownloadManager } from './BrowserDownloadManager';
+import { BrowserDialogManager } from './BrowserDialogManager';
 import { BrowserPerception } from './BrowserPerception';
 import { BrowserSiteStrategyStore } from './BrowserSiteStrategies';
 import { appendSurfaceFixture } from './BrowserIntelligenceStore';
@@ -53,12 +52,15 @@ import { PageExtractor } from '../context/pageExtractor';
 import type { DiskCache } from '../context/diskCache';
 import { pageKnowledgeStore } from '../browserKnowledge/PageKnowledgeStore';
 import { normalizeNavigationTarget } from './navigationTarget';
+import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 
 const PROFILE_ID = 'workspace-browser';
 const PARTITION = 'persist:workspace-browser';
 const MAX_HISTORY = 2000;
 const MAX_RECENT_PERMISSIONS = 50;
 const HISTORY_PERSIST_DEBOUNCE = 2000;
+const BROWSER_STATE_SYNC_DEBOUNCE = 48;
+const ENABLE_BACKGROUND_PAGE_EXTRACTION = false;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5.0;
@@ -70,60 +72,53 @@ const GOOGLE_COOKIE_DOMAIN_SUFFIXES = [
   'googleusercontent.com',
 ];
 
+/** Paths on accounts.google.com that indicate an OAuth / sign-in flow. */
+const GOOGLE_OAUTH_PATH_PATTERNS = [
+  '/o/oauth2/',
+  '/signin/oauth',
+  '/AccountChooser',
+  '/ServiceLogin',
+  '/v3/signin/',
+  '/signin/v2/',
+];
+
+/** How long to keep the local OAuth relay server alive (ms). */
+const OAUTH_RELAY_TIMEOUT_MS = 5 * 60 * 1000;
+const ALLOWED_POPUP_PROTOCOLS = new Set(['http:', 'https:']);
+const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
+
+function isSafeExternalUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    return ALLOWED_POPUP_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function isSafeNavigationUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed === 'about:blank') return false;
+  try {
+    const parsed = new URL(trimmed);
+    return ALLOWED_NAVIGATION_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function isSafeUrlForTabOpen(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  if (trimmed === 'about:blank') return true;
+  return isSafeNavigationUrl(trimmed);
+}
+
 type TabEntry = {
   id: string;
   view: WebContentsView;
   info: TabInfo;
 };
-
-type PromptDialogResolution = {
-  dialogId: string;
-  resolved: boolean;
-  value: string | null;
-};
-
-type DownloadStartWaiter = {
-  id: string;
-  tabId: string | null;
-  url: string;
-  resolve: (download: BrowserDownloadState) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-
-const MAIN_WORLD_PROMPT_SHIM_SCRIPT = String.raw`
-(() => {
-  const pageWindow = window;
-  if (pageWindow.__browserPromptShimInstalled) return true;
-  const bridge = pageWindow.browserPromptShim;
-  if (!bridge || typeof bridge.openSync !== 'function') return false;
-
-  const nativePrompt = typeof pageWindow.prompt === 'function'
-    ? pageWindow.prompt.bind(pageWindow)
-    : null;
-
-  pageWindow.prompt = function browserPromptShim(message, defaultValue) {
-    const text = typeof message === 'string' ? message : '';
-    const defaultPrompt = typeof defaultValue === 'string' ? defaultValue : '';
-
-    if (nativePrompt) {
-      try {
-        return nativePrompt(text, defaultPrompt);
-      } catch (err) {
-        const errorText = err instanceof Error ? err.message : String(err);
-        if (!/prompt\(\)\s+is\s+not\s+supported/i.test(errorText)) {
-          throw err;
-        }
-      }
-    }
-
-    return bridge.openSync(text, defaultPrompt, pageWindow.location?.href || '');
-  };
-
-  pageWindow.__browserPromptShimInstalled = true;
-  return true;
-})()
-`;
 
 function getBrowserTabPreloadPath(): string {
   return path.join(__dirname, '..', '..', '..', 'preload', 'preload', 'browserTabPreload.js');
@@ -144,16 +139,13 @@ function isGoogleCookieDomain(domain: string): boolean {
 export class BrowserService {
   private tabs: Map<string, TabEntry> = new Map();
   private activeTabId: string = '';
+  private splitLeftTabId: string | null = null;
+  private splitRightTabId: string | null = null;
   private hostWindow: BrowserWindow | null = null;
   private profile: BrowserProfile;
   private history: BrowserHistoryEntry[] = [];
   private bookmarks: BookmarkEntry[] = [];
-  private activeDownloads: Map<string, { entry: BrowserDownloadState; item: DownloadItem }> = new Map();
-  private completedDownloads: BrowserDownloadState[] = [];
-  private downloadStartWaiters: Map<string, DownloadStartWaiter> = new Map();
   private recentPermissions: BrowserPermissionRequest[] = [];
-  private pendingDialogs: Map<string, BrowserJavaScriptDialog> = new Map();
-  private promptDialogResolutions: Map<string, PromptDialogResolution> = new Map();
   private extensions: ExtensionInfo[] = [];
   private findState: FindInPageState = { active: false, query: '', activeMatch: 0, totalMatches: 0 };
   private settings: BrowserSettings;
@@ -164,7 +156,19 @@ export class BrowserService {
   private currentBounds = { x: 0, y: 0, width: 0, height: 0 };
   private sessionInstance: Electron.Session | null = null;
   private lastGoogleCookieMismatchAt: number | null = null;
+  private oauthRelayTimer: ReturnType<typeof setTimeout> | null = null;
   private instrumentation = new BrowserInstrumentation();
+  private downloadManager = new BrowserDownloadManager({
+    resolveTabIdByWebContentsId: (webContentsId) => this.resolveTabIdByWebContentsId(webContentsId),
+    emitLog: (level, message) => this.emitLog(level, message),
+    syncState: () => this.syncState(),
+  });
+  private dialogManager = new BrowserDialogManager({
+    resolveEntry: (tabId) => this.resolveEntry(tabId),
+    resolveTabIdByWebContentsId: (webContentsId) => this.resolveTabIdByWebContentsId(webContentsId),
+    emitLog: (level, message) => this.emitLog(level, message),
+    syncState: () => this.syncState(),
+  });
   private perception = new BrowserPerception((expression, tabId) => this.executeInPage(expression, tabId));
   private siteStrategies = new BrowserSiteStrategyStore();
   private pageInteraction = new BrowserPageInteraction((tabId) => this.resolveEntry(tabId));
@@ -189,6 +193,7 @@ export class BrowserService {
   );
   private diskCache: DiskCache | null = null;
   private activeTaskId: string | null = null;
+  private stateSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.profile = { id: PROFILE_ID, partition: PARTITION, persistent: true, userAgent: null };
@@ -263,6 +268,7 @@ export class BrowserService {
     const ses = session.fromPartition(PARTITION);
     this.sessionInstance = ses;
     this.initSession(ses);
+    this.downloadManager.attachSession(ses);
     this.instrumentation.attachSession(ses);
 
     this.createdAt = Date.now();
@@ -323,6 +329,12 @@ export class BrowserService {
 
   private initSession(ses: Electron.Session): void {
     // Present the embedded browser as a standard Chromium browser for Google flows.
+    ses.setPermissionCheckHandler((_webContents, permission) => {
+      const permType = classifyPermission(permission);
+      const decision = resolvePermission(permType);
+      return decision === 'granted';
+    });
+
     ses.webRequest.onBeforeSendHeaders({ urls: ['*://*.google.com/*', '*://*.youtube.com/*'] }, (details, callback) => {
       const ua = details.requestHeaders['User-Agent'];
       if (ua && ua.includes('Electron')) {
@@ -350,89 +362,46 @@ export class BrowserService {
       this.syncState();
     });
 
-    ses.on('will-download', (_event: ElectronEvent, item: DownloadItem, webContents) => {
-      const filename = item.getFilename();
-      const savePath = resolveDownloadPath(filename);
-      item.setSavePath(savePath);
-      const entry = createDownloadEntry(item.getURL(), filename, savePath);
-      entry.sourceTabId = webContents ? this.resolveTabIdByWebContentsId(webContents.id) : null;
-      entry.sourcePageUrl = webContents?.getURL() || null;
-      this.activeDownloads.set(entry.id, { entry, item });
-      this.resolveDownloadStartWaiters(entry);
-      eventBus.emit(AppEventType.BROWSER_DOWNLOAD_STARTED, { download: { ...entry } });
-      this.emitLog('info', `Download started: ${filename}`);
-      this.syncState();
-
-      item.on('updated', (_e: ElectronEvent, state: string) => {
-        entry.receivedBytes = item.getReceivedBytes();
-        entry.totalBytes = item.getTotalBytes();
-        entry.state = state === 'progressing' ? 'progressing' : 'interrupted';
-        eventBus.emit(AppEventType.BROWSER_DOWNLOAD_UPDATED, { download: { ...entry } });
-        this.syncState();
-      });
-
-      item.once('done', (_e: ElectronEvent, state: string) => {
-        entry.receivedBytes = item.getReceivedBytes();
-        entry.totalBytes = item.getTotalBytes();
-        entry.state = state === 'completed'
-          ? 'completed'
-          : state === 'interrupted'
-            ? 'interrupted'
-            : 'cancelled';
-        entry.completedAt = Date.now();
-        try {
-          if (fs.existsSync(savePath)) {
-            const stats = fs.statSync(savePath);
-            entry.existsOnDisk = stats.isFile();
-            entry.fileSize = stats.isFile() ? stats.size : null;
-          } else {
-            entry.existsOnDisk = false;
-            entry.fileSize = null;
-          }
-        } catch (err) {
-          entry.existsOnDisk = false;
-          entry.fileSize = null;
-          entry.error = err instanceof Error ? err.message : String(err);
-        }
-        if (entry.state === 'completed' && entry.existsOnDisk === false && !entry.error) {
-          entry.error = 'Download completed but saved file was not found on disk';
-        }
-        eventBus.emit(AppEventType.BROWSER_DOWNLOAD_COMPLETED, { download: { ...entry } });
-        this.emitLog(entry.state === 'completed' ? 'info' : 'warn', `Download ${entry.state}: ${filename}`);
-        this.activeDownloads.delete(entry.id);
-        this.completedDownloads.push({ ...entry });
-        if (this.completedDownloads.length > 100) this.completedDownloads = this.completedDownloads.slice(-100);
-        this.syncState();
-      });
-    });
   }
 
   // ─── Tab Management ──────────────────────────────────────────────────────
 
-  createTab(url?: string): TabInfo {
-    const tab = this.createTabInternal(url || this.settings.homepage, true);
+  createTab(url?: string, insertAfterTabId?: string): TabInfo {
+    const tab = this.createTabInternal(url || this.settings.homepage, true, insertAfterTabId);
     this.activateTabInternal(tab.id);
     this.syncState();
     return tab.info;
   }
 
-  private createTabInternal(url: string, notify: boolean): TabEntry {
+  private createTabInternal(url: string, notify: boolean, insertAfterTabId?: string): TabEntry {
     if (!this.hostWindow || !this.sessionInstance) throw new Error('Browser not initialized');
-    const id = generateId('tab');
+    const view = this.createBrowserTabView();
+    const entry = this.registerTab(view, notify, insertAfterTabId);
+    if (url && url !== 'about:blank') {
+      this.navigateTab(entry.id, url);
+    }
+    return entry;
+  }
 
-    const view = new WebContentsView({
-      webPreferences: {
-        session: this.sessionInstance,
-        preload: getBrowserTabPreloadPath(),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webviewTag: false,
-        spellcheck: true,
-        javascript: this.settings.javascript,
-        images: this.settings.images,
-      },
-    });
+  private createBrowserTabView(existingWebContents?: WebContents): WebContentsView {
+    if (!this.sessionInstance) throw new Error('Browser not initialized');
+    const view = existingWebContents
+      ? new WebContentsView({ webContents: existingWebContents })
+      : new WebContentsView({
+        webPreferences: {
+            session: this.sessionInstance,
+            preload: getBrowserTabPreloadPath(),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: true,
+            webviewTag: false,
+            allowRunningInsecureContent: false,
+            spellcheck: false,
+            javascript: this.settings.javascript,
+            images: this.settings.images,
+          },
+        });
 
     const currentUserAgent = view.webContents.getUserAgent();
     const effectiveUserAgent = sanitizeBrowserUserAgent(currentUserAgent);
@@ -440,9 +409,12 @@ export class BrowserService {
       view.webContents.setUserAgent(effectiveUserAgent);
     }
 
-    // Set zoom from settings
     view.webContents.setZoomFactor(this.settings.defaultZoom);
+    return view;
+  }
 
+  private registerTab(view: WebContentsView, notify: boolean, insertAfterTabId?: string): TabEntry {
+    const id = generateId('tab');
     const info: TabInfo = {
       id,
       navigation: {
@@ -458,19 +430,16 @@ export class BrowserService {
 
     const entry: TabEntry = { id, view, info };
     this.tabs.set(id, entry);
+    if (insertAfterTabId) {
+      this.placeTabAfter(id, insertAfterTabId);
+    }
 
     this.wireTabEvents(entry);
     this.instrumentation.attachTab(id, view.webContents);
-    this.attachDialogDebugger(entry);
-
-    // Don't add to contentView yet — only the active tab is visible
-    if (url && url !== 'about:blank') {
-      this.navigateTab(id, url);
-    }
 
     if (notify) {
       eventBus.emit(AppEventType.BROWSER_TAB_CREATED, { tab: { ...info } });
-      this.emitLog('info', `New tab created`);
+      this.emitLog('info', 'New tab created');
     }
 
     return entry;
@@ -494,14 +463,17 @@ export class BrowserService {
       if (nextId) this.activateTabInternal(nextId);
     }
 
-    // Remove from contentView and destroy
-    if (this.hostWindow && !this.hostWindow.isDestroyed()) {
-      try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
+    if (this.splitLeftTabId === tabId) {
+      this.splitLeftTabId = null;
     }
-    this.instrumentation.detachTab(tabId, entry.view.webContents.id);
-    this.clearPendingDialogsForTab(tabId);
-    try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
+    if (this.splitRightTabId === tabId) {
+      this.splitRightTabId = null;
+    }
+
+    this.destroyTabEntry(entry);
     this.tabs.delete(tabId);
+    this.normalizeSplitState();
+    this.applyTabLayout();
 
     eventBus.emit(AppEventType.BROWSER_TAB_CLOSED, { tabId });
     this.syncState();
@@ -515,24 +487,8 @@ export class BrowserService {
   private activateTabInternal(tabId: string): void {
     const entry = this.tabs.get(tabId);
     if (!entry || !this.hostWindow) return;
-
-    // Hide current active tab
-    if (this.activeTabId && this.activeTabId !== tabId) {
-      const prev = this.tabs.get(this.activeTabId);
-      if (prev && this.hostWindow && !this.hostWindow.isDestroyed()) {
-        try { this.hostWindow.contentView.removeChildView(prev.view); } catch {}
-      }
-    }
-
-    // Show new active tab
     this.activeTabId = tabId;
-    this.hostWindow.contentView.addChildView(entry.view);
-    entry.view.setBounds({
-      x: Math.round(this.currentBounds.x),
-      y: Math.round(this.currentBounds.y),
-      width: Math.round(Math.max(1, this.currentBounds.width)),
-      height: Math.round(Math.max(1, this.currentBounds.height)),
-    });
+    this.applyTabLayout();
 
     // Update find state to match active tab
     this.findState = { active: false, query: '', activeMatch: 0, totalMatches: 0 };
@@ -544,6 +500,136 @@ export class BrowserService {
     return Array.from(this.tabs.values()).map(e => ({ ...e.info }));
   }
 
+  splitTab(tabId?: string): TabInfo {
+    const source = this.resolveEntry(tabId);
+    if (!source) {
+      throw new Error('No tab available to split');
+    }
+    const sourceUrl = source.info.navigation.url || source.view.webContents.getURL();
+    const urlToOpen = isSafeUrlForTabOpen(sourceUrl) ? sourceUrl : this.settings.homepage;
+
+    if (this.splitRightTabId) {
+      const oldRight = this.tabs.get(this.splitRightTabId);
+      if (oldRight) this.closeTab(this.splitRightTabId);
+      this.splitRightTabId = null;
+    }
+
+    const rightTab = this.createTabInternal(urlToOpen, true, source.id);
+    this.splitLeftTabId = source.id;
+    this.splitRightTabId = rightTab.id;
+    this.activateTabInternal(source.id);
+    this.syncState();
+    return rightTab.info;
+  }
+
+  clearSplitView(): void {
+    if (!this.splitRightTabId) {
+      return;
+    }
+
+    const rightId = this.splitRightTabId;
+    const rightEntry = this.tabs.get(rightId);
+    this.splitRightTabId = null;
+
+    if (!rightEntry) {
+      this.applyTabLayout();
+      this.syncState();
+      return;
+    }
+
+    this.tabs.delete(rightId);
+    this.destroyTabEntry(rightEntry);
+    this.normalizeSplitState();
+    this.applyTabLayout();
+    this.syncState();
+  }
+
+  private placeTabAfter(tabId: string, insertAfterTabId: string): void {
+    const entries = Array.from(this.tabs.entries());
+    const fromIndex = entries.findIndex(([id]) => id === tabId);
+    const afterIndex = entries.findIndex(([id]) => id === insertAfterTabId);
+    if (fromIndex === -1 || afterIndex === -1) return;
+    if (fromIndex === afterIndex + 1) return;
+
+    const [entry] = entries.splice(fromIndex, 1);
+    entries.splice(afterIndex + 1, 0, entry);
+    this.tabs = new Map(entries);
+  }
+
+  private normalizeSplitState(): void {
+    if (this.splitLeftTabId && !this.tabs.has(this.splitLeftTabId)) this.splitLeftTabId = null;
+    if (this.splitRightTabId && !this.tabs.has(this.splitRightTabId)) this.splitRightTabId = null;
+    if (this.splitLeftTabId && this.splitRightTabId && this.splitLeftTabId === this.splitRightTabId) {
+      this.splitRightTabId = null;
+    }
+
+    if (!this.activeTabId || !this.tabs.has(this.activeTabId)) {
+      this.activeTabId = Array.from(this.tabs.keys())[0] || '';
+    }
+
+    if (!this.splitLeftTabId && this.tabs.size > 0) {
+      this.splitLeftTabId = this.activeTabId || Array.from(this.tabs.keys())[0];
+    }
+
+    if (this.tabs.size <= 1 || !this.splitRightTabId) {
+      this.splitRightTabId = null;
+      return;
+    }
+
+    if (this.splitLeftTabId && !this.tabs.has(this.splitLeftTabId)) {
+      this.splitLeftTabId = this.activeTabId || Array.from(this.tabs.keys())[0] || null;
+    }
+  }
+
+  private destroyTabEntry(entry: TabEntry): void {
+    if (this.hostWindow && !this.hostWindow.isDestroyed()) {
+      try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
+    }
+    this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
+    pageKnowledgeStore.removePagesForTab(entry.id);
+    this.dialogManager.detachTab(entry.id);
+    try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
+  }
+
+  private applyTabLayout(): void {
+    if (!this.hostWindow || this.hostWindow.isDestroyed()) return;
+    if (this.tabs.size === 0) return;
+
+    this.normalizeSplitState();
+
+    for (const [, entry] of this.tabs.entries()) {
+      try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
+    }
+
+    const x = Math.round(this.currentBounds.x);
+    const y = Math.round(this.currentBounds.y);
+    const width = Math.max(1, Math.round(this.currentBounds.width));
+    const height = Math.max(1, Math.round(this.currentBounds.height));
+
+    if (this.splitLeftTabId && this.splitRightTabId) {
+      const leftEntry = this.tabs.get(this.splitLeftTabId);
+      const rightEntry = this.tabs.get(this.splitRightTabId);
+      if (leftEntry && rightEntry) {
+        const dividerWidth = width >= 220 ? 2 : 0;
+        const availableWidth = Math.max(1, width - dividerWidth);
+        const leftWidth = Math.max(1, Math.floor(availableWidth / 2));
+        const rightWidth = Math.max(1, availableWidth - leftWidth);
+        leftEntry.view.setBounds({ x, y, width: leftWidth, height });
+        rightEntry.view.setBounds({ x: x + leftWidth + dividerWidth, y, width: rightWidth, height });
+        this.hostWindow.contentView.addChildView(leftEntry.view);
+        if (rightEntry.id !== leftEntry.id) {
+          this.hostWindow.contentView.addChildView(rightEntry.view);
+        }
+        return;
+      }
+    }
+
+    const entry = this.getActiveEntry();
+    if (!entry) return;
+    this.hostWindow.contentView.addChildView(entry.view);
+    entry.view.setBounds({ x, y, width, height });
+  }
+
   private getActiveEntry(): TabEntry | undefined {
     return this.tabs.get(this.activeTabId);
   }
@@ -553,8 +639,14 @@ export class BrowserService {
     const info = entry.info;
     const nav = info.navigation;
 
+    wc.on('focus', () => {
+      if (this.activeTabId !== entry.id) {
+        this.activateTabInternal(entry.id);
+      }
+    });
+
     wc.on('dom-ready', () => {
-      void this.installPromptShimInPage(entry);
+      void this.dialogManager.installPromptShimInPage(entry);
     });
 
     wc.on('did-start-loading', () => {
@@ -570,17 +662,32 @@ export class BrowserService {
       info.status = 'ready';
       this.syncTabAndMaybeNavigation(entry);
 
-      // Auto-cache cleaned page knowledge for token-efficient retrieval.
-      this.cachePageKnowledge(entry.id).catch(() => {});
+      // Background extraction is expensive because it clones and parses the
+      // full page DOM after every navigation. Keep browser analysis on-demand.
+      if (ENABLE_BACKGROUND_PAGE_EXTRACTION) {
+        this.cachePageKnowledge(entry.id).catch(() => {});
+        if (this.diskCache && this.activeTaskId) {
+          this.extractToDisk(entry.id).catch(() => {});
+        }
+      }
+    });
 
-      // Auto-extract to disk if disk cache is active
-      if (this.diskCache && this.activeTaskId) {
-        this.extractToDisk(entry.id).catch(() => {});
+    wc.on('will-navigate', (e: ElectronEvent, url: string) => {
+      if (url !== 'about:blank' && !isSafeNavigationUrl(url)) {
+        e.preventDefault();
+        this.emitLog('warn', `Blocked unsafe navigation target in tab ${entry.id}: ${url}`);
+        return;
+      }
+
+      if (this.isGoogleOAuthUrl(url)) {
+        e.preventDefault();
+        this.emitLog('info', `Intercepted Google sign-in — opening in system browser`);
+        void this.openGoogleSignInExternally(entry, url);
       }
     });
 
     wc.on('did-navigate', (_e: ElectronEvent, url: string) => {
-      this.clearPendingDialogsForTab(entry.id);
+      this.dialogManager.clearPendingDialogsForTab(entry.id);
       nav.url = url;
       nav.canGoBack = wc.navigationHistory.canGoBack();
       nav.canGoForward = wc.navigationHistory.canGoForward();
@@ -588,10 +695,17 @@ export class BrowserService {
       this.addHistoryEntry(url, nav.title, nav.favicon);
       this.syncTabAndMaybeNavigation(entry);
       void this.handleGoogleAuthNavigation(entry, url);
+
+      // Fallback: catch Google OAuth URLs that arrived via server-side
+      // redirects (302) which bypass will-navigate.
+      if (this.isGoogleOAuthUrl(url)) {
+        this.emitLog('info', `Intercepted Google sign-in (redirect) — opening in system browser`);
+        void this.openGoogleSignInExternally(entry, url);
+      }
     });
 
     wc.on('did-navigate-in-page', (_e: ElectronEvent, url: string) => {
-      this.clearPendingDialogsForTab(entry.id);
+      this.dialogManager.clearPendingDialogsForTab(entry.id);
       nav.url = url;
       nav.canGoBack = wc.navigationHistory.canGoBack();
       nav.canGoForward = wc.navigationHistory.canGoForward();
@@ -623,6 +737,14 @@ export class BrowserService {
       info.status = 'error';
       this.syncTabAndMaybeNavigation(entry);
       this.emitLog('error', `Navigation failed: ${errorDescription} (${validatedURL})`);
+    });
+
+    wc.on('found-in-page', (_e: ElectronEvent, result: Electron.FoundInPageResult) => {
+      if (!this.findState.active) return;
+      if (!this.activeTabId || entry.id !== this.activeTabId) return;
+      this.findState.activeMatch = result.activeMatchOrdinal;
+      this.findState.totalMatches = result.matches;
+      this.broadcastFind();
     });
 
     wc.on('audio-state-changed', () => {
@@ -663,7 +785,7 @@ export class BrowserService {
         menu.append(new MenuItem({ type: 'separator' }));
         menu.append(new MenuItem({
           label: 'Open Link in New Tab',
-          click: () => this.createTab(params.linkURL),
+          click: () => this.createTabIfSafe(params.linkURL),
         }));
         menu.append(new MenuItem({
           label: 'Copy Link Address',
@@ -676,7 +798,7 @@ export class BrowserService {
         menu.append(new MenuItem({ type: 'separator' }));
         menu.append(new MenuItem({
           label: 'Open Image in New Tab',
-          click: () => this.createTab(params.srcURL),
+          click: () => this.createTabIfSafe(params.srcURL),
         }));
         menu.append(new MenuItem({
           label: 'Copy Image Address',
@@ -702,92 +824,54 @@ export class BrowserService {
       menu.popup();
     });
 
-    wc.setWindowOpenHandler(({ url }) => {
-      // Open in new tab
-      this.createTab(url);
-      return { action: 'deny' };
-    });
-  }
-
-  private async installPromptShimInPage(entry: TabEntry): Promise<void> {
-    const wc = entry.view.webContents;
-    if (wc.isDestroyed()) return;
-    try {
-      await wc.executeJavaScript(MAIN_WORLD_PROMPT_SHIM_SCRIPT, true);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.emitLog('warn', `Prompt shim injection failed: ${message}`);
-    }
-  }
-
-  private attachDialogDebugger(entry: TabEntry): void {
-    const wc = entry.view.webContents;
-    const dbg = wc.debugger;
-    try {
-      if (!dbg.isAttached()) {
-        dbg.attach('1.3');
+    wc.setWindowOpenHandler((details) => {
+      const requestedUrl = typeof details.url === 'string' ? details.url.trim() : '';
+      if (requestedUrl && requestedUrl !== 'about:blank' && !isSafeExternalUrl(requestedUrl)) {
+        this.emitLog('warn', `Blocked unsafe popup URL: ${requestedUrl}`);
+        return { action: 'deny' };
       }
-      void dbg.sendCommand('Page.enable').catch(() => {});
-    } catch (err) {
-      this.emitLog('warn', `Browser dialog debugger unavailable: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
 
-    dbg.on('detach', () => {
-      for (const [id, dialog] of this.pendingDialogs.entries()) {
-        if (dialog.tabId === entry.id) this.pendingDialogs.delete(id);
-      }
-      this.syncState();
-    });
-
-    dbg.on('message', (_event, method: string, params: any) => {
-      if (method === 'Page.javascriptDialogClosed') {
-        this.clearPendingDialogsForTab(entry.id);
-        return;
-      }
-      if (method !== 'Page.javascriptDialogOpening') return;
-      const type = this.normalizeJavaScriptDialogType(params?.type);
-      const dialog: BrowserJavaScriptDialog = {
-        id: generateId('dialog'),
-        tabId: entry.id,
-        url: typeof params?.url === 'string' ? params.url : entry.info.navigation.url,
-        type,
-        backend: 'cdp',
-        message: typeof params?.message === 'string' ? params.message : '',
-        defaultPrompt: typeof params?.defaultPrompt === 'string' ? params.defaultPrompt : '',
-        openedAt: Date.now(),
+      return {
+        action: 'allow',
+        createWindow: (options: Electron.BrowserWindowConstructorOptions) => {
+          const adoptedWebContents = (options as Electron.BrowserWindowConstructorOptions & { webContents?: WebContents }).webContents;
+          const childView = this.createBrowserTabView(adoptedWebContents);
+          const childEntry = this.registerTab(childView, true);
+          const shouldActivate = details.disposition !== 'background-tab';
+          if (!adoptedWebContents && details.url && details.url !== 'about:blank') {
+            if (isSafeExternalUrl(details.url)) {
+              childEntry.info.navigation.url = details.url;
+              childEntry.view.webContents.loadURL(details.url);
+            } else {
+              childEntry.view.webContents.loadURL('about:blank');
+              return childEntry.view.webContents;
+            }
+          } else if (adoptedWebContents) {
+            const initialUrl = adoptedWebContents.getURL();
+            if (initialUrl && initialUrl !== 'about:blank' && !isSafeExternalUrl(initialUrl)) {
+              adoptedWebContents.loadURL('about:blank');
+            }
+          }
+          const existingUrl = childEntry.view.webContents.getURL();
+          if (existingUrl && existingUrl !== 'about:blank') {
+            childEntry.info.navigation.url = existingUrl;
+          }
+          const existingTitle = childEntry.view.webContents.getTitle();
+          if (existingTitle) {
+            childEntry.info.navigation.title = existingTitle;
+          }
+          if (shouldActivate) {
+            this.activateTabInternal(childEntry.id);
+          }
+          this.emitLog(
+            'info',
+            `Opened ${details.disposition || 'new window'} request in ${shouldActivate ? 'active' : 'background'} tab`,
+          );
+          this.syncState();
+          return childEntry.view.webContents;
+        },
       };
-      this.pendingDialogs.set(dialog.id, dialog);
-      this.emitLog('info', `JavaScript ${dialog.type} dialog opened: ${dialog.message || '(empty)'}`);
-      this.syncState();
     });
-  }
-
-  private normalizeJavaScriptDialogType(value: unknown): BrowserJavaScriptDialogType {
-    switch (value) {
-      case 'alert':
-      case 'confirm':
-      case 'prompt':
-      case 'beforeunload':
-        return value;
-      default:
-        return 'unknown';
-    }
-  }
-
-  private clearPendingDialogsForTab(tabId: string): void {
-    let changed = false;
-    for (const [id, dialog] of this.pendingDialogs.entries()) {
-      if (dialog.tabId !== tabId) continue;
-      this.pendingDialogs.delete(id);
-      const resolution = this.promptDialogResolutions.get(id);
-      if (resolution && !resolution.resolved) {
-        resolution.resolved = true;
-        resolution.value = null;
-      }
-      changed = true;
-    }
-    if (changed) this.syncState();
   }
 
   private resolveTabIdByWebContentsId(webContentsId: number): string | null {
@@ -797,11 +881,21 @@ export class BrowserService {
     return null;
   }
 
+  isKnownTabWebContents(webContentsId: number): boolean {
+    return this.resolveTabIdByWebContentsId(webContentsId) !== null;
+  }
+
   private syncTabAndMaybeNavigation(entry: TabEntry): void {
     eventBus.emit(AppEventType.BROWSER_TAB_UPDATED, { tab: { ...entry.info } });
     if (entry.id === this.activeTabId) {
       this.syncNavigation();
+      return;
     }
+
+    // Background tabs can still be in transient states during navigation.
+    // Emit a full state sync so renderers refresh tab-level loading/error status
+    // without requiring activation.
+    this.syncState();
   }
 
   private async handleGoogleAuthNavigation(entry: TabEntry, rawUrl: string): Promise<void> {
@@ -853,6 +947,129 @@ export class BrowserService {
     return cleared;
   }
 
+  // ─── Google OAuth System-Browser Relay ────────────────────────────────────
+
+  /**
+   * Returns true if the URL is a Google sign-in / OAuth page that should be
+   * opened in the system browser instead of the embedded one.
+   */
+  private isGoogleOAuthUrl(rawUrl: string): boolean {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return false;
+    }
+    if (parsed.hostname !== 'accounts.google.com') return false;
+    return GOOGLE_OAUTH_PATH_PATTERNS.some(p => parsed.pathname.startsWith(p));
+  }
+
+  /**
+   * Intercepts a Google OAuth navigation, opens it in the system browser,
+   * and polls for the resulting cookies to appear in Chrome's cookie store.
+   * Once detected, imports them into the Electron session so the embedded
+   * browser ends up authenticated.
+   */
+  private async openGoogleSignInExternally(entry: TabEntry, oauthUrl: string): Promise<void> {
+    if (!this.sessionInstance) return;
+
+    // Prevent duplicate relays
+    this.stopOAuthRelay();
+
+    const ses = this.sessionInstance;
+    const tabWc = entry.view.webContents;
+
+    // Extract the original destination the user was trying to reach
+    let continueUrl: string | null = null;
+    try {
+      const parsed = new URL(oauthUrl);
+      continueUrl = parsed.searchParams.get('continue')
+        || parsed.searchParams.get('redirect_uri')
+        || null;
+    } catch { /* ignore */ }
+
+    // Show a placeholder in the embedded tab while the user authenticates
+    if (!tabWc.isDestroyed()) {
+      tabWc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
+        `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;
+justify-content:center;height:100vh;margin:0;background:#0a0a0a;color:#ccc}
+.card{text-align:center;padding:40px}
+h2{margin-bottom:8px;color:#fff}
+p{color:#888;max-width:340px;line-height:1.6}
+.spinner{width:24px;height:24px;border:2px solid #333;border-top-color:#aaa;
+border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></head><body><div class="card">
+<h2>Sign in with Google</h2>
+<p>Your system browser has been opened. Complete sign-in there, then return here — this page will update automatically.</p>
+<div class="spinner"></div>
+</div></body></html>`,
+      )}`);
+    }
+
+    if (!isSafeExternalUrl(oauthUrl)) {
+      this.emitLog('warn', `Blocked unsafe OAuth URL for external launch: ${oauthUrl}`);
+      return;
+    }
+
+    // Open the original OAuth URL in the system browser
+    void shell.openExternal(oauthUrl);
+
+    // Poll Chrome's cookie database for fresh Google session cookies.
+    // Once they appear, import them and navigate to the destination.
+    const POLL_INTERVAL = 3000;
+    let elapsed = 0;
+
+    const poll = async () => {
+      elapsed += POLL_INTERVAL;
+      if (elapsed > OAUTH_RELAY_TIMEOUT_MS) {
+        this.stopOAuthRelay();
+        this.emitLog('warn', 'Google sign-in polling timed out after 5 minutes');
+        return;
+      }
+
+      try {
+        const result = await importChromeCookies(ses, true);
+        // Check if we got any Google cookies this round
+        const hasGoogleCookies = result.domains.some(d => {
+          const norm = d.replace(/^\./, '').toLowerCase();
+          return GOOGLE_COOKIE_DOMAIN_SUFFIXES.some(s => norm === s || norm.endsWith(`.${s}`));
+        });
+
+        if (hasGoogleCookies && result.imported > 0) {
+          this.emitLog('info', `Google sign-in complete: imported ${result.imported} cookies (${result.domains.length} domains)`);
+          this.stopOAuthRelay();
+
+          // Navigate to the original destination
+          const destination = (continueUrl && isSafeNavigationUrl(continueUrl))
+            ? continueUrl
+            : 'https://myaccount.google.com/';
+          if (!tabWc.isDestroyed()) {
+            tabWc.loadURL(destination);
+          }
+          return;
+        }
+      } catch (err) {
+        this.emitLog('warn', `OAuth poll: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Keep polling
+      this.oauthRelayTimer = setTimeout(() => void poll(), POLL_INTERVAL);
+    };
+
+    // Start polling after initial delay to let the system browser load
+    this.oauthRelayTimer = setTimeout(() => void poll(), POLL_INTERVAL);
+  }
+
+  private stopOAuthRelay(): void {
+    if (this.oauthRelayTimer) {
+      clearTimeout(this.oauthRelayTimer);
+      this.oauthRelayTimer = null;
+    }
+  }
+
   // ─── Navigation ──────────────────────────────────────────────────────────
 
   navigate(url: string): void {
@@ -864,10 +1081,22 @@ export class BrowserService {
     if (!entry) return;
     const normalized = normalizeNavigationTarget(url, {
       searchEngine: this.settings.searchEngine,
-      cwd: process.cwd(),
+      cwd: APP_WORKSPACE_ROOT,
     });
+    if (!isSafeUrlForTabOpen(normalized.url)) {
+      this.emitLog('warn', `Blocked unsafe navigation target: ${normalized.url}`);
+      return;
+    }
     entry.info.navigation.url = normalized.url;
     entry.view.webContents.loadURL(normalized.url);
+  }
+
+  private createTabIfSafe(rawUrl: string): void {
+    if (!isSafeUrlForTabOpen(rawUrl)) {
+      this.emitLog('warn', `Blocked unsafe context link URL: ${rawUrl}`);
+      return;
+    }
+    this.createTab(rawUrl);
   }
 
   goBack(): void {
@@ -929,11 +1158,6 @@ export class BrowserService {
     if (!entry || !query) return;
     this.findState = { active: true, query, activeMatch: 0, totalMatches: 0 };
     entry.view.webContents.findInPage(query);
-    entry.view.webContents.on('found-in-page', (_e: ElectronEvent, result: Electron.FoundInPageResult) => {
-      this.findState.activeMatch = result.activeMatchOrdinal;
-      this.findState.totalMatches = result.matches;
-      this.broadcastFind();
-    });
     this.syncState();
   }
 
@@ -1032,6 +1256,7 @@ export class BrowserService {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
     <title>${escapedTitle}</title>
     <style>
       :root {
@@ -1153,8 +1378,71 @@ export class BrowserService {
       await ses.clearStorageData();
       await ses.clearCache();
     }
+    pageKnowledgeStore.clearAll();
     this.clearHistory();
     this.emitLog('info', 'Browser data cleared (cache, storage, history)');
+  }
+
+  async clearSiteData(origin?: string): Promise<{ origin: string; cookiesCleared: number }> {
+    const entry = this.getActiveEntry();
+    const targetOrigin = this.resolveOriginForSiteData(origin, entry?.info.navigation.url || entry?.view.webContents.getURL() || '');
+    if (!targetOrigin) {
+      throw new Error('No valid site origin available to clear');
+    }
+
+    const ses = entry?.view?.webContents?.session || this.sessionInstance;
+    if (!ses) {
+      throw new Error('Browser session is not initialized');
+    }
+
+    await ses.clearStorageData({
+      origin: targetOrigin,
+      storages: [
+        'cookies',
+        'filesystem',
+        'indexdb',
+        'localstorage',
+        'websql',
+        'shadercache',
+        'serviceworkers',
+        'cachestorage',
+      ],
+      quotas: ['temporary'],
+    });
+
+    const parsedOrigin = new URL(targetOrigin);
+    const hostname = parsedOrigin.hostname.toLowerCase();
+    const cookies = await ses.cookies.get({});
+    let cookiesCleared = 0;
+
+    for (const cookie of cookies) {
+      const cookieDomain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
+      if (!cookieDomain) continue;
+      const matches = cookieDomain === hostname || hostname.endsWith(`.${cookieDomain}`) || cookieDomain.endsWith(`.${hostname}`);
+      if (!matches) continue;
+      const cookieUrl = `http${cookie.secure ? 's' : ''}://${cookieDomain}${cookie.path}`;
+      try {
+        await ses.cookies.remove(cookieUrl, cookie.name);
+        cookiesCleared++;
+      } catch {
+        // Best-effort cookie cleanup.
+      }
+    }
+
+    this.emitLog('info', `Cleared site data for ${targetOrigin} (${cookiesCleared} cookies removed)`);
+    return { origin: targetOrigin, cookiesCleared };
+  }
+
+  private resolveOriginForSiteData(inputOrigin: string | undefined, fallbackUrl: string): string | null {
+    const candidate = (inputOrigin || fallbackUrl || '').trim();
+    if (!candidate) return null;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+      return parsed.origin;
+    } catch {
+      return null;
+    }
   }
 
   private scheduleHistoryPersist(): void {
@@ -1257,28 +1545,6 @@ export class BrowserService {
 
   // ─── Downloads ──────────────────────────────────────────────────────────
 
-  private normalizeComparableUrl(url: string): string {
-    try {
-      const parsed = new URL(url);
-      parsed.hash = '';
-      return parsed.toString();
-    } catch {
-      return url;
-    }
-  }
-
-  private resolveDownloadStartWaiters(download: BrowserDownloadState): void {
-    const downloadUrl = this.normalizeComparableUrl(download.url);
-    for (const [waiterId, waiter] of this.downloadStartWaiters.entries()) {
-      const waiterUrl = this.normalizeComparableUrl(waiter.url);
-      const tabMatches = !waiter.tabId || waiter.tabId === download.sourceTabId;
-      if (!tabMatches || waiterUrl !== downloadUrl) continue;
-      clearTimeout(waiter.timer);
-      waiter.resolve({ ...download });
-      this.downloadStartWaiters.delete(waiterId);
-    }
-  }
-
   async downloadUrl(
     url: string,
     tabId?: string,
@@ -1294,47 +1560,7 @@ export class BrowserService {
     if (!entry) {
       return { started: false, error: 'No active tab', url };
     }
-    const waiterId = generateId('downloadwait');
-    const waitForStart = new Promise<BrowserDownloadState>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.downloadStartWaiters.delete(waiterId);
-        reject(new Error(`Timed out waiting for browser download event for ${url}`));
-      }, 5000);
-      this.downloadStartWaiters.set(waiterId, {
-        id: waiterId,
-        tabId: entry.id,
-        url,
-        resolve,
-        reject,
-        timer,
-      });
-    });
-
-    try {
-      entry.view.webContents.downloadURL(url);
-      const download = await waitForStart;
-      return {
-        started: true,
-        error: null,
-        url,
-        tabId: entry.id,
-        download,
-        method: 'webContents.downloadURL',
-      };
-    } catch (err) {
-      const waiter = this.downloadStartWaiters.get(waiterId);
-      if (waiter) {
-        clearTimeout(waiter.timer);
-        this.downloadStartWaiters.delete(waiterId);
-      }
-      return {
-        started: false,
-        error: err instanceof Error ? err.message : String(err),
-        url,
-        tabId: entry.id,
-        method: 'webContents.downloadURL',
-      };
-    }
+    return this.downloadManager.downloadFromWebContents(entry.id, entry.view.webContents, url);
   }
 
   async downloadLink(
@@ -1390,8 +1616,7 @@ export class BrowserService {
   }
 
   getDownloads(): BrowserDownloadState[] {
-    const active = Array.from(this.activeDownloads.values()).map(d => ({ ...d.entry }));
-    return [...active, ...this.completedDownloads];
+    return this.downloadManager.getDownloads();
   }
 
   async waitForDownload(input: {
@@ -1405,69 +1630,22 @@ export class BrowserService {
     timedOut: boolean;
     download: BrowserDownloadState | null;
   }> {
-    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 15_000, 250), 60_000);
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      const downloads = this.getDownloads();
-      const candidates = downloads
-        .filter(download => !input.downloadId || download.id === input.downloadId)
-        .filter(download => !input.filename || download.filename === input.filename)
-        .filter(download => !input.tabId || download.sourceTabId === input.tabId)
-        .sort((a, b) => b.startedAt - a.startedAt);
-      const match = candidates[0] || null;
-      if (match) {
-        const completed = match.state === 'completed' || match.state === 'cancelled' || match.state === 'interrupted';
-        if (completed) {
-          return {
-            found: true,
-            completed: match.state === 'completed',
-            timedOut: false,
-            download: match,
-          };
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-
-    const finalMatch = this.getDownloads()
-      .filter(download => !input.downloadId || download.id === input.downloadId)
-      .filter(download => !input.filename || download.filename === input.filename)
-      .filter(download => !input.tabId || download.sourceTabId === input.tabId)
-      .sort((a, b) => b.startedAt - a.startedAt)[0] || null;
-    return {
-      found: Boolean(finalMatch),
-      completed: finalMatch?.state === 'completed',
-      timedOut: true,
-      download: finalMatch,
-    };
+    return this.downloadManager.waitForDownload(input);
   }
 
   cancelDownload(downloadId: string): void {
-    const dl = this.activeDownloads.get(downloadId);
-    if (dl) {
-      dl.item.cancel();
-      this.activeDownloads.delete(downloadId);
-      this.syncState();
-    }
+    this.downloadManager.cancelDownload(downloadId);
   }
 
   clearDownloads(): void {
-    this.completedDownloads = [];
-    this.syncState();
+    this.downloadManager.clearDownloads();
   }
 
   // ─── Bounds ──────────────────────────────────────────────────────────────
 
   setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
     this.currentBounds = bounds;
-    const entry = this.getActiveEntry();
-    if (entry) {
-      entry.view.setBounds({
-        x: Math.round(bounds.x), y: Math.round(bounds.y),
-        width: Math.round(Math.max(1, bounds.width)),
-        height: Math.round(Math.max(1, bounds.height)),
-      });
-    }
+    this.applyTabLayout();
   }
 
   // ─── State ────────────────────────────────────────────────────────────────
@@ -1485,10 +1663,12 @@ export class BrowserService {
       profile: { ...this.profile },
       tabs: this.getTabs(),
       activeTabId: this.activeTabId,
+      splitLeftTabId: this.splitLeftTabId,
+      splitRightTabId: this.splitRightTabId,
       history: this.getRecentHistory(),
       bookmarks: [...this.bookmarks],
-      activeDownloads: Array.from(this.activeDownloads.values()).map(d => ({ ...d.entry })),
-      completedDownloads: [...this.completedDownloads],
+      activeDownloads: this.downloadManager.getActiveDownloads(),
+      completedDownloads: this.downloadManager.getCompletedDownloads(),
       recentPermissions: [...this.recentPermissions],
       pendingDialogs: this.getPendingDialogs(),
       extensions: [...this.extensions],
@@ -1500,13 +1680,17 @@ export class BrowserService {
   }
 
   private syncState(): void {
-    const state = this.getState();
-    appStateStore.dispatch({ type: ActionType.SET_BROWSER_RUNTIME, browserRuntime: state });
-    eventBus.emit(AppEventType.BROWSER_STATE_CHANGED, { state });
-    eventBus.emit(AppEventType.BROWSER_STATUS_UPDATED, {
-      status: state.surfaceStatus,
-      detail: state.navigation.url,
-    });
+    if (this.stateSyncTimer) return;
+    this.stateSyncTimer = setTimeout(() => {
+      this.stateSyncTimer = null;
+      const state = this.getState();
+      appStateStore.dispatch({ type: ActionType.SET_BROWSER_RUNTIME, browserRuntime: state });
+      eventBus.emit(AppEventType.BROWSER_STATE_CHANGED, { state });
+      eventBus.emit(AppEventType.BROWSER_STATUS_UPDATED, {
+        status: state.surfaceStatus,
+        detail: state.navigation.url,
+      });
+    }, BROWSER_STATE_SYNC_DEBOUNCE);
   }
 
   private syncNavigation(): void {
@@ -1560,6 +1744,8 @@ export class BrowserService {
     globalY?: number;
     hitTest?: BrowserPointerHitTestResult;
   }> {
+    const entry = this.resolveEntry(tabId);
+    if (entry) this.dialogManager.ensureDebugger(entry);
     return this.pageInteraction.clickElement(selector, tabId);
   }
 
@@ -1581,12 +1767,13 @@ export class BrowserService {
     globalY?: number;
     hitTest?: BrowserPointerHitTestResult;
   }> {
+    const entry = this.resolveEntry(tabId);
+    if (entry) this.dialogManager.ensureDebugger(entry);
     return this.pageInteraction.hoverElement(selector, tabId);
   }
 
   getPendingDialogs(tabId?: string): BrowserJavaScriptDialog[] {
-    const dialogs = Array.from(this.pendingDialogs.values());
-    return tabId ? dialogs.filter(dialog => dialog.tabId === tabId) : dialogs;
+    return this.dialogManager.getPendingDialogs(tabId);
   }
 
   openPromptDialogFallback(input: {
@@ -1595,50 +1782,11 @@ export class BrowserService {
     defaultPrompt?: string;
     url?: string;
   }): { dialogId: string; created: boolean } {
-    const tabId = this.resolveTabIdByWebContentsId(input.webContentsId);
-    if (!tabId) {
-      return { dialogId: '', created: false };
-    }
-
-    const existing = this.getPendingDialogs(tabId).find(dialog => dialog.type === 'prompt' && dialog.backend === 'shim');
-    if (existing) {
-      return { dialogId: existing.id, created: false };
-    }
-
-    const dialog: BrowserJavaScriptDialog = {
-      id: generateId('dialog'),
-      tabId,
-      url: input.url || this.tabs.get(tabId)?.info.navigation.url || '',
-      type: 'prompt',
-      backend: 'shim',
-      message: input.message || '',
-      defaultPrompt: input.defaultPrompt || '',
-      openedAt: Date.now(),
-    };
-    this.pendingDialogs.set(dialog.id, dialog);
-    this.promptDialogResolutions.set(dialog.id, {
-      dialogId: dialog.id,
-      resolved: false,
-      value: null,
-    });
-    this.emitLog('info', `JavaScript prompt dialog opened via shim: ${dialog.message || '(empty)'}`);
-    this.syncState();
-    return { dialogId: dialog.id, created: true };
+    return this.dialogManager.openPromptDialogFallback(input);
   }
 
   pollPromptDialogFallback(dialogId: string): { done: boolean; value: string | null } {
-    const resolution = this.promptDialogResolutions.get(dialogId);
-    if (!resolution) {
-      return { done: true, value: null };
-    }
-    if (resolution.resolved) {
-      this.promptDialogResolutions.delete(dialogId);
-      return { done: true, value: resolution.value };
-    }
-    return {
-      done: false,
-      value: null,
-    };
+    return this.dialogManager.pollPromptDialogFallback(dialogId);
   }
 
   async acceptDialog(input: {
@@ -1646,58 +1794,14 @@ export class BrowserService {
     dialogId?: string;
     promptText?: string;
   } = {}): Promise<{ accepted: boolean; error: string | null; dialog: BrowserJavaScriptDialog | null }> {
-    return this.resolveJavaScriptDialog({ ...input, accept: true });
+    return this.dialogManager.acceptDialog(input, this.activeTabId);
   }
 
   async dismissDialog(input: {
     tabId?: string;
     dialogId?: string;
   } = {}): Promise<{ dismissed: boolean; error: string | null; dialog: BrowserJavaScriptDialog | null }> {
-    const result = await this.resolveJavaScriptDialog({ ...input, accept: false });
-    return { dismissed: result.accepted, error: result.error, dialog: result.dialog };
-  }
-
-  private async resolveJavaScriptDialog(input: {
-    accept: boolean;
-    tabId?: string;
-    dialogId?: string;
-    promptText?: string;
-  }): Promise<{ accepted: boolean; error: string | null; dialog: BrowserJavaScriptDialog | null }> {
-    const dialog = input.dialogId
-      ? this.pendingDialogs.get(input.dialogId) || null
-      : this.getPendingDialogs(input.tabId || this.activeTabId)[0] || null;
-    const entry = this.resolveEntry(dialog?.tabId || input.tabId || this.activeTabId);
-    if (!entry) {
-      return { accepted: false, error: 'No active tab', dialog };
-    }
-    try {
-      if (dialog?.backend === 'shim' && dialog.type === 'prompt') {
-        const resolution = this.promptDialogResolutions.get(dialog.id);
-        if (!resolution) {
-          return { accepted: false, error: 'Prompt dialog resolution missing', dialog };
-        }
-        resolution.resolved = true;
-        resolution.value = input.accept ? (input.promptText ?? dialog.defaultPrompt ?? '') : null;
-        this.pendingDialogs.delete(dialog.id);
-        this.syncState();
-        return { accepted: true, error: null, dialog };
-      }
-      if (!entry.view.webContents.debugger.isAttached()) {
-        entry.view.webContents.debugger.attach('1.3');
-        await entry.view.webContents.debugger.sendCommand('Page.enable');
-      }
-      await entry.view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', {
-        accept: input.accept,
-        promptText: input.promptText || '',
-      });
-      if (dialog) this.pendingDialogs.delete(dialog.id);
-      else this.clearPendingDialogsForTab(entry.id);
-      this.syncState();
-      return { accepted: true, error: null, dialog };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { accepted: false, error: message, dialog };
-    }
+    return this.dialogManager.dismissDialog(input, this.activeTabId);
   }
 
   async typeInElement(
@@ -1705,6 +1809,8 @@ export class BrowserService {
     text: string,
     tabId?: string,
   ): Promise<{ typed: boolean; error: string | null }> {
+    const entry = this.resolveEntry(tabId);
+    if (entry) this.dialogManager.ensureDebugger(entry);
     return this.pageInteraction.typeInElement(selector, text, tabId);
   }
 
@@ -1720,6 +1826,8 @@ export class BrowserService {
     filePath?: string;
     fileName?: string;
   }> {
+    const entry = this.resolveEntry(tabId);
+    if (entry) this.dialogManager.ensureDebugger(entry);
     return this.pageInteraction.uploadFile(selector, filePath, tabId);
   }
 
@@ -1736,6 +1844,8 @@ export class BrowserService {
     from?: { x: number; y: number };
     to?: { x: number; y: number };
   }> {
+    const entry = this.resolveEntry(tabId);
+    if (entry) this.dialogManager.ensureDebugger(entry);
     return this.pageInteraction.dragElement(sourceSelector, targetSelector, tabId);
   }
 
@@ -1987,16 +2097,22 @@ export class BrowserService {
     if (this.disposed) return;
     this.disposed = true;
 
+    this.stopOAuthRelay();
+    if (this.stateSyncTimer) {
+      clearTimeout(this.stateSyncTimer);
+      this.stateSyncTimer = null;
+    }
+    this.downloadManager.dispose();
+    this.dialogManager.dispose();
     if (this.historyPersistTimer) clearTimeout(this.historyPersistTimer);
     this.persistNow();
     flushAll();
 
     for (const [, entry] of this.tabs) {
-      if (this.hostWindow && !this.hostWindow.isDestroyed()) {
-        try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
-      }
-      entry.view.webContents.close();
+      this.destroyTabEntry(entry);
     }
+    this.splitLeftTabId = null;
+    this.splitRightTabId = null;
     this.tabs.clear();
     this.hostWindow = null;
   }

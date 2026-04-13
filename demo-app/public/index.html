@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Command Center</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Monaco,monospace;background:#1e1e1e;color:#d4d4d4;height:100vh}
+.container{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto 1fr;height:100vh;gap:10px;padding:10px}
+.header{grid-column:1/-1;background:#252526;padding:15px;border:1px solid #3e3e42}
+.panel{background:#252526;border:1px solid #3e3e42;overflow:hidden;display:flex;flex-direction:column}
+.panel-title{background:#2d2d30;padding:10px;color:#4ec9b0;font-weight:bold}
+.browser-controls{display:flex;gap:8px;padding:10px;background:#2d2d30}
+.browser-controls input{flex:1;padding:6px;background:#3e3e42;border:1px solid #555;color:#d4d4d4;font-family:inherit}
+.browser-controls button{padding:6px 12px;background:#0e639c;color:white;border:none;cursor:pointer}
+.browser-frame{flex:1;border:none}
+#terminal-output{flex:1;background:#1e1e1e;color:#00ff00;padding:10px;overflow-y:auto;white-space:pre-wrap}
+.terminal-input-area{border-top:1px solid #3e3e42;padding:10px;display:flex;gap:8px}
+#terminal-input{flex:1;padding:6px;background:#3e3e42;border:1px solid #555;color:#00ff00;font-family:inherit}
+.logs-item{padding:8px;background:#2d2d30;border-left:3px solid #0e639c;margin:5px 0;color:#4ec9b0}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header"><h1>Command Center</h1></div>
+<div class="panel"><div class="panel-title">Browser</div><div class="browser-controls"><input type="text" id="url-bar" placeholder="URL" value="https://example.com"><button id="nav-btn">Navigate</button></div><iframe id="browser-frame" class="browser-frame"></iframe></div>
+<div class="panel"><div class="panel-title">Terminal</div><div id="terminal-output"></div><div class="terminal-input-area"><input type="text" id="terminal-input" placeholder="Command"><button id="exec-btn">Execute</button></div></div>
+<div class="panel" style="grid-column:1/-1;"><div class="panel-title">Logs</div><div id="logs-container" style="padding:15px;overflow-y:auto"></div></div>
+</div>
+<script>
+const API="http://localhost:3000/api";
+function log(m){const d=document.createElement("div");d.className="logs-item";d.textContent="["+new Date().toLocaleTimeString()+"] "+m;document.getElementById("logs-container").insertBefore(d,document.getElementById("logs-container").firstChild);}
+document.getElementById("nav-btn").addEventListener("click",async()=>{const url=document.getElementById("url-bar").value;if(!url)return;try{log("Nav: "+url);const r=await fetch(API+"/browser/navigate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})});const j=await r.json();if(j.success){document.getElementById("browser-frame").src=url;log("OK");}else{log("FAIL");}}catch(e){log("ERR:"+e.message);}});
+document.getElementById("exec-btn").addEventListener("click",async()=>{const cmd=document.getElementById("terminal-input").value;if(!cmd)return;const o=document.getElementById("terminal-output");o.textContent+="$ "+cmd+"
+";document.getElementById("terminal-input").value="";try{log("Exec: "+cmd);const r=await fetch(API+"/terminal/exec",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:cmd})});const j=await r.json();o.textContent+=j.output+"
+";o.scrollTop=o.scrollHeight;log("OK");}catch(e){log("ERR:"+e.message);}});
+document.getElementById("url-bar").addEventListener("keypress",(e)=>{if(e.key==="Enter")document.getElementById("nav-btn").click();});
+document.getElementById("terminal-input").addEventListener("keypress",(e)=>{if(e.key==="Enter")document.getElementById("exec-btn").click();});
+window.addEventListener("load",()=>{log("App loaded");document.getElementById("browser-frame").src="https://example.com";});
+</script>
+</body>
+</html>

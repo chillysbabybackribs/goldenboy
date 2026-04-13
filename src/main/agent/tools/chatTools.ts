@@ -50,7 +50,7 @@ function logChatRecall(message: string, level: 'info' | 'warn' | 'error' = 'info
       id: generateId('log'),
       timestamp: Date.now(),
       level,
-      source: 'haiku',
+      source: 'system',
       message,
     },
   });

@@ -1,0 +1,9 @@
+{"type":"server-started","port":58586,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:58586","screen_dir":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content","state_dir":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/state"}
+{"type":"screen-added","file":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content/streaming-rhythm.html"}
+{"type":"screen-added","file":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content/streaming-rhythm-v2.html"}
+{"type":"screen-added","file":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content/streaming-rhythm-v3.html"}
+{"source":"user-event","type":"click","text":"B\n    \n      Still needs adjustment\n      I'll describe in terminal","choice":"b","id":null,"timestamp":1775984659165}
+{"type":"screen-added","file":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content/streaming-rhythm-v4.html"}
+{"type":"screen-added","file":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content/streaming-rhythm-v5.html"}
+{"type":"screen-added","file":"/home/dp/Desktop/v2workspace/.superpowers/brainstorm/172360-1775984280/content/waiting.html"}
+{"type":"server-stopped","reason":"idle timeout"}

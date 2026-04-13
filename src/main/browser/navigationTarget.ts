@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 
 type SearchEngine = 'google' | 'duckduckgo' | 'bing';
 
@@ -16,6 +17,7 @@ const IPV4_WITH_PORT_RE = /^(\d{1,3})(?:\.(\d{1,3})){3}(?::\d{1,5})?$/;
 const LOCALHOST_WITH_PORT_RE = /^localhost(?::\d{1,5})?$/i;
 const BRACKETED_IPV6_WITH_PORT_RE = /^\[[0-9a-f:.]+\](?::\d{1,5})?$/i;
 const DOMAIN_WITH_PORT_RE = /^(?:[a-z0-9-]+\.)+[a-z0-9-]{2,}(?::\d{1,5})?$/i;
+const SAFE_URL_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
 
 export type NavigationTargetKind = 'direct-url' | 'search' | 'local-file';
 
@@ -40,10 +42,12 @@ export function normalizeNavigationTarget(
   }
 
   if (URL_SCHEME_RE.test(trimmed)) {
-    return { url: trimmed, kind: 'direct-url' };
+    const searchPrefix = SEARCH_ENGINES[input.searchEngine] || SEARCH_ENGINES.google;
+    const normalizedByScheme = normalizeExplicitScheme(trimmed, searchPrefix);
+    return normalizedByScheme;
   }
 
-  const localFileUrl = normalizeLocalFileUrl(trimmed, input.cwd || process.cwd());
+  const localFileUrl = normalizeLocalFileUrl(trimmed, input.cwd || APP_WORKSPACE_ROOT);
   if (localFileUrl) {
     return {
       url: localFileUrl,
@@ -64,6 +68,23 @@ export function normalizeNavigationTarget(
     url: `${prefix}${encodeURIComponent(trimmed)}`,
     kind: 'search',
   };
+}
+
+function normalizeExplicitScheme(trimmed: string, searchPrefix: string): NormalizedNavigationTarget {
+  if (trimmed.toLowerCase() === 'about:blank') {
+    return { url: 'about:blank', kind: 'direct-url' };
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (SAFE_URL_PROTOCOLS.has(parsed.protocol.toLowerCase())) {
+      return { url: trimmed, kind: 'direct-url' };
+    }
+  } catch {
+    return { url: `${searchPrefix}${encodeURIComponent(trimmed)}`, kind: 'search' };
+  }
+
+  return { url: `${searchPrefix}${encodeURIComponent(trimmed)}`, kind: 'search' };
 }
 
 function normalizeLocalFileUrl(rawInput: string, cwd: string): string | null {

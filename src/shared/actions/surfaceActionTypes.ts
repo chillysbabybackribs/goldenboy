@@ -46,7 +46,10 @@ export type SurfaceActionOrigin = 'command-center' | 'system' | 'model';
 // ─── Typed Payloads ───────────────────────────────────────────────────────
 
 export type BrowserNavigatePayload = { url: string };
-export type BrowserCreateTabPayload = { url?: string };
+export type BrowserCreateTabPayload = {
+  url?: string;
+  insertAfterTabId?: string;
+};
 export type BrowserCloseTabPayload = { tabId: string };
 export type BrowserActivateTabPayload = { tabId: string };
 export type BrowserEmptyPayload = Record<string, never>;
@@ -139,6 +142,10 @@ export function summarizePayload(kind: SurfaceActionKind, payload: Record<string
     case 'browser.stop': return 'Stop loading';
     case 'browser.create-tab': {
       const url = (payload as BrowserCreateTabPayload).url;
+      const insertAfterTabId = (payload as BrowserCreateTabPayload).insertAfterTabId;
+      if (insertAfterTabId) {
+        return url ? `Open tab: ${url} (after ${insertAfterTabId.slice(-8)})` : `Open new tab after ${insertAfterTabId.slice(-8)}`;
+      }
       return url ? `Open tab: ${url}` : 'Open new tab';
     }
     case 'browser.close-tab': return `Close tab ${(payload as BrowserCloseTabPayload).tabId}`;

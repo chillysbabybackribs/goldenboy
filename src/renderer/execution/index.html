@@ -23,6 +23,11 @@
         <button class="tab-scroll-btn tab-scroll-right" id="tabScrollRight" title="Scroll tabs right">&#x203A;</button>
         <button class="btn-tab-overflow" id="btnTabOverflow" title="All tabs">&#x25BE;</button>
         <button class="btn-tab-new" id="btnNewTab" title="New Tab">+</button>
+        <div class="tab-context-menu" id="tabContextMenu" style="display:none">
+          <button class="tab-context-item" data-context-action="new-tab-next">New tab next</button>
+          <button class="tab-context-item" data-context-action="split-tab">Split this tab</button>
+          <button class="tab-context-item" data-context-action="clear-split-view">Clear split view</button>
+        </div>
       </div>
       <!-- Tab Overflow Panel (in-flow, pushes content down like dropdown-panel) -->
       <div class="tab-overflow-panel" id="tabOverflowDropdown" style="display:none"></div>
@@ -60,6 +65,7 @@
           <button class="dropdown-tab active" data-panel="history">History</button>
           <button class="dropdown-tab" data-panel="bookmarks">Bookmarks</button>
           <button class="dropdown-tab" data-panel="downloads">Downloads</button>
+          <button class="dropdown-tab" data-panel="diagnostics">Diagnostics</button>
           <button class="dropdown-tab" data-panel="extensions">Extensions</button>
           <button class="dropdown-tab" data-panel="settings">Settings</button>
         </div>
@@ -83,7 +89,7 @@
         </div>
         <span class="pane-meta" id="terminalMeta"></span>
         <span class="pane-status" id="terminalStatus">Idle</span>
-        <button class="btn-pane btn-pane-collapse" id="termCollapseBtn" title="Collapse terminal" aria-label="Collapse terminal" aria-expanded="true">&#x203A;</button>
+        <button class="btn-pane btn-pane-collapse" id="termCollapseBtn" title="Expand terminal" aria-label="Expand terminal" aria-expanded="false">&#x203A;</button>
         <button class="btn-pane" id="termRestartBtn" title="Restart terminal">&#x21bb;</button>
       </div>
       <div class="pane-content" id="terminalContent">

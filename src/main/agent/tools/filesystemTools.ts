@@ -1,10 +1,15 @@
 import { AgentToolDefinition } from '../AgentTypes';
 import * as fs from 'fs';
 import * as path from 'path';
+import { agentCache } from '../AgentCache';
 import { fileKnowledgeStore } from '../../fileKnowledge/FileKnowledgeStore';
 import { appStateStore } from '../../state/appStateStore';
 import { ActionType } from '../../state/actions';
 import { generateId } from '../../../shared/utils/ids';
+import { APP_WORKSPACE_ROOT } from '../../workspaceRoot';
+
+const DEFAULT_FILE_READ_MAX_CHARS = 6_000;
+const MAX_FILE_READ_MAX_CHARS = 20_000;
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -28,8 +33,13 @@ function optionalNumber(input: Record<string, unknown>, key: string, fallback: n
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function optionalPositiveInteger(input: Record<string, unknown>, key: string): number | undefined {
+  const value = input[key];
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 function resolveLocalPath(rawPath: string): string {
-  return path.resolve(process.cwd(), rawPath);
+  return path.resolve(APP_WORKSPACE_ROOT, rawPath);
 }
 
 function logFileCache(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
@@ -39,10 +49,43 @@ function logFileCache(message: string, level: 'info' | 'warn' | 'error' = 'info'
       id: generateId('log'),
       timestamp: Date.now(),
       level,
-      source: 'haiku',
+      source: 'system',
       message,
     },
   });
+}
+
+function invalidateFilesystemCaches(): void {
+  agentCache.invalidateByToolPrefix('filesystem.');
+}
+
+function clampReadChars(value: number): number {
+  return Math.max(200, Math.min(Math.floor(value), MAX_FILE_READ_MAX_CHARS));
+}
+
+function selectLines(lines: string[], startLine?: number, endLine?: number): {
+  text: string;
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+} {
+  const totalLines = lines.length;
+  const normalizedStart = Math.min(Math.max(startLine || 1, 1), Math.max(totalLines, 1));
+  const normalizedEnd = Math.min(Math.max(endLine || totalLines, normalizedStart), totalLines);
+  return {
+    text: lines.slice(normalizedStart - 1, normalizedEnd).join('\n'),
+    startLine: normalizedStart,
+    endLine: normalizedEnd,
+    totalLines,
+  };
+}
+
+function trimContent(content: string, maxChars: number): { content: string; truncated: boolean } {
+  if (content.length <= maxChars) return { content, truncated: false };
+  return {
+    content: `${content.slice(0, maxChars)}\n...[file truncated]`,
+    truncated: true,
+  };
 }
 
 function walkFiles(root: string, limit: number): string[] {
@@ -93,7 +136,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const matches: Array<{ path: string; reason: 'path' | 'content' }> = [];
 
         for (const file of walkFiles(root, Math.max(limit * 20, 200))) {
-          const rel = path.relative(process.cwd(), file);
+          const rel = path.relative(APP_WORKSPACE_ROOT, file);
           if (rel.toLowerCase().includes(query)) {
             matches.push({ path: file, reason: 'path' });
           } else {
@@ -127,6 +170,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const root = resolveLocalPath(String(obj.path || '.'));
         const limit = optionalNumber(obj, 'limit', 2000);
         const result = fileKnowledgeStore.indexWorkspace(root, { limit });
+        invalidateFilesystemCaches();
         logFileCache(`Indexed ${result.indexedFiles} files into ${result.chunkCount} file chunks`);
         return {
           summary: `Indexed ${result.indexedFiles} files into ${result.chunkCount} chunks`,
@@ -240,16 +284,55 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'filesystem.read',
-      description: 'Fallback full UTF-8 file read. Prefer filesystem.search_file_cache and filesystem.read_file_chunk for source understanding.',
-      inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } },
+      description: 'Read a UTF-8 file with freshness-aware cache reuse. Prefer indexed chunks when available, and use startLine/endLine/maxChars to keep reads tight.',
+      inputSchema: {
+        type: 'object',
+        required: ['path'],
+        properties: {
+          path: { type: 'string' },
+          startLine: { type: 'number' },
+          endLine: { type: 'number' },
+          maxChars: { type: 'number' },
+        },
+      },
       async execute(input) {
-        const target = resolveLocalPath(requireString(objectInput(input), 'path'));
-        let content = fs.readFileSync(target, 'utf-8');
-        if (content.length > 12_000) {
-          content = `${content.slice(0, 12_000)}\n...[file truncated]`;
+        const obj = objectInput(input);
+        const target = resolveLocalPath(requireString(obj, 'path'));
+        const startLine = optionalPositiveInteger(obj, 'startLine');
+        const endLine = optionalPositiveInteger(obj, 'endLine');
+        if (startLine && endLine && endLine < startLine) {
+          throw new Error('endLine must be greater than or equal to startLine');
         }
-        logFileCache(`Broad file read fallback used (${content.length} chars): ${target}`, 'warn');
-        return { summary: `Read ${content.length} characters`, data: { path: target, content } };
+        const maxChars = clampReadChars(optionalNumber(obj, 'maxChars', DEFAULT_FILE_READ_MAX_CHARS));
+        const cachedRead = fileKnowledgeStore.readWindowForPath(target, { startLine, endLine, maxChars });
+        if (cachedRead) {
+          logFileCache(`Served targeted file read (${cachedRead.content.length} chars, ${cachedRead.chunkCount} chunks): ${target}`);
+          return {
+            summary: `Read ${cachedRead.content.length} characters from indexed file window`,
+            data: {
+              ...cachedRead,
+              source: 'indexed-window',
+            },
+          };
+        }
+
+        const raw = fs.readFileSync(target, 'utf-8');
+        const selection = selectLines(raw.split('\n'), startLine, endLine);
+        const trimmed = trimContent(selection.text, maxChars);
+        logFileCache(`Broad file read fallback used (${trimmed.content.length} chars): ${target}`, 'warn');
+        return {
+          summary: `Read ${trimmed.content.length} characters from disk`,
+          data: {
+            path: target,
+            relativePath: path.relative(APP_WORKSPACE_ROOT, target),
+            content: trimmed.content,
+            source: 'disk',
+            truncated: trimmed.truncated,
+            startLine: selection.startLine,
+            endLine: selection.endLine,
+            totalLines: selection.totalLines,
+          },
+        };
       },
     },
     {
@@ -262,6 +345,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const content = requireString(obj, 'content');
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, content, 'utf-8');
+        fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
+        invalidateFilesystemCaches();
         return { summary: `Wrote ${content.length} characters`, data: { path: target } };
       },
     },
@@ -278,6 +363,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         if (!before.includes(search)) throw new Error(`Search text not found in ${target}`);
         const after = before.replace(search, replace);
         fs.writeFileSync(target, after, 'utf-8');
+        fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
+        invalidateFilesystemCaches();
         return { summary: `Patched ${target}`, data: { path: target, changed: before !== after } };
       },
     },
@@ -288,6 +375,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         const target = resolveLocalPath(requireString(objectInput(input), 'path'));
         fs.rmSync(target, { recursive: true, force: true });
+        fileKnowledgeStore.removeFile(target);
+        invalidateFilesystemCaches();
         return { summary: `Deleted ${target}`, data: { path: target } };
       },
     },
@@ -311,6 +400,9 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const to = resolveLocalPath(requireString(obj, 'to'));
         fs.mkdirSync(path.dirname(to), { recursive: true });
         fs.renameSync(from, to);
+        fileKnowledgeStore.removeFile(from);
+        fileKnowledgeStore.refreshFile(to, APP_WORKSPACE_ROOT);
+        invalidateFilesystemCaches();
         return { summary: `Moved ${from} to ${to}`, data: { from, to } };
       },
     },

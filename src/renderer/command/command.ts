@@ -1,55 +1,95 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
-import type { CodexItem } from '../../shared/types/model.js';
+import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID, ProviderId } from '../../shared/types/model.js';
+import {
+  appendCodexItemProgress as appendCodexItemProgressInternal,
+  appendThought as appendThoughtInternal,
+  appendToolActivity as appendToolActivityInternal,
+  appendToolStatus as appendToolStatusInternal,
+  appendToken as appendTokenInternal,
+  createLiveRunCard as createLiveRunCardInternal,
+  getLiveRunCard,
+  replaceWithError as replaceWithErrorInternal,
+  replaceWithResult as replaceWithResultInternal,
+} from './live-run.js';
+
+const getWorkspaceAPI = () => (window as any).workspaceAPI as WorkspaceAPI | null;
+const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
 
 // ─── DOM ────────────────────────────────────────────────────────────────────
 
 const taskSummary = document.getElementById('taskSummary')!;
 const splitLabel = document.getElementById('splitLabel')!;
+const targetLabel = document.getElementById('targetLabel')!;
 const modelLabel = document.getElementById('modelLabel')!;
 const sessionLabel = document.getElementById('sessionLabel')!;
 const taskCount = document.getElementById('taskCount')!;
+const commandShell = document.querySelector('.cc-shell') as HTMLElement;
 const logStream = document.getElementById('logStream')!;
 const logsCopyBtn = document.getElementById('logsCopyBtn')!;
 const logsClearBtn = document.getElementById('logsClearBtn')!;
-
-// Codex metric boxes
-const metricContextValue = document.getElementById('metricContextValue')!;
-const metricContextSub = document.getElementById('metricContextSub')!;
-const metricContextBar = document.getElementById('metricContextBar')!;
-const metric5hValue = document.getElementById('metric5hValue')!;
-const metric5hSub = document.getElementById('metric5hSub')!;
-const metric5hBar = document.getElementById('metric5hBar')!;
-const metricWeeklyValue = document.getElementById('metricWeeklyValue')!;
-const metricWeeklySub = document.getElementById('metricWeeklySub')!;
-const metricWeeklyBar = document.getElementById('metricWeeklyBar')!;
-const metricCreditsValue = document.getElementById('metricCreditsValue')!;
-
-// Haiku metric boxes
-const haikuTokensValue = document.getElementById('haikuTokensValue')!;
-const haikuTokensSub = document.getElementById('haikuTokensSub')!;
-const haikuTokensBar = document.getElementById('haikuTokensBar')!;
-const haikuCostValue = document.getElementById('haikuCostValue')!;
-const haikuCostSub = document.getElementById('haikuCostSub')!;
-const haikuCostBar = document.getElementById('haikuCostBar')!;
-const haikuTurnsValue = document.getElementById('haikuTurnsValue')!;
-const haikuTurnsSub = document.getElementById('haikuTurnsSub')!;
-const sessionTotalValue = document.getElementById('sessionTotalValue')!;
-const sessionTotalSub = document.getElementById('sessionTotalSub')!;
-
-// Controls (in 4th metric box)
-const modelSelector = document.getElementById('modelSelector')!;
-const splitSelector = document.getElementById('splitSelector')!;
+const logsPanel = document.getElementById('logsPanel') as HTMLDivElement;
+const logsToggleBtn = document.getElementById('logsToggleBtn')!;
 
 // Chat
 const chatThread = document.getElementById('chatThread')!;
 const chatEmptyState = document.getElementById('chatEmptyState')!;
-const chatInput = document.getElementById('chatInput') as HTMLInputElement;
+const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
 const chatSubmitBtn = document.getElementById('chatSubmitBtn')!;
-const modelApi = (workspaceAPI as any).model;
+const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
+const modelToggleGroup = document.getElementById('modelToggleGroup') as HTMLDivElement;
+const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
+const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
+const chatZoomInBtn = document.getElementById('chatZoomInBtn') as HTMLButtonElement;
+
+// History
+const chatHistoryBtn = document.getElementById('chatHistoryBtn')!;
+const historyOverlay = document.getElementById('historyOverlay')!;
+const historyList = document.getElementById('historyList')!;
+const historyNewBtn = document.getElementById('historyNewBtn')!;
+const historyCloseBtn = document.getElementById('historyCloseBtn')!;
+
+// Token usage (split labels)
+const tokenGauge = document.getElementById('tokenGauge') as HTMLDivElement;
+const tokenInLabel = document.getElementById('tokenInLabel')!;
+const tokenOutLabel = document.getElementById('tokenOutLabel')!;
+const tokenResetBtn = document.getElementById('tokenResetBtn')!;
+
+// Stop
+const chatStopBtn = document.getElementById('chatStopBtn') as HTMLButtonElement;
+
+// Attachments
+const attachDocBtn = document.getElementById('attachDocBtn')!;
+const attachImgBtn = document.getElementById('attachImgBtn')!;
+const attachPreview = document.getElementById('attachPreview') as HTMLDivElement;
+const attachPreviewList = document.getElementById('attachPreviewList') as HTMLDivElement;
+const docFileInput = document.getElementById('docFileInput') as HTMLInputElement;
+const imgFileInput = document.getElementById('imgFileInput') as HTMLInputElement;
+
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-let selectedOwner: 'auto' | 'codex' | 'haiku' = 'auto';
+type SelectableOwner = 'auto' | typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID;
+type ExplicitSelectableOwner = Exclude<SelectableOwner, 'auto'>;
+type ProviderRuntimeView = {
+  status?: string;
+  model?: string;
+  sessionId?: string;
+  errorDetail?: string | null;
+};
+
+const SELECTABLE_OWNERS: SelectableOwner[] = ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+const SELECTED_OWNER_STORAGE_KEY = 'command-center-selected-owner';
+const OWNER_LABELS: Record<SelectableOwner, string> = {
+  auto: 'Default',
+  [PRIMARY_PROVIDER_ID]: 'GPT-5.4',
+  [HAIKU_PROVIDER_ID]: 'Haiku 4.5',
+};
+
+function getOwnerDisplayLabel(owner: SelectableOwner): string {
+  return OWNER_LABELS[owner].toLowerCase();
+}
+
+let selectedOwner: SelectableOwner = 'auto';
 let chatCounter = 0;
 let renderedTaskMemoryKey: string | null = null;
 let currentRenderedTaskId: string | null = null;
@@ -57,146 +97,167 @@ let chatAutoPinned = true;
 let chatScrollRaf: number | null = null;
 let chatScrollFramesRemaining = 0;
 let suppressChatScrollEvent = false;
+let lastAgentResponseText = '';
+let chatCopyFeedbackTimer: number | null = null;
+let chatZoom = 1;
+let runningTaskId: string | null = null;
 
-type LiveRunCard = {
-  root: HTMLElement;
-  meta: HTMLElement;
-  activity: HTMLElement;
-  output: HTMLElement;
-  seenThoughts: Set<string>;
-  pendingToolBlock: HTMLDetailsElement | null;
-  typingQueue: string[];
-  typingTimer: number | null;
-  activeThoughtEl: HTMLElement | null;
-  deferredToolEvents: Array<{ kind: 'call' | 'result'; text: string }>;
-};
+const CHAT_ZOOM_STORAGE_KEY = 'command-center-chat-zoom';
+const CHAT_ZOOM_DEFAULT = 1;
+const CHAT_ZOOM_MIN = 0.8;
+const CHAT_ZOOM_MAX = 1.6;
+const CHAT_ZOOM_STEP = 0.1;
 
-const liveRunCards = new Map<string, LiveRunCard>();
+function isSelectableOwner(value: string): value is SelectableOwner {
+  return SELECTABLE_OWNERS.includes(value as SelectableOwner);
+}
 
-// ─── Model Owner Selector ──────────────────────────────────────────────────
+function isExplicitSelectableOwner(value: string): value is ExplicitSelectableOwner {
+  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
+}
 
-function setModelOwner(owner: 'auto' | 'codex' | 'haiku'): void {
-  selectedOwner = owner;
-  modelSelector.querySelectorAll('.cc-toggle').forEach((btn) => {
-    (btn as HTMLElement).classList.toggle('active', (btn as HTMLElement).dataset.owner === owner);
+function getProviderRuntime(state: any, owner: ExplicitSelectableOwner): ProviderRuntimeView | null {
+  return (state?.providers?.[owner] as ProviderRuntimeView | undefined) ?? null;
+}
+
+function canSelectOwner(state: any, owner: ExplicitSelectableOwner): boolean {
+  const runtime = getProviderRuntime(state, owner);
+  if (!runtime) return false;
+  return runtime.status !== 'unavailable' && runtime.status !== 'error';
+}
+
+function getStoredSelectedOwner(): SelectableOwner {
+  try {
+    const stored = window.localStorage.getItem(SELECTED_OWNER_STORAGE_KEY);
+    if (stored && isSelectableOwner(stored)) return stored;
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+  return 'auto';
+}
+
+function persistSelectedOwner(): void {
+  try {
+    window.localStorage.setItem(SELECTED_OWNER_STORAGE_KEY, selectedOwner);
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+}
+
+function normalizeSelectedOwner(nextOwner: SelectableOwner, state: any): SelectableOwner {
+  if (nextOwner === 'auto') return 'auto';
+  return canSelectOwner(state, nextOwner) ? nextOwner : 'auto';
+}
+
+function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as any).__lastState): void {
+  selectedOwner = normalizeSelectedOwner(nextOwner, state);
+  persistSelectedOwner();
+  syncModelToggleState(state);
+}
+
+function syncModelToggleState(state: any = (window as any).__lastState): void {
+  const buttons = modelToggleGroup.querySelectorAll<HTMLButtonElement>('.cc-model-toggle-btn');
+  buttons.forEach((button) => {
+    const owner = button.dataset.owner;
+    if (!owner || !isExplicitSelectableOwner(owner)) return;
+    const runtime = getProviderRuntime(state, owner);
+    const status = runtime?.status || 'unavailable';
+    const enabled = canSelectOwner(state, owner);
+    const isSelected = owner === selectedOwner;
+    button.setAttribute('aria-pressed', String(isSelected));
+    button.disabled = !enabled;
+    button.dataset.status = status;
+    const details = [
+      OWNER_LABELS[owner],
+      runtime?.model || status,
+      runtime?.errorDetail || '',
+    ].filter(Boolean);
+    button.title = details.join(' • ');
   });
 }
 
-modelSelector.addEventListener('click', (e: Event) => {
-  const btn = (e.target as HTMLElement).closest('[data-owner]') as HTMLElement | null;
-  if (btn?.dataset.owner) setModelOwner(btn.dataset.owner as 'auto' | 'codex' | 'haiku');
-});
-
-// ─── Split Selector ────────────────────────────────────────────────────────
-
-splitSelector.addEventListener('click', (e: Event) => {
-  const btn = (e.target as HTMLElement).closest('[data-preset]') as HTMLElement | null;
-  if (btn?.dataset.preset) {
-    workspaceAPI.applyExecutionPreset(btn.dataset.preset as import('../../shared/types/appState').ExecutionLayoutPreset);
-  }
-});
-
-// ─── Metric Box Rendering ──────────────────────────────────────────────────
-
-interface CodexStatusMetrics {
-  contextWindow?: { percentLeft: number; used: string; total: string };
-  limit5h?: { percentLeft: number; resetsAt: string };
-  limitWeekly?: { percentLeft: number; resetsAt: string };
-  credits?: number;
+function initializeModelToggle(): void {
+  selectedOwner = getStoredSelectedOwner();
+  modelToggleGroup.addEventListener('click', (event: Event) => {
+    const target = event.target as HTMLElement | null;
+    const button = target?.closest<HTMLButtonElement>('.cc-model-toggle-btn');
+    const owner = button?.dataset.owner;
+    if (!button || !owner || owner === 'auto' || !isSelectableOwner(owner)) return;
+    setSelectedOwner(owner === selectedOwner ? 'auto' : owner);
+  });
+  syncModelToggleState();
 }
 
-// Session-level token tracking (per provider)
-let haikuInputTokens = 0;
-let haikuOutputTokens = 0;
-let haikuTurnCount = 0;
-let codexSessionTokens = 0;
-let codexSessionTurns = 0;
-
-// Haiku 4.5 pricing: $0.80/MTok input, $4.00/MTok output
-const HAIKU_INPUT_COST_PER_TOKEN = 0.80 / 1_000_000;
-const HAIKU_OUTPUT_COST_PER_TOKEN = 4.00 / 1_000_000;
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+function clampChatZoom(value: number): number {
+  return Math.min(CHAT_ZOOM_MAX, Math.max(CHAT_ZOOM_MIN, value));
 }
 
-function formatCost(dollars: number): string {
-  if (dollars < 0.01) return `$${dollars.toFixed(4)}`;
-  if (dollars < 1) return `$${dollars.toFixed(3)}`;
-  return `$${dollars.toFixed(2)}`;
+function roundChatZoom(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
-function renderCodexMetrics(metrics: CodexStatusMetrics): void {
-  if (metrics.contextWindow) {
-    const cw = metrics.contextWindow;
-    metricContextValue.textContent = cw.used;
-    metricContextSub.textContent = cw.total;
-    metricContextBar.style.width = `${100 - cw.percentLeft}%`;
-  }
+function syncChatZoomControls(): void {
+  chatZoomOutBtn.disabled = chatZoom <= CHAT_ZOOM_MIN;
+  chatZoomInBtn.disabled = chatZoom >= CHAT_ZOOM_MAX;
+  const percent = Math.round(chatZoom * 100);
+  chatZoomResetBtn.textContent = `${percent}%`;
+  chatZoomResetBtn.setAttribute('title', `Reset chat zoom (${percent}%)`);
+  chatZoomResetBtn.setAttribute('aria-label', `Reset chat zoom (${percent}%)`);
+}
 
-  if (metrics.limit5h) {
-    const lim = metrics.limit5h;
-    metric5hValue.textContent = lim.resetsAt.split('/')[0]?.trim() || '0';
-    metric5hSub.textContent = lim.resetsAt.split('/')[1]?.trim() || '';
-    metric5hBar.style.width = `${100 - lim.percentLeft}%`;
-  }
-
-  if (metrics.limitWeekly) {
-    const lim = metrics.limitWeekly;
-    metricWeeklyValue.textContent = lim.resetsAt.split('/')[0]?.trim() || '0';
-    metricWeeklySub.textContent = lim.resetsAt.split('/')[1]?.trim() || '';
-    metricWeeklyBar.style.width = `${100 - lim.percentLeft}%`;
-  }
-
-  if (metrics.credits !== undefined) {
-    metricCreditsValue.textContent = String(metrics.credits);
+function setChatZoom(nextZoom: number, persist = true): void {
+  chatZoom = roundChatZoom(clampChatZoom(nextZoom));
+  commandShell.style.setProperty('--cc-chat-zoom', String(chatZoom));
+  syncChatZoomControls();
+  scheduleChatScrollToBottom(false, 2);
+  if (!persist) return;
+  try {
+    window.localStorage.setItem(CHAT_ZOOM_STORAGE_KEY, String(chatZoom));
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
   }
 }
 
-function renderHaikuMetrics(): void {
-  const totalTokens = haikuInputTokens + haikuOutputTokens;
-  const cost = (haikuInputTokens * HAIKU_INPUT_COST_PER_TOKEN) + (haikuOutputTokens * HAIKU_OUTPUT_COST_PER_TOKEN);
-
-  haikuTokensValue.textContent = formatTokenCount(totalTokens);
-  haikuTokensSub.textContent = `in: ${formatTokenCount(haikuInputTokens)} / out: ${formatTokenCount(haikuOutputTokens)}`;
-  // Fill bar based on a $1 budget threshold
-  haikuTokensBar.style.width = `${Math.min(100, Math.round((totalTokens / 1_000_000) * 10))}%`;
-
-  haikuCostValue.textContent = formatCost(cost);
-  haikuCostSub.textContent = `$${(haikuInputTokens * HAIKU_INPUT_COST_PER_TOKEN).toFixed(4)} in / $${(haikuOutputTokens * HAIKU_OUTPUT_COST_PER_TOKEN).toFixed(4)} out`;
-  haikuCostBar.style.width = `${Math.min(100, Math.round(cost * 100))}%`;
-
-  haikuTurnsValue.textContent = String(haikuTurnCount);
-  haikuTurnsSub.textContent = `avg ${haikuTurnCount > 0 ? formatTokenCount(Math.round(totalTokens / haikuTurnCount)) : '0'}/turn`;
-
-  sessionTotalValue.textContent = formatCost(cost);
-  sessionTotalSub.textContent = `${haikuTurnCount + codexSessionTurns} turns total`;
+function adjustChatZoom(delta: number): void {
+  setChatZoom(chatZoom + delta);
 }
 
-function trackTokenUsage(result: any, provider: string): void {
-  if (!result?.usage) return;
-  const inputTok = result.usage.inputTokens || 0;
-  const outputTok = result.usage.outputTokens || 0;
+function resetChatZoom(): void {
+  setChatZoom(CHAT_ZOOM_DEFAULT);
+}
 
-  if (provider === 'haiku') {
-    haikuInputTokens += inputTok;
-    haikuOutputTokens += outputTok;
-    haikuTurnCount++;
-    renderHaikuMetrics();
-  } else {
-    codexSessionTokens += inputTok + outputTok;
-    codexSessionTurns++;
-    renderHaikuMetrics(); // Update session total
+function initializeChatZoom(): void {
+  try {
+    const stored = window.localStorage.getItem(CHAT_ZOOM_STORAGE_KEY);
+    const parsed = stored == null ? NaN : Number.parseFloat(stored);
+    if (Number.isFinite(parsed)) {
+      setChatZoom(parsed, false);
+      return;
+    }
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
   }
+  setChatZoom(CHAT_ZOOM_DEFAULT, false);
 }
 
 // ─── Log Rendering ─────────────────────────────────────────────────────────
 
 let lastLogCount = 0;
 let logsCopyFeedbackTimer: number | null = null;
+let logsCollapsed = true;
+
+function setLogsCollapsed(collapsed: boolean): void {
+  logsCollapsed = collapsed;
+  logsPanel.classList.toggle('collapsed', collapsed);
+  logsToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+  logsToggleBtn.textContent = collapsed ? '▸' : '◂';
+  logsToggleBtn.title = collapsed ? 'Expand logs' : 'Collapse logs';
+  logsToggleBtn.setAttribute('aria-label', collapsed ? 'Expand logs' : 'Collapse logs');
+}
+
+logsToggleBtn.addEventListener('click', () => {
+  setLogsCollapsed(!logsCollapsed);
+});
 
 function renderLogs(logs: any[]): void {
   const newLogs = logs.slice(lastLogCount);
@@ -240,7 +301,7 @@ async function copyVisibleLogs(): Promise<void> {
       logsCopyFeedbackTimer = null;
     }, 1200);
   } catch (err) {
-    workspaceAPI.addLog('error', 'system', `Failed to copy logs: ${err instanceof Error ? err.message : String(err)}`);
+    getWorkspaceAPI()?.addLog('error', 'system', `Failed to copy logs: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -290,6 +351,19 @@ chatThread.addEventListener('scroll', () => {
   chatAutoPinned = isChatNearBottom();
 });
 
+chatThread.addEventListener('wheel', (e: WheelEvent) => {
+  // User scrolling up — immediately unpin auto-scroll
+  if (e.deltaY < 0) {
+    chatAutoPinned = false;
+    // Cancel any pending scroll-to-bottom animation
+    if (chatScrollRaf !== null) {
+      window.cancelAnimationFrame(chatScrollRaf);
+      chatScrollRaf = null;
+      chatScrollFramesRemaining = 0;
+    }
+  }
+}, { passive: true });
+
 chatThread.addEventListener('toggle', (event: Event) => {
   const target = event.target as HTMLElement | null;
   if (!target?.classList.contains('chat-tool-details')) return;
@@ -302,12 +376,10 @@ const chatResizeObserver = new ResizeObserver(() => {
 chatResizeObserver.observe(chatThread);
 
 const chatMutationObserver = new MutationObserver(() => {
-  scheduleChatScrollToBottom(false, 5);
+  scheduleChatScrollToBottom(false, 1);
 });
 chatMutationObserver.observe(chatThread, {
   childList: true,
-  subtree: true,
-  characterData: true,
 });
 
 // ─── Markdown Rendering ────────────────────────────────────────────────────
@@ -368,48 +440,6 @@ function renderMarkdown(text: string): string {
   return parts.join('');
 }
 
-function prettifyToolName(name: string): string {
-  return name
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
-function truncateSingleLine(text: string, max = 120): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
-}
-
-function extractToolName(text: string): string {
-  return text.split('→')[0]?.trim() || text.trim();
-}
-
-function summarizeToolCall(text: string): string {
-  const toolName = extractToolName(text);
-  return prettifyToolName(toolName);
-}
-
-function summarizeToolResult(text: string): string {
-  const [, detail = 'Completed'] = text.split('→');
-  return truncateSingleLine(detail || 'Completed');
-}
-
-function summarizeUnknownForUi(value: unknown, max = 140): string {
-  if (value == null) return 'Completed';
-  if (typeof value === 'string') return truncateSingleLine(value, max);
-  try {
-    return truncateSingleLine(JSON.stringify(value), max);
-  } catch {
-    return truncateSingleLine(String(value), max);
-  }
-}
-
-function isRawToolTranscript(text: string): boolean {
-  const trimmed = text.trim();
-  return /^\+\s*tool\b/i.test(trimmed)
-    || /^tool\s+[a-z0-9_]+/i.test(trimmed)
-    || /^tool result:\s/i.test(trimmed)
-    || /^tool call:\s/i.test(trimmed);
-}
 
 // ─── Chat Message Helpers ──────────────────────────────────────────────────
 
@@ -429,11 +459,31 @@ function shouldShowMemoryEntry(entry: TaskMemoryEntry): boolean {
   return true;
 }
 
-function appendUserMessage(text: string): void {
+function appendUserMessage(text: string, imageDataUrls?: string[]): void {
   if (chatEmptyState.parentNode) chatEmptyState.remove();
   const el = document.createElement('div');
-  el.className = 'chat-msg chat-msg-user';
-  el.textContent = text;
+  const hasText = Boolean(text.trim());
+  const hasImages = imageDataUrls && imageDataUrls.length > 0;
+
+  el.className = 'chat-msg chat-msg-user' + (!hasText && hasImages ? ' chat-msg-user-imgonly' : '');
+
+  if (hasText) {
+    el.textContent = text;
+  }
+
+  if (hasImages) {
+    const imgContainer = document.createElement('div');
+    imgContainer.className = 'chat-msg-images';
+    for (const url of imageDataUrls) {
+      const img = document.createElement('img');
+      img.className = 'chat-msg-img';
+      img.src = url;
+      img.alt = 'Attached image';
+      imgContainer.appendChild(img);
+    }
+    el.appendChild(imgContainer);
+  }
+
   chatThread.appendChild(el);
   scheduleChatScrollToBottom(true);
 }
@@ -441,36 +491,95 @@ function appendUserMessage(text: string): void {
 function clearChatThread(): void {
   chatThread.innerHTML = '';
   chatThread.appendChild(chatEmptyState);
+  updateLastAgentResponseText('');
 }
 
-function createLiveRunCard(taskId: string, provider: string): LiveRunCard {
-  if (chatEmptyState.parentNode) chatEmptyState.remove();
-  const root = document.createElement('div');
-  root.className = 'chat-msg chat-msg-model chat-msg-live';
-  root.dataset.taskId = taskId;
-  root.innerHTML =
-    `<div class="chat-msg-header">` +
-    `<span class="chat-msg-provider ${escapeHtml(provider)}">${escapeHtml(provider)}</span>` +
-    `<span class="chat-msg-meta">working...</span>` +
-    `</div>` +
-    `<div class="chat-activity"></div>` +
-    `<div class="chat-msg-text chat-msg-thinking shimmer">Working\u2026</div>`;
-  chatThread.appendChild(root);
-  scheduleChatScrollToBottom(true, 5);
-  const card: LiveRunCard = {
-    root,
-    meta: root.querySelector('.chat-msg-meta') as HTMLElement,
-    activity: root.querySelector('.chat-activity') as HTMLElement,
-    output: root.querySelector('.chat-msg-text') as HTMLElement,
-    seenThoughts: new Set(),
-    pendingToolBlock: null,
-    typingQueue: [],
-    typingTimer: null,
-    activeThoughtEl: null,
-    deferredToolEvents: [],
-  };
-  liveRunCards.set(taskId, card);
-  return card;
+function updateLastAgentResponseText(nextText: string): void {
+  const trimmed = nextText.trim();
+  lastAgentResponseText = trimmed;
+  const hasResponse = Boolean(trimmed);
+  chatCopyLastBtn.toggleAttribute('disabled', !hasResponse);
+  chatCopyLastBtn.setAttribute('title', hasResponse ? 'Copy last agent response' : 'No agent response yet');
+  chatCopyLastBtn.setAttribute('aria-label', hasResponse ? 'Copy last agent response' : 'No agent response yet');
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function flashChatCopyFeedback(label: string): void {
+  chatCopyLastBtn.classList.add('copied');
+  chatCopyLastBtn.setAttribute('title', label);
+  chatCopyLastBtn.setAttribute('aria-label', label);
+  if (chatCopyFeedbackTimer !== null) window.clearTimeout(chatCopyFeedbackTimer);
+  chatCopyFeedbackTimer = window.setTimeout(() => {
+    chatCopyLastBtn.classList.remove('copied');
+    chatCopyLastBtn.setAttribute('title', lastAgentResponseText ? 'Copy last agent response' : 'No agent response yet');
+    chatCopyLastBtn.setAttribute('aria-label', lastAgentResponseText ? 'Copy last agent response' : 'No agent response yet');
+    chatCopyFeedbackTimer = null;
+  }, 1200);
+}
+
+async function copyLastAgentResponse(): Promise<void> {
+  const text = lastAgentResponseText.trim();
+  if (!text) return;
+
+  const copied = await copyTextToClipboard(text);
+  if (copied) {
+    flashChatCopyFeedback('Copied');
+    return;
+  }
+
+  getWorkspaceAPI()?.addLog('error', 'system', 'Failed to copy last agent response');
+}
+
+function createLiveRunCard(taskId: string, _provider: string): void {
+  createLiveRunCardInternal(taskId, _provider, chatThread, {
+    renderMarkdown,
+    updateLastAgentResponseText,
+    scheduleChatScrollToBottom,
+  });
+}
+
+function appendToken(taskId: string, text: string): void {
+  appendTokenInternal(taskId, text);
+}
+
+function appendThought(taskId: string, text: string): void {
+  appendThoughtInternal(taskId, text);
+}
+
+function appendToolActivity(taskId: string, kind: 'call' | 'result', text: string): void {
+  appendToolActivityInternal(taskId, kind, text);
+}
+
+function appendCodexItemProgress(taskId: string, progressData: string, item?: unknown): void {
+  appendCodexItemProgressInternal(taskId, progressData, item as any);
+}
+
+function replaceWithResult(taskId: string, result: any, provider?: string): void {
+  replaceWithResultInternal(taskId, result, provider);
+}
+
+function replaceWithError(taskId: string, error: string): void {
+  replaceWithErrorInternal(taskId, error);
 }
 
 function appendMemoryEntry(entry: TaskMemoryEntry): void {
@@ -482,12 +591,13 @@ function appendMemoryEntry(entry: TaskMemoryEntry): void {
   }
 
   if (chatEmptyState.parentNode) chatEmptyState.remove();
+  if (entry.kind === 'model_result') {
+    updateLastAgentResponseText(entry.text);
+  }
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-model';
-  const provider = entry.providerId || 'system';
   el.innerHTML =
     `<div class="chat-msg-header">` +
-    `<span class="chat-msg-provider ${escapeHtml(provider)}">${escapeHtml(provider)}</span>` +
     `<span class="chat-msg-meta">${escapeHtml(formatTime(entry.createdAt))}</span>` +
     `</div>` +
     `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
@@ -502,9 +612,10 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
     return;
   }
 
-  const existingCard = liveRunCards.get(taskId);
+  const existingCard = getLiveRunCard(taskId);
   if (existingCard?.root.isConnected) return;
 
+  const modelApi = getModelAPI();
   if (!modelApi?.getTaskMemory) {
     renderedTaskMemoryKey = `${taskId}:model-disabled`;
     clearChatThread();
@@ -522,178 +633,6 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
   }
 }
 
-// ─── Thought / Tool Activity Streaming ─────────────────────────────────────
-
-function appendThought(taskId: string, text: string): void {
-  const card = liveRunCards.get(taskId);
-  if (!card) return;
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  if (isRawToolTranscript(trimmed)) return;
-  if (/^(##\s*(Observation|Inference|Critique Summary)|Observation:|Inference:)/.test(trimmed)) return;
-  if (trimmed.length > 260 || trimmed.split('\n').length > 4) return;
-  if (card.seenThoughts.has(trimmed)) return;
-  card.seenThoughts.add(trimmed);
-  card.pendingToolBlock = null;
-  card.typingQueue.push(trimmed);
-  if (card.typingTimer !== null) return;
-
-  const typeNext = () => {
-    const next = card.typingQueue.shift();
-    if (!next) {
-      card.typingTimer = null;
-      card.activeThoughtEl = null;
-      while (card.deferredToolEvents.length > 0) {
-        const event = card.deferredToolEvents.shift()!;
-        appendToolActivity(taskId, event.kind, event.text);
-      }
-      return;
-    }
-
-    const el = document.createElement('div');
-    el.className = 'chat-thought';
-    card.activity.appendChild(el);
-    card.activeThoughtEl = el;
-    let idx = 0;
-    const step = () => {
-      idx += 2;
-      el.textContent = next.slice(0, idx);
-      scheduleChatScrollToBottom(true, 4);
-      if (idx < next.length) {
-        card.typingTimer = window.setTimeout(step, 10);
-      } else {
-        card.typingTimer = window.setTimeout(() => {
-          card.typingTimer = null;
-          card.activeThoughtEl = null;
-          while (card.deferredToolEvents.length > 0) {
-            const event = card.deferredToolEvents.shift()!;
-            appendToolActivity(taskId, event.kind, event.text);
-          }
-          typeNext();
-        }, 90);
-      }
-    };
-    step();
-  };
-
-  typeNext();
-}
-
-function appendToolActivity(taskId: string, kind: 'call' | 'result', text: string): void {
-  const card = liveRunCards.get(taskId);
-  if (!card) return;
-  if (card.typingTimer !== null || card.activeThoughtEl) {
-    card.deferredToolEvents.push({ kind, text });
-    return;
-  }
-  if (kind === 'call' || !card.pendingToolBlock) {
-    const toolName = extractToolName(text);
-    const details = document.createElement('details');
-    details.className = 'chat-tool-details';
-    details.dataset.toolName = toolName;
-    details.innerHTML =
-      `<summary><span class="chat-tool-label">Tool</span><span class="chat-tool-summary-code">${escapeHtml(summarizeToolCall(toolName))}</span></summary>` +
-      `<div class="chat-tool-list"></div>`;
-    card.activity.appendChild(details);
-    card.pendingToolBlock = details;
-  }
-
-  const target = card.pendingToolBlock.querySelector('.chat-tool-list') as HTMLElement;
-  const row = document.createElement('div');
-  row.className = `chat-tool-row ${kind}`;
-  const detailText = kind === 'call' ? text : (text.includes('→') ? text.split('→').slice(1).join('→').trim() : text);
-  row.innerHTML = `<span class="chat-tool-kind">${kind === 'call' ? 'CALL' : 'RESULT'}</span><code>${escapeHtml(detailText)}</code>`;
-  target.appendChild(row);
-
-  if (kind === 'result') {
-    const summaryEl = card.pendingToolBlock.querySelector('.chat-tool-summary-code') as HTMLElement | null;
-    if (summaryEl) {
-      const toolName = card.pendingToolBlock.dataset.toolName || extractToolName(text);
-      summaryEl.textContent = `${prettifyToolName(toolName)} · ${summarizeToolResult(text)}`;
-    }
-    card.pendingToolBlock = null;
-  }
-  scheduleChatScrollToBottom(true, 5);
-}
-
-function appendCodexItemProgress(taskId: string, progressData: string, item?: CodexItem): void {
-  if (!item) return;
-  const started = /\bstarted$/.test(progressData);
-  const completed = /\bcompleted$/.test(progressData);
-
-  if (item.type === 'agent_message' && completed) {
-    for (const line of item.text.split('\n')) {
-      appendThought(taskId, line);
-    }
-    return;
-  }
-
-  if (item.type === 'mcp_tool_call') {
-    const toolLabel = item.tool || item.server || 'tool';
-    if (started) {
-      appendToolActivity(taskId, 'call', toolLabel);
-    } else if (completed) {
-      const detail = item.error?.message ? `Error: ${item.error.message}` : summarizeUnknownForUi(item.result);
-      appendToolActivity(taskId, 'result', `${toolLabel} → ${detail}`);
-    }
-    return;
-  }
-
-  if (item.type === 'command_execution') {
-    if (started) {
-      appendToolActivity(taskId, 'call', item.command);
-    } else if (completed) {
-      const detail = item.exit_code == null ? 'Completed' : (item.exit_code === 0 ? 'Succeeded' : `Exit ${item.exit_code}`);
-      appendToolActivity(taskId, 'result', `${item.command} → ${detail}`);
-    }
-    return;
-  }
-
-  if (item.type === 'file_change' && completed) {
-    const detail = item.changes.map((change) => `${change.kind} ${change.path}`).join(', ') || 'Updated files';
-    appendToolActivity(taskId, 'result', `file_change → ${detail}`);
-  }
-}
-
-function replaceWithResult(taskId: string, result: any, provider?: string): void {
-  const card = liveRunCards.get(taskId);
-  if (!card) return;
-  if (result.codexItems && result.codexItems.length > 0) {
-    for (const item of result.codexItems) {
-      if (item.type === 'command_execution' && item.status === 'completed') {
-        appendToolActivity(taskId, 'result', `$ ${item.command}`);
-      } else if (item.type === 'file_change' && item.status === 'completed') {
-        const changes = item.changes.map((c: any) => `${c.kind}: ${c.path}`).join(', ');
-        appendToolActivity(taskId, 'result', changes);
-      }
-    }
-  }
-
-  const usage = result.usage;
-  const meta = `${usage.durationMs}ms | ${usage.inputTokens}in / ${usage.outputTokens}out`;
-
-  if (result.success) {
-    card.meta.textContent = meta;
-    card.output.className = 'chat-msg-text chat-markdown';
-    card.output.innerHTML = renderMarkdown(result.output);
-  } else {
-    card.meta.textContent = 'failed';
-    card.output.className = 'chat-msg-error';
-    card.output.textContent = result.error || 'Unknown error';
-  }
-  trackTokenUsage(result, provider || result.providerId || 'codex');
-  scheduleChatScrollToBottom(true, 6);
-}
-
-function replaceWithError(taskId: string, error: string): void {
-  const card = liveRunCards.get(taskId);
-  if (!card) return;
-  card.meta.textContent = 'failed';
-  card.output.className = 'chat-msg-error';
-  card.output.textContent = error;
-  scheduleChatScrollToBottom(true, 6);
-}
-
 // ─── Chat Submission ───────────────────────────────────────────────────────
 
 function getActiveTaskIdFromState(): string | null {
@@ -701,67 +640,319 @@ function getActiveTaskIdFromState(): string | null {
   return state?.activeTaskId || null;
 }
 
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      // Strip the "data:...;base64," prefix
+      const base64 = dataUrl.split(',')[1] || '';
+      resolve(base64);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+function getImageMediaType(file: File): ImageMediaType {
+  const type = file.type.toLowerCase();
+  if (type === 'image/png') return 'image/png';
+  if (type === 'image/gif') return 'image/gif';
+  if (type === 'image/webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+async function buildAttachments(): Promise<Array<{ type: 'image'; mediaType: ImageMediaType; data: string; name: string }>> {
+  const imageFiles = attachedFiles.filter(f => f.type === 'image');
+  if (imageFiles.length === 0) return [];
+
+  const results: Array<{ type: 'image'; mediaType: ImageMediaType; data: string; name: string }> = [];
+  for (const entry of imageFiles) {
+    const data = await fileToBase64(entry.file);
+    results.push({
+      type: 'image',
+      mediaType: getImageMediaType(entry.file),
+      data,
+      name: entry.file.name,
+    });
+  }
+  return results;
+}
+
 async function submitChat(): Promise<void> {
   const prompt = chatInput.value.trim();
-  if (!prompt) { chatInput.focus(); return; }
+  const hasImages = attachedFiles.some(f => f.type === 'image');
+  if (!prompt && !hasImages) { chatInput.focus(); return; }
 
+  const modelApi = getModelAPI();
   if (!modelApi?.invoke) {
-    appendUserMessage(prompt);
+    appendUserMessage(prompt || '(image)');
     chatInput.value = '';
+    clearAttachments();
     const disabledTaskId = `model-disabled-${chatCounter++}`;
     createLiveRunCard(disabledTaskId, 'system');
     replaceWithError(disabledTaskId, 'Model integration is not enabled in this v2 browser build.');
-    workspaceAPI.addLog('warn', 'system', 'Model integration is not enabled in this v2 browser build.');
+    getWorkspaceAPI()?.addLog('warn', 'system', 'Model integration is not enabled in this v2 browser build.');
     chatInput.focus();
     return;
   }
+
+  // Capture attachments and preview URLs before clearing
+  const pendingAttachments = await buildAttachments();
+  const imagePreviewUrls = attachedFiles
+    .filter(f => f.type === 'image' && f.previewUrl)
+    .map(f => f.previewUrl!);
 
   chatCounter++;
   let taskId = getActiveTaskIdFromState();
   const owner = selectedOwner === 'auto' ? undefined : selectedOwner;
 
   if (!taskId) {
-    const title = prompt.length > 48 ? `${prompt.slice(0, 48)}...` : prompt;
+    const workspaceAPI = getWorkspaceAPI();
+    if (!workspaceAPI) {
+      replaceWithError(`model-disabled-${chatCounter}`, 'Command surface is not connected to the runtime API.');
+      console.warn('[command] Command submit failed: getWorkspaceAPI() is unavailable.');
+      chatInput.value = '';
+      chatInput.focus();
+      return;
+    }
+    const titleSource = prompt || 'Image attachment';
+    const title = titleSource.length > 48 ? `${titleSource.slice(0, 48)}...` : titleSource;
     const createdTask = await workspaceAPI.createTask(title);
     taskId = createdTask.id;
   }
 
   chatInput.value = '';
+  clearAttachments();
   chatSubmitBtn.setAttribute('disabled', '');
+  chatStopBtn.hidden = false;
 
-  appendUserMessage(prompt);
+  appendUserMessage(prompt, imagePreviewUrls.length > 0 ? imagePreviewUrls : undefined);
 
   let resolvedOwner: string = owner || '';
   if (!resolvedOwner) {
     try {
-      resolvedOwner = modelApi.resolve ? await modelApi.resolve(prompt) : 'haiku';
+      resolvedOwner = modelApi.resolve ? await modelApi.resolve(prompt) : PRIMARY_PROVIDER_ID;
     } catch {
-      resolvedOwner = 'haiku';
+      resolvedOwner = PRIMARY_PROVIDER_ID;
     }
   }
 
+  runningTaskId = taskId;
+  tokenGauge.classList.add('cc-token-active');
   createLiveRunCard(taskId, resolvedOwner);
 
+  const invokeOptions = pendingAttachments.length > 0
+    ? { attachments: pendingAttachments }
+    : undefined;
+
+  const effectivePrompt = prompt || (pendingAttachments.length > 0 ? 'Describe this image.' : '');
+
   try {
-    const result = await modelApi.invoke(taskId, prompt, resolvedOwner);
-    replaceWithResult(taskId, result, resolvedOwner);
+    const result = await modelApi.invoke(taskId, effectivePrompt, resolvedOwner, invokeOptions);
+    replaceWithResult(taskId, result, result?.providerId || resolvedOwner);
   } catch (err: any) {
     replaceWithError(taskId, err.message || String(err));
   } finally {
+    runningTaskId = null;
+    tokenGauge.classList.remove('cc-token-active');
+    chatStopBtn.hidden = true;
     chatSubmitBtn.removeAttribute('disabled');
     chatInput.focus();
   }
 }
 
 chatSubmitBtn.addEventListener('click', submitChat);
+chatStopBtn.addEventListener('click', () => {
+  const modelApi = getModelAPI();
+  if (runningTaskId && modelApi?.cancel) {
+    void modelApi.cancel(runningTaskId);
+  }
+});
+chatCopyLastBtn.addEventListener('click', () => {
+  void copyLastAgentResponse();
+});
+chatZoomOutBtn.addEventListener('click', () => {
+  adjustChatZoom(-CHAT_ZOOM_STEP);
+});
+chatZoomResetBtn.addEventListener('click', () => {
+  resetChatZoom();
+});
+chatZoomInBtn.addEventListener('click', () => {
+  adjustChatZoom(CHAT_ZOOM_STEP);
+});
 chatInput.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (e.key === 'Enter') submitChat();
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    void submitChat();
+  }
+});
+
+// Paste images directly into the textarea
+chatInput.addEventListener('paste', (e: ClipboardEvent) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of Array.from(items)) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        addFiles(dt.files, 'image');
+      }
+      return;
+    }
+  }
+});
+
+window.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+  if (event.key === '=' || event.key === '+') {
+    event.preventDefault();
+    adjustChatZoom(CHAT_ZOOM_STEP);
+    return;
+  }
+  if (event.key === '-' || event.key === '_') {
+    event.preventDefault();
+    adjustChatZoom(-CHAT_ZOOM_STEP);
+    return;
+  }
+  if (event.key === '0') {
+    event.preventDefault();
+    resetChatZoom();
+  }
+});
+
+// ─── Chat History ─────────────────────────────────────────────────────────
+
+function formatHistoryDate(timestamp: number): string {
+  const d = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function openHistoryPopup(): void {
+  const state = (window as any).__lastState;
+  const tasks: any[] = state?.tasks || [];
+  const activeId = state?.activeTaskId || null;
+
+  historyList.innerHTML = '';
+
+  if (tasks.length === 0) {
+    historyList.innerHTML = '<div class="cc-history-empty">No conversations yet.</div>';
+    historyOverlay.hidden = false;
+    return;
+  }
+
+  // Sort newest first
+  const sorted = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  for (const task of sorted) {
+    const item = document.createElement('div');
+    item.className = 'cc-history-item' + (task.id === activeId ? ' active' : '');
+    item.innerHTML =
+      `<span class="cc-history-item-title">${escapeHtml(task.title)}</span>` +
+      `<span class="cc-history-item-date">${formatHistoryDate(task.updatedAt)}</span>`;
+    item.addEventListener('click', () => {
+      switchToTask(task.id);
+      historyOverlay.hidden = true;
+    });
+    historyList.appendChild(item);
+  }
+
+  historyOverlay.hidden = false;
+}
+
+function closeHistoryPopup(): void {
+  historyOverlay.hidden = true;
+  chatInput.focus();
+}
+
+async function startNewChat(): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+
+  historyOverlay.hidden = true;
+
+  // Clear active task — will show empty state
+  await workspaceAPI.setActiveTask(null);
+  currentRenderedTaskId = null;
+  renderedTaskMemoryKey = null;
+  clearChatThread();
+  chatInput.focus();
+}
+
+function switchToTask(taskId: string): void {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+
+  void workspaceAPI.setActiveTask(taskId);
+  // renderState will pick up the change and call refreshTaskConversation
+}
+
+chatHistoryBtn.addEventListener('click', openHistoryPopup);
+historyCloseBtn.addEventListener('click', closeHistoryPopup);
+historyNewBtn.addEventListener('click', () => { void startNewChat(); });
+
+// Close on overlay background click
+historyOverlay.addEventListener('click', (e: MouseEvent) => {
+  if (e.target === historyOverlay) closeHistoryPopup();
+});
+
+// Close on Escape
+window.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && !historyOverlay.hidden) {
+    e.preventDefault();
+    closeHistoryPopup();
+  }
+});
+
+// ─── Token Usage Display ──────────────────────────────────────────────────
+
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function updateTokenUsageDisplay(state: any): void {
+  const usage = state?.tokenUsage;
+  if (!usage) return;
+  tokenInLabel.textContent = `${formatTokenCount(usage.inputTokens)} in`;
+  tokenOutLabel.textContent = `${formatTokenCount(usage.outputTokens)} out`;
+}
+
+tokenResetBtn.addEventListener('click', () => {
+  const workspaceAPI = getWorkspaceAPI();
+  if (workspaceAPI) {
+    void workspaceAPI.resetTokenUsage();
+  }
 });
 
 // ─── Full State Render ─────────────────────────────────────────────────────
 
 function renderState(state: any): void {
   (window as any).__lastState = state;
+  const normalizedOwner = normalizeSelectedOwner(selectedOwner, state);
+  if (normalizedOwner !== selectedOwner) {
+    selectedOwner = normalizedOwner;
+    persistSelectedOwner();
+  } else {
+    selectedOwner = normalizedOwner;
+  }
+  syncModelToggleState(state);
   const active = state.tasks.find((t: any) => t.id === state.activeTaskId);
   taskSummary.textContent = active ? active.title : 'No active task';
   renderLogs(state.logs);
@@ -769,27 +960,49 @@ function renderState(state: any): void {
   if (state.executionSplit) {
     const ratio = state.executionSplit.ratio;
     splitLabel.textContent = `split ${Math.round(ratio * 100)}/${Math.round((1 - ratio) * 100)}`;
-    splitSelector.querySelectorAll('[data-preset]').forEach((btn) => {
-      (btn as HTMLElement).classList.toggle('active', (btn as HTMLElement).dataset.preset === state.executionSplit.preset);
-    });
   }
 
   taskCount.textContent = `tasks: ${state.tasks.length}`;
+  updateTokenUsageDisplay(state);
 
-  // Update session/model labels from providers
-  const haiku = state.providers?.haiku;
-  if (haiku?.sessionId) {
-    sessionLabel.textContent = haiku.sessionId.slice(0, 12);
+  const activeProviderId = active?.owner && active.owner !== 'user'
+    ? active.owner
+    : null;
+  const activeProvider = activeProviderId ? state.providers?.[activeProviderId] : null;
+  const selectedRuntime = selectedOwner !== 'auto'
+    ? getProviderRuntime(state, selectedOwner)
+    : null;
+
+  targetLabel.textContent = `target ${getOwnerDisplayLabel(selectedOwner)}`;
+
+  if (activeProviderId && activeProvider) {
+    modelLabel.textContent = `active ${getOwnerDisplayLabel(activeProviderId)}`;
+    if (activeProvider.sessionId) {
+      sessionLabel.textContent = `session ${activeProvider.sessionId.slice(0, 12)}`;
+    } else {
+      sessionLabel.textContent = activeProvider.model || activeProvider.status || 'unavailable';
+    }
+  } else if (selectedOwner !== 'auto' && selectedRuntime) {
+    modelLabel.textContent = `ready ${getOwnerDisplayLabel(selectedOwner)}`;
+    sessionLabel.textContent = selectedRuntime.model || selectedRuntime.status || 'unavailable';
   } else {
-    sessionLabel.textContent = haiku?.status || 'unavailable';
-  }
-  if (haiku?.model) {
-    modelLabel.textContent = haiku.model;
+    const availableProviders = SELECTABLE_OWNERS
+      .filter((owner): owner is Exclude<SelectableOwner, 'auto'> => owner !== 'auto')
+      .filter((owner) => canSelectOwner(state, owner));
+    modelLabel.textContent = 'ready default';
+    sessionLabel.textContent = availableProviders.length > 0
+      ? availableProviders.map((owner) => getOwnerDisplayLabel(owner)).join(' / ')
+      : 'no providers';
   }
 
-  // Update metrics from provider state if available
-  if (haiku?.metrics) {
-    renderCodexMetrics(haiku.metrics);
+  if (runningTaskId) {
+    const buttons = modelToggleGroup.querySelectorAll<HTMLButtonElement>('.cc-model-toggle-btn');
+    buttons.forEach((button) => {
+      if (selectedOwner !== 'auto' && button.dataset.owner === selectedOwner) return;
+      button.disabled = true;
+    });
+  } else {
+    syncModelToggleState(state);
   }
 
   const nextTaskId = state.activeTaskId || null;
@@ -797,29 +1010,32 @@ function renderState(state: any): void {
     currentRenderedTaskId = nextTaskId;
     renderedTaskMemoryKey = null;
     void refreshTaskConversation(nextTaskId);
-  } else if (!nextTaskId || !liveRunCards.get(nextTaskId)?.root.isConnected) {
+  } else if (!nextTaskId || !getLiveRunCard(nextTaskId)?.root.isConnected) {
     void refreshTaskConversation(nextTaskId);
   }
 }
 
 // ─── Live Updates ──────────────────────────────────────────────────────────
 
-workspaceAPI.onStateUpdate((state: any) => renderState(state));
-
-if (modelApi?.onProgress) {
+const commandWindowAPI = getWorkspaceAPI();
+const modelApi = getModelAPI();
+if (commandWindowAPI && modelApi?.onProgress) {
   modelApi.onProgress((progress: any) => {
-    if (!progress?.taskId || !liveRunCards.has(progress.taskId)) return;
+    const card = progress?.taskId ? getLiveRunCard(progress.taskId) : null;
+    if (!card?.root.isConnected) return;
     if (progress.type === 'token') {
-      appendThought(progress.taskId, String(progress.data || ''));
+      appendToken(progress.taskId, String(progress.data || ''));
       return;
     }
     if (progress.type === 'item') {
-      appendCodexItemProgress(progress.taskId, String(progress.data || ''), progress.codexItem as CodexItem | undefined);
+      appendCodexItemProgress(progress.taskId, String(progress.data || ''), progress.codexItem as any);
       return;
     }
     if (progress.type === 'status') {
       const text = String(progress.data || '');
-      if (text.startsWith('Calling ')) {
+      if (text.startsWith('tool-start:') || text.startsWith('tool-done:')) {
+        appendToolStatusInternal(progress.taskId, text);
+      } else if (text.startsWith('Calling ')) {
         appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
       } else if (text.startsWith('Tool result: ')) {
         appendToolActivity(progress.taskId, 'result', text.slice('Tool result: '.length));
@@ -830,9 +1046,120 @@ if (modelApi?.onProgress) {
   });
 }
 
+// ─── File Attachments ─────────────────────────────────────────────────────
+
+interface AttachedFile {
+  file: File;
+  type: 'document' | 'image';
+  previewUrl?: string;
+}
+
+const attachedFiles: AttachedFile[] = [];
+
+function syncAttachmentPreview(): void {
+  if (attachedFiles.length === 0) {
+    attachPreview.hidden = true;
+    attachPreviewList.innerHTML = '';
+    return;
+  }
+
+  attachPreview.hidden = false;
+  attachPreviewList.innerHTML = '';
+
+  for (let i = 0; i < attachedFiles.length; i++) {
+    const entry = attachedFiles[i];
+    const item = document.createElement('div');
+    item.className = 'cc-attach-preview-item';
+
+    if (entry.type === 'image' && entry.previewUrl) {
+      item.innerHTML =
+        `<img src="${entry.previewUrl}" alt="${escapeHtml(entry.file.name)}">` +
+        `<span class="cc-preview-name">${escapeHtml(entry.file.name)}</span>` +
+        `<button class="cc-preview-remove" data-index="${i}" title="Remove" aria-label="Remove ${escapeHtml(entry.file.name)}">&times;</button>`;
+    } else {
+      item.innerHTML =
+        `<div class="cc-attach-preview-doc">` +
+        `<svg viewBox="0 0 16 16"><path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
+        `<span class="cc-preview-doc-name">${escapeHtml(entry.file.name)}</span>` +
+        `</div>` +
+        `<button class="cc-preview-remove" data-index="${i}" title="Remove" aria-label="Remove ${escapeHtml(entry.file.name)}">&times;</button>`;
+    }
+
+    attachPreviewList.appendChild(item);
+  }
+}
+
+function addFiles(files: FileList, type: 'document' | 'image'): void {
+  for (const file of Array.from(files)) {
+    const entry: AttachedFile = { file, type };
+    if (type === 'image') {
+      entry.previewUrl = URL.createObjectURL(file);
+    }
+    attachedFiles.push(entry);
+  }
+  syncAttachmentPreview();
+}
+
+function removeAttachment(index: number): void {
+  const removed = attachedFiles.splice(index, 1);
+  if (removed[0]?.previewUrl) {
+    URL.revokeObjectURL(removed[0].previewUrl);
+  }
+  syncAttachmentPreview();
+}
+
+function clearAttachments(): void {
+  for (const entry of attachedFiles) {
+    if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+  }
+  attachedFiles.length = 0;
+  syncAttachmentPreview();
+}
+
+attachDocBtn.addEventListener('click', () => {
+  docFileInput.click();
+});
+
+attachImgBtn.addEventListener('click', () => {
+  imgFileInput.click();
+});
+
+docFileInput.addEventListener('change', () => {
+  if (docFileInput.files?.length) {
+    addFiles(docFileInput.files, 'document');
+    docFileInput.value = '';
+  }
+});
+
+imgFileInput.addEventListener('change', () => {
+  if (imgFileInput.files?.length) {
+    addFiles(imgFileInput.files, 'image');
+    imgFileInput.value = '';
+  }
+});
+
+attachPreviewList.addEventListener('click', (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  const removeBtn = target.closest<HTMLButtonElement>('.cc-preview-remove');
+  if (!removeBtn) return;
+  const idx = parseInt(removeBtn.dataset.index || '', 10);
+  if (!isNaN(idx)) removeAttachment(idx);
+});
+
 // ─── Init ──────────────────────────────────────────────────────────────────
 
-workspaceAPI.getState().then((state: any) => {
-  renderState(state);
-  workspaceAPI.addLog('info', 'system', 'Command Center initialized');
-});
+setLogsCollapsed(true);
+initializeChatZoom();
+initializeModelToggle();
+
+if (!commandWindowAPI) {
+  console.error('[command] workspaceAPI is not available; command controls are disabled.');
+} else {
+  commandWindowAPI.onStateUpdate((state: any) => renderState(state));
+  commandWindowAPI.getState().then((state: any) => {
+    renderState(state);
+    commandWindowAPI.addLog('info', 'system', 'Command Center initialized');
+  }).catch((error: unknown) => {
+    console.error('[command] Failed to initialize command renderer:', error);
+  });
+}

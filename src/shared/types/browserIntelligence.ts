@@ -176,6 +176,12 @@ export type BrowserNetworkEvent = {
   statusCode: number | null;
   status: 'completed' | 'failed';
   timestamp: number;
+  startTimestamp?: number;
+  endTimestamp?: number;
+  durationMs?: number;
+  fromCache?: boolean;
+  responseSize?: number;
+  encodedDataLength?: number;
   error?: string;
 };
 

@@ -12,6 +12,10 @@ export type OscEvent =
 export type ParseResult = {
   cleaned: string;
   events: OscEvent[];
+  parts: Array<
+    | { type: 'text'; value: string }
+    | { type: 'event'; event: OscEvent }
+  >;
 };
 
 // Matches OSC 633 sequences: \x1b]633;<payload>\x07
@@ -23,33 +27,55 @@ const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
 export function parseOscSequences(data: string): ParseResult {
   const events: OscEvent[] = [];
+  const parts: ParseResult['parts'] = [];
+  let cleaned = '';
+  let lastIndex = 0;
 
-  const cleaned = data.replace(OSC_633_RE, (_match, payload: string) => {
+  data.replace(OSC_633_RE, (match, payload: string, offset: number) => {
+    if (offset > lastIndex) {
+      const text = data.slice(lastIndex, offset);
+      cleaned += text;
+      parts.push({ type: 'text', value: text });
+    }
+
     const semi = payload.indexOf(';');
     const marker = semi === -1 ? payload : payload.slice(0, semi);
     const value = semi === -1 ? '' : payload.slice(semi + 1);
+    let event: OscEvent | null = null;
 
     switch (marker) {
       case 'C':
-        events.push({ type: 'command-started' });
+        event = { type: 'command-started' };
         break;
       case 'B':
-        events.push({ type: 'prompt-started' });
+        event = { type: 'prompt-started' };
         break;
       case 'E': {
         const code = parseInt(value, 10);
-        if (!isNaN(code)) events.push({ type: 'exit-code', code });
+        if (!isNaN(code)) event = { type: 'exit-code', code };
         break;
       }
       case 'D':
-        if (value) events.push({ type: 'cwd', path: value });
+        if (value) event = { type: 'cwd', path: value };
         break;
     }
 
-    return ''; // strip the OSC sequence from output
+    if (event) {
+      events.push(event);
+      parts.push({ type: 'event', event });
+    }
+
+    lastIndex = offset + match.length;
+    return '';
   });
 
-  return { cleaned, events };
+  if (lastIndex < data.length) {
+    const text = data.slice(lastIndex);
+    cleaned += text;
+    parts.push({ type: 'text', value: text });
+  }
+
+  return { cleaned, events, parts };
 }
 
 export function stripAnsi(text: string): string {

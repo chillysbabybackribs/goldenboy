@@ -13,6 +13,8 @@ type CacheFile = {
 
 const CACHE_FILE = 'browser-knowledge-cache.json';
 const MAX_SNIPPET_CHARS = 420;
+const MAX_CACHED_PAGES = 500;
+const MAX_CACHED_CHUNKS = 5000;
 
 function cachePath(): string {
   return path.join(app.getPath('userData'), CACHE_FILE);
@@ -84,8 +86,44 @@ export class PageKnowledgeStore {
 
     this.pages.set(page.id, page);
     for (const chunk of chunks) this.chunks.set(chunk.id, chunk);
+    this.enforceCacheLimits();
     this.save();
     return { ...page };
+  }
+
+  clearAll(): { pageCount: number; chunkCount: number } {
+    const pageCount = this.pages.size;
+    const chunkCount = this.chunks.size;
+    this.pages.clear();
+    this.chunks.clear();
+    this.searchCount = 0;
+    this.searchHitCount = 0;
+    this.searchMissCount = 0;
+    this.chunkReadCount = 0;
+    this.save();
+    return { pageCount, chunkCount };
+  }
+
+  removePagesForTab(tabId: string): { pageCount: number; chunkCount: number } {
+    const pageIds = Array.from(this.pages.values())
+      .filter(page => page.tabId === tabId)
+      .map(page => page.id);
+
+    let removedChunks = 0;
+    for (const pageId of pageIds) {
+      const page = this.pages.get(pageId);
+      if (!page) continue;
+      for (const chunkId of page.chunkIds) {
+        if (this.chunks.delete(chunkId)) removedChunks += 1;
+      }
+      this.pages.delete(pageId);
+    }
+
+    if (pageIds.length > 0) {
+      this.save();
+    }
+
+    return { pageCount: pageIds.length, chunkCount: removedChunks };
   }
 
   listPages(): CachedPageRecord[] {
@@ -219,6 +257,21 @@ export class PageKnowledgeStore {
     } catch {
       this.pages.clear();
       this.chunks.clear();
+    }
+  }
+
+  private enforceCacheLimits(): void {
+    let pages = Array.from(this.pages.values());
+    if (pages.length <= MAX_CACHED_PAGES && this.chunks.size <= MAX_CACHED_CHUNKS) return;
+
+    pages = pages.sort((a, b) => a.updatedAt - b.updatedAt);
+    while (pages.length > MAX_CACHED_PAGES || this.chunks.size > MAX_CACHED_CHUNKS) {
+      const oldest = pages.shift();
+      if (!oldest) break;
+      for (const chunkId of oldest.chunkIds) {
+        this.chunks.delete(chunkId);
+      }
+      this.pages.delete(oldest.id);
     }
   }
 

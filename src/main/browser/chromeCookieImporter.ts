@@ -111,19 +111,23 @@ export type CookieImportResult = {
  * Detect which domains have active login sessions in Chrome.
  * Heuristic: domains with httponly + secure + non-session cookies.
  */
-function findAuthDomains(dbPath: string): string[] {
+function findAuthDomains(dbPath: string, includeGoogle: boolean): string[] {
   const sql = `SELECT DISTINCT host_key FROM cookies WHERE is_httponly = 1 AND is_secure = 1 AND expires_utc > 0`;
   const output = queryDB(dbPath, sql);
   return output.split('\n')
     .map(s => s.trim())
-    .filter(s => s && !isTrackerDomain(s) && shouldImportChromeCookieDomain(s));
+    .filter(s => s && !isTrackerDomain(s) && (includeGoogle || shouldImportChromeCookieDomain(s)));
 }
 
 /**
  * Import all cookies for the given domains from Chrome into an Electron session.
+ *
+ * @param includeGoogle When true, also imports Google-family cookies (used
+ *   after the user completes Google sign-in in the system browser).
  */
 export async function importChromeCookies(
   ses: Electron.Session,
+  includeGoogle = false,
 ): Promise<CookieImportResult> {
   const chromeInfo = findChromeDB();
   if (!chromeInfo) {
@@ -138,7 +142,7 @@ export async function importChromeCookies(
   const v11Key = keyringPassword ? deriveKey(keyringPassword) : null;
 
   // Find domains with login sessions
-  const authDomains = findAuthDomains(dbPath);
+  const authDomains = findAuthDomains(dbPath, includeGoogle);
   if (authDomains.length === 0) {
     return { imported: 0, failed: 0, domains: [] };
   }
@@ -154,7 +158,7 @@ export async function importChromeCookies(
   const importedDomains = new Set<string>();
 
   for (const row of rows) {
-    if (!shouldImportChromeCookieDomain(row.host_key)) {
+    if (!includeGoogle && !shouldImportChromeCookieDomain(row.host_key)) {
       continue;
     }
 

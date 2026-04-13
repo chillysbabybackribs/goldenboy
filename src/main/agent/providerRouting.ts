@@ -1,0 +1,78 @@
+import {
+  HAIKU_PROVIDER_ID,
+  PRIMARY_PROVIDER_ID,
+  type AgentTaskKind,
+  type AgentTaskProfileOverride,
+  type ProviderId,
+} from '../../shared/types/model';
+import { buildTaskProfile } from './taskProfile';
+
+const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+
+export type ProviderRoutingCapabilities = Partial<Record<ProviderId, {
+  supportsV2ToolRuntime: boolean;
+}>>;
+
+export function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {
+  return kind === 'orchestration'
+    || kind === 'research'
+    || kind === 'implementation'
+    || kind === 'debug'
+    || kind === 'review';
+}
+
+export function providerSupportsPrompt(
+  providerId: ProviderId,
+  prompt: string,
+  overrides?: AgentTaskProfileOverride,
+  capabilities?: ProviderRoutingCapabilities,
+): boolean {
+  const profile = buildTaskProfile(prompt, overrides);
+  if (!taskKindRequiresV2ToolRuntime(profile.kind)) return true;
+  if (!capabilities) return true;
+  return capabilities[providerId]?.supportsV2ToolRuntime === true;
+}
+
+export function pickProviderForPrompt(
+  prompt: string,
+  availableProviders: Iterable<ProviderId>,
+  overrides?: AgentTaskProfileOverride,
+  capabilities?: ProviderRoutingCapabilities,
+): ProviderId | null {
+  const available = new Set(
+    Array.from(availableProviders).filter((providerId) => providerSupportsPrompt(
+      providerId,
+      prompt,
+      overrides,
+      capabilities,
+    )),
+  );
+  const profile = buildTaskProfile(prompt, overrides);
+
+  if (available.size === 0) return null;
+
+  if (profile.kind === 'research') {
+    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
+    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
+  }
+
+  if (profile.kind === 'implementation') {
+    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
+    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
+  }
+
+  if (
+    profile.kind === 'orchestration'
+    || profile.kind === 'review'
+    || profile.kind === 'debug'
+  ) {
+    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
+    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
+  }
+
+  for (const providerId of DEFAULT_PROVIDER_ORDER) {
+    if (available.has(providerId)) return providerId;
+  }
+
+  return null;
+}

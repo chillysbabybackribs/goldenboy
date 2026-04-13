@@ -12,10 +12,10 @@ function detectShellType(shellPath: string): 'bash' | 'zsh' | null {
 }
 
 const BASH_INTEGRATION = `
-__v2_preexec() { printf '\\x1b]633;C\\x07'; printf '\\x1b]633;D;%s\\x07' "$PWD"; }
 __v2_precmd() { local ec=$?; printf '\\x1b]633;E;%d\\x07' "$ec"; printf '\\x1b]633;D;%s\\x07' "$PWD"; printf '\\x1b]633;B\\x07'; }
-trap '__v2_preexec' DEBUG
 PROMPT_COMMAND="__v2_precmd\${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+__v2_original_ps0=\${PS0-}
+PS0='$(printf "\\x1b]633;C\\x07\\x1b]633;D;%s\\x07" "$PWD")'"\${__v2_original_ps0}"
 `.trim();
 
 const ZSH_INTEGRATION = `

@@ -1,6 +1,6 @@
 import { AgentPromptBuilder } from './AgentPromptBuilder';
 import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
-import { AgentRuntimeConfig } from './AgentTypes';
+import { AgentRuntimeConfig, AgentSkill } from './AgentTypes';
 
 const baseConfig: AgentRuntimeConfig = {
   mode: 'unrestricted-dev',
@@ -35,6 +35,14 @@ describe('source validation policy', () => {
     expect(prompt).toContain('Before marking any result as valid');
     expect(prompt).toContain('## Physical Task Completion');
     expect(prompt).toContain('perform the real action');
+    expect(prompt).toContain('## Workspace Root');
+    expect(prompt).toContain('/home/dp/Desktop/v2workspace');
+    expect(prompt).toContain('## Operating Rules');
+    expect(prompt).toContain('## Result Validation Discipline');
+    expect(prompt).toContain('Current date/time:');
+    expect(prompt).toContain('authoritative current date/time context');
+    expect(prompt).not.toContain('## Current Integration State');
+    expect(prompt).not.toContain('## File Map');
     expect(prompt).not.toContain('## Strict Source Validation Protocol');
   });
 
@@ -52,5 +60,44 @@ describe('source validation policy', () => {
     expect(prompt).toContain('## Strict Source Validation Protocol');
     expect(prompt).toContain('Validation thresholds:');
     expect(prompt).toContain('Search exhaustion:');
+  });
+
+  it('compacts injected skills down to operational guidance', () => {
+    const skill: AgentSkill = {
+      name: 'browser-operation',
+      path: '/tmp/browser-operation/SKILL.md',
+      body: [
+        '# Browser Operation',
+        '',
+        'Use this skill when a task requires navigation or browser research.',
+        '',
+        '## Relevant Files',
+        '',
+        '- `src/main/browser/BrowserService.ts`',
+        '',
+        '## Workflow',
+        '',
+        '1. Read current browser state.',
+        '2. Search cached chunks before full extraction.',
+        '',
+        '## Preferred Tools',
+        '',
+        '- `browser.get_state`',
+        '- `browser.research_search`',
+      ].join('\n'),
+    };
+
+    const prompt = new AgentPromptBuilder().buildSystemPrompt({
+      config: baseConfig,
+      skills: [skill],
+      tools: [],
+    });
+
+    expect(prompt).toContain('## Skill: browser-operation');
+    expect(prompt).toContain('Use this skill when a task requires navigation or browser research.');
+    expect(prompt).toContain('## Workflow');
+    expect(prompt).toContain('## Preferred Tools');
+    expect(prompt).not.toContain('## Relevant Files');
+    expect(prompt).not.toContain('BrowserService.ts');
   });
 });

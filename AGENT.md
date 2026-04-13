@@ -5,6 +5,8 @@ V2 Workspace is a local Electron application with two primary windows:
 - `command`: task control, logs, model conversation, and run status.
 - `execution`: browser and terminal surfaces used to complete work.
 
+The application workspace root is `/home/dp/Desktop/v2workspace`. Resolve relative repository paths from that root unless a tool result explicitly reports a different cwd.
+
 The model is not the application. The model is a planner and operator that asks V2 to run typed tools. V2 owns execution, logging, cancellation, state, file access, browser state, terminal state, and sub-agent lifecycle.
 
 ## Application Mental Model
@@ -21,9 +23,9 @@ Prefer app-owned caches before broad reads. Browser, file, and chat caches exist
 
 ## Current Integration State
 
-This repository contains the browser build, terminal surface, agent runtime, Haiku provider integration, optional Gemini sidecar support, sub-agent runtime, browser page cache, and file knowledge cache.
+This repository contains the browser build, terminal surface, the Codex-backed runtime, Haiku provider integration, optional Gemini sidecar support, sub-agent runtime, browser page cache, and file knowledge cache.
 
-Haiku 4.5 connects through `src/main/agent/AgentRuntime.ts`. It must not call Electron, `BrowserService`, `fs`, terminal services, or IPC handlers directly.
+The active startup models are `gpt-5.4`, `gpt-5.3-codex-spark`, and `haiku`. All active providers run through `src/main/agent/AgentRuntime.ts`. They must not call Electron, `BrowserService`, `fs`, terminal services, or IPC handlers directly.
 
 Gemini sidecar models are optional internal helpers. They may rank search results or judge whether cached page evidence is sufficient, but they do not operate browser, filesystem, terminal, or sub-agent tools.
 
@@ -32,7 +34,7 @@ Gemini sidecar models are optional internal helpers. They may rank search result
 All model-driven work should flow through this path:
 
 ```text
-HaikuProvider
+CodexProvider / HaikuProvider
   -> AgentRuntime
   -> AgentPromptBuilder
   -> AgentToolExecutor
@@ -124,7 +126,7 @@ AgentToolExecutor.execute()
   → tool.execute()
   → ConstraintValidator.validateToolResult()
   → attach ResultValidation to AgentToolResult
-  → HaikuProvider appends RUNTIME VALIDATION block to tool_result content
+  → provider runtime appends RUNTIME VALIDATION block to tool_result content
   → model sees deterministic verdicts it cannot override
 ```
 

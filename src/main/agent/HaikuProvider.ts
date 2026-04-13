@@ -1,11 +1,17 @@
 import Anthropic from '@anthropic-ai/sdk';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolName } from './AgentTypes';
+import type { CodexItem } from '../../shared/types/model';
 import { DEFAULT_HAIKU_CONFIG } from '../../shared/types/model';
-import { agentToolExecutor } from './AgentToolExecutor';
-import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
-import { formatValidationForModel } from './ConstraintValidator';
+import { AgentProvider, AgentProviderRequest, AgentProviderResult } from './AgentTypes';
+import {
+  DEFAULT_PROVIDER_MAX_TOOL_TURNS,
+  executeProviderToolCallWithEvents,
+  normalizeProviderMaxToolTurns,
+  publishProviderFinalOutput,
+  resolveToolPackExpansion,
+} from './providerToolRuntime';
+import { mergeExpandedTools } from './toolPacks';
 
 function loadEnvValue(key: string): string | null {
   if (process.env[key]) return process.env[key] || null;
@@ -47,18 +53,10 @@ function toAnthropicToolName(name: string): string {
   return name.replace(/\./g, '__');
 }
 
-function fromAnthropicToolName(name: string): AgentToolName {
-  return name.replace(/__/g, '.') as AgentToolName;
+function fromAnthropicToolName(name: string) {
+  return name.replace(/__/g, '.');
 }
 
-function compactToolResult(result: unknown): string {
-  const text = typeof result === 'string' ? result : JSON.stringify(result, null, 0);
-  if (!text) return '';
-  return text.length > 8_000 ? `${text.slice(0, 8_000)}\n...[tool result truncated]` : text;
-}
-
-const DEFAULT_MAX_TOOL_TURNS = 20;
-const MAX_ALLOWED_TOOL_TURNS = 40;
 const MODEL_STREAM_TIMEOUT_MS = 180_000;
 const FINAL_SYNTHESIS_TIMEOUT_MS = 120_000;
 
@@ -83,35 +81,43 @@ async function finalMessageWithTimeout(
   }
 }
 
-function serializeToolMemory(input: {
-  toolName: AgentToolName;
-  toolInput: unknown;
-  result?: unknown;
-  error?: string;
-}): string {
-  const payload = {
-    tool: input.toolName,
-    input: input.toolInput,
-    result: input.result,
-    error: input.error,
-  };
-  const text = JSON.stringify(payload, null, 2);
-  return text.length > 50_000 ? `${text.slice(0, 50_000)}\n...[tool memory truncated]` : text;
-}
+function buildInitialUserContent(request: AgentProviderRequest): string | Anthropic.Messages.ContentBlockParam[] {
+  const textParts: string[] = [];
+  if (request.contextPrompt?.trim()) {
+    textParts.push(request.contextPrompt.trim(), '', '## Current User Request');
+  }
+  textParts.push(request.task);
+  const text = textParts.join('\n');
 
-function buildInitialUserMessage(request: AgentProviderRequest): string {
-  if (!request.contextPrompt?.trim()) return request.task;
-  return [
-    request.contextPrompt.trim(),
-    '',
-    '## Current User Request',
-    request.task,
-  ].join('\n');
+  const attachments = request.attachments;
+  if (!attachments?.length) return text;
+
+  const content: Anthropic.Messages.ContentBlockParam[] = [];
+
+  for (const att of attachments) {
+    if (att.type === 'image') {
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: att.mediaType,
+          data: att.data,
+        },
+      });
+    }
+  }
+
+  content.push({ type: 'text', text });
+  return content;
 }
 
 export class HaikuProvider implements AgentProvider {
   readonly modelId: string;
+  readonly supportsAppToolExecutor = true;
+
   private readonly client: Anthropic;
+  private aborted = false;
+  private activeStream: { abort: () => void } | null = null;
 
   constructor(apiKey = loadEnvValue('ANTHROPIC_API_KEY')) {
     if (!apiKey) {
@@ -122,31 +128,47 @@ export class HaikuProvider implements AgentProvider {
     this.client = new Anthropic({ apiKey });
   }
 
+  abort(): void {
+    this.aborted = true;
+    if (this.activeStream) {
+      this.activeStream.abort();
+      this.activeStream = null;
+    }
+  }
+
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
+    this.aborted = false;
+    this.activeStream = null;
     const startedAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
+    const completedItems = new Map<string, CodexItem>();
     const messages: Anthropic.Messages.MessageParam[] = [
       {
         role: 'user',
-        content: buildInitialUserMessage(request),
+        content: buildInitialUserContent(request),
       },
     ];
 
-    const tools: Anthropic.Messages.Tool[] = request.tools.map(tool => ({
-      name: toAnthropicToolName(tool.name),
-      description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
-      input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,
-    }));
-    const allowedToolNames = new Set(request.tools.map(tool => tool.name));
+    let currentTools = [...request.tools];
+    const toolCatalog = request.toolCatalog?.length ? request.toolCatalog : request.tools;
 
-    const maxToolTurns = Math.min(
-      Math.max(Math.floor(request.maxToolTurns ?? DEFAULT_MAX_TOOL_TURNS), 1),
-      MAX_ALLOWED_TOOL_TURNS,
-    );
+    const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
     let finalOutput = '';
     let reachedToolTurnLimit = false;
     for (let turn = 0; turn < maxToolTurns; turn++) {
+      if (this.aborted) {
+        throw new Error('Task cancelled by user.');
+      }
+
+      let turnTextBuffer = '';
+      const tools: Anthropic.Messages.Tool[] = currentTools.map(tool => ({
+        name: toAnthropicToolName(tool.name),
+        description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
+        input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,
+      }));
+      const allowedToolNames = new Set(currentTools.map(tool => tool.name));
+
       const stream = this.client.messages.stream({
         model: this.modelId as Anthropic.Messages.MessageCreateParams['model'],
         max_tokens: DEFAULT_HAIKU_CONFIG.maxTokens,
@@ -161,18 +183,25 @@ export class HaikuProvider implements AgentProvider {
         tools,
         tool_choice: { type: 'auto' },
       });
+      this.activeStream = stream;
 
-      if (request.onToken) {
-        stream.on('text', (text) => {
-          request.onToken!(text);
-        });
+      stream.on('text', (text) => {
+        turnTextBuffer += text;
+      });
+
+      let response: Anthropic.Messages.Message;
+      try {
+        response = await finalMessageWithTimeout(
+          stream,
+          MODEL_STREAM_TIMEOUT_MS,
+          `Model stream timed out after ${MODEL_STREAM_TIMEOUT_MS / 1000}s`,
+        );
+      } catch (err) {
+        this.activeStream = null;
+        if (this.aborted) throw new Error('Task cancelled by user.');
+        throw err;
       }
-
-      const response = await finalMessageWithTimeout(
-        stream,
-        MODEL_STREAM_TIMEOUT_MS,
-        `Model stream timed out after ${MODEL_STREAM_TIMEOUT_MS / 1000}s`,
-      );
+      this.activeStream = null;
 
       inputTokens += response.usage.input_tokens;
       outputTokens += response.usage.output_tokens;
@@ -181,8 +210,16 @@ export class HaikuProvider implements AgentProvider {
       const toolUses = response.content.filter(
         (block): block is Anthropic.Messages.ToolUseBlock => block.type === 'tool_use',
       );
+
       if (toolUses.length === 0) {
+        if (request.onToken && turnTextBuffer) {
+          request.onToken(turnTextBuffer);
+        }
         break;
+      }
+
+      if (request.onStatus && turnTextBuffer.trim()) {
+        request.onStatus(turnTextBuffer.trim());
       }
 
       messages.push({
@@ -191,53 +228,64 @@ export class HaikuProvider implements AgentProvider {
       });
 
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-      for (const toolUse of toolUses) {
-        try {
-          const v2ToolName = fromAnthropicToolName(toolUse.name);
-          if (!allowedToolNames.has(v2ToolName)) {
-            throw new Error(`Tool is not available in this runtime scope: ${v2ToolName}`);
-          }
-          const result = await agentToolExecutor.execute(v2ToolName, toolUse.input, {
-            runId: request.runId,
-            agentId: request.agentId,
-            mode: request.mode,
-            taskId: request.taskId,
-          });
-          if (request.taskId && !v2ToolName.startsWith('chat.')) {
-            chatKnowledgeStore.recordToolMessage(
-              request.taskId,
-              serializeToolMemory({ toolName: v2ToolName, toolInput: toolUse.input, result }),
-              'haiku',
-              request.runId,
-            );
-          }
-          let toolContent = compactToolResult(result);
-          if (result.validation) {
-            toolContent += formatValidationForModel(result.validation);
-          }
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: toolContent,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const v2ToolName = fromAnthropicToolName(toolUse.name);
-          if (request.taskId && !v2ToolName.startsWith('chat.')) {
-            chatKnowledgeStore.recordToolMessage(
-              request.taskId,
-              serializeToolMemory({ toolName: v2ToolName, toolInput: toolUse.input, error: message }),
-              'haiku',
-              request.runId,
-            );
-          }
+      for (let index = 0; index < toolUses.length; index++) {
+        const toolUse = toolUses[index];
+        const v2ToolName = fromAnthropicToolName(toolUse.name);
+
+        if (!allowedToolNames.has(v2ToolName as any)) {
+          const message = `Tool is not available in this runtime scope: ${v2ToolName}`;
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
             is_error: true,
             content: message,
           });
+          request.onStatus?.(`tool-done:${v2ToolName} ... error: ${message.slice(0, 80)}`);
+          continue;
         }
+
+        const execution = await executeProviderToolCallWithEvents({
+          providerId: 'haiku',
+          request,
+          toolName: v2ToolName as any,
+          toolInput: toolUse.input,
+          itemId: `haiku-tool-${turn + 1}-${index + 1}-${Date.now()}`,
+        });
+        completedItems.set(execution.completedItem.id, execution.completedItem);
+
+        if (execution.ok) {
+          const expansion = resolveToolPackExpansion(request, v2ToolName as any, execution.result);
+          if (expansion) {
+            currentTools = mergeExpandedTools(currentTools, toolCatalog, expansion);
+            const expandedToolNames = expansion.scope === 'all'
+              ? ['all eligible tools']
+              : expansion.tools;
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: [
+                `Loaded tool pack "${expansion.pack}".`,
+                `Description: ${expansion.description}`,
+                `Expanded tools: ${expandedToolNames.join(', ')}`,
+              ].join('\n'),
+            });
+            continue;
+          }
+
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: execution.toolContent,
+          });
+          continue;
+        }
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          is_error: true,
+          content: execution.errorMessage,
+        });
       }
 
       messages.push({
@@ -249,6 +297,11 @@ export class HaikuProvider implements AgentProvider {
     }
 
     if (reachedToolTurnLimit) {
+      const tools: Anthropic.Messages.Tool[] = currentTools.map(tool => ({
+        name: toAnthropicToolName(tool.name),
+        description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
+        input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,
+      }));
       const synthesisStream = this.client.messages.stream({
         model: this.modelId as Anthropic.Messages.MessageCreateParams['model'],
         max_tokens: DEFAULT_HAIKU_CONFIG.maxTokens,
@@ -272,27 +325,35 @@ export class HaikuProvider implements AgentProvider {
         tools,
         tool_choice: { type: 'none' },
       });
-
-      if (request.onToken) {
-        synthesisStream.on('text', (text) => {
-          request.onToken!(text);
-        });
-      }
+      this.activeStream = synthesisStream;
+      synthesisStream.on('text', (text) => {
+        request.onToken?.(text);
+      });
 
       const synthesisResponse = await finalMessageWithTimeout(
         synthesisStream,
         FINAL_SYNTHESIS_TIMEOUT_MS,
         `Final synthesis timed out after ${FINAL_SYNTHESIS_TIMEOUT_MS / 1000}s`,
       );
+      this.activeStream = null;
       inputTokens += synthesisResponse.usage.input_tokens;
       outputTokens += synthesisResponse.usage.output_tokens;
       finalOutput = textFromContent(synthesisResponse.content);
     }
 
-    return {
-      output: finalOutput.trim()
+    const finalItem = publishProviderFinalOutput({
+      request,
+      itemId: `haiku-final-${Date.now()}`,
+      text: finalOutput.trim()
         ? finalOutput
         : 'The run ended without a text response. Please retry the task; no final answer was produced.',
+      emitToken: false,
+    });
+    completedItems.set(finalItem.id, finalItem);
+
+    return {
+      output: finalItem.text,
+      codexItems: Array.from(completedItems.values()),
       usage: {
         inputTokens,
         outputTokens,

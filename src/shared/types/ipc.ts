@@ -5,7 +5,7 @@ import { TerminalSessionInfo } from './terminal';
 import { BrowserState, BrowserHistoryEntry, BrowserNavigationState, TabInfo, BookmarkEntry, ExtensionInfo, BrowserSettings, BrowserDownloadState, BrowserAuthDiagnostics } from './browser';
 import { BrowserActionableElement, BrowserConsoleEvent, BrowserFinding, BrowserFormModel, BrowserNetworkEvent, BrowserSiteStrategy, BrowserSnapshot, BrowserSurfaceEvalFixture, BrowserTaskMemory } from './browserIntelligence';
 import { SurfaceActionInput, SurfaceActionRecord, SurfaceActionKind } from '../actions/surfaceActionTypes';
-import { TaskMemoryRecord } from './model';
+import { AgentInvocationOptions, TaskMemoryRecord } from './model';
 
 export const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -16,6 +16,7 @@ export const IPC_CHANNELS = {
   CREATE_TASK: 'workspace:create-task',
   UPDATE_TASK_STATUS: 'workspace:update-task-status',
   SET_ACTIVE_TASK: 'workspace:set-active-task',
+  RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
   ADD_LOG: 'workspace:add-log',
 
   // Execution split control (replaces old layout channels)
@@ -36,6 +37,7 @@ export const IPC_CHANNELS = {
   BROWSER_GET_HISTORY: 'browser:get-history',
   BROWSER_CLEAR_HISTORY: 'browser:clear-history',
   BROWSER_CLEAR_DATA: 'browser:clear-data',
+  BROWSER_CLEAR_SITE_DATA: 'browser:clear-site-data',
   BROWSER_REPORT_BOUNDS: 'browser:report-bounds',
   BROWSER_GET_TABS: 'browser:get-tabs',
   BROWSER_CAPTURE_TAB_SNAPSHOT: 'browser:capture-tab-snapshot',
@@ -53,6 +55,8 @@ export const IPC_CHANNELS = {
   BROWSER_ADD_BOOKMARK: 'browser:add-bookmark',
   BROWSER_REMOVE_BOOKMARK: 'browser:remove-bookmark',
   BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
+  BROWSER_SPLIT_TAB: 'browser:split-tab',
+  BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
 
   // Zoom
   BROWSER_ZOOM_IN: 'browser:zoom-in',
@@ -120,6 +124,7 @@ export interface WorkspaceAPI {
   createTask(title: string): Promise<{ id: string; title: string }>;
   updateTaskStatus(taskId: string, status: TaskStatus): Promise<void>;
   setActiveTask(taskId: string | null): Promise<void>;
+  resetTokenUsage(): Promise<void>;
 
   addLog(level: LogLevel, source: LogSource, message: string, taskId?: string): Promise<void>;
 
@@ -147,6 +152,7 @@ export interface WorkspaceAPI {
     getHistory(): Promise<BrowserHistoryEntry[]>;
     clearHistory(): Promise<void>;
     clearData(): Promise<void>;
+    clearSiteData(origin?: string): Promise<{ origin: string; cookiesCleared: number }>;
     reportBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
     getTabs(): Promise<TabInfo[]>;
     captureTabSnapshot(tabId?: string): Promise<BrowserSnapshot>;
@@ -187,6 +193,8 @@ export interface WorkspaceAPI {
     getDownloads(): Promise<BrowserDownloadState[]>;
     cancelDownload(downloadId: string): Promise<void>;
     clearDownloads(): Promise<void>;
+    splitTab(tabId?: string): Promise<TabInfo>;
+    clearSplitView(): Promise<void>;
     // Cookie sync
     reimportCookies(): Promise<{ imported: number; failed: number; domains: string[] }>;
     // Subscriptions
@@ -197,11 +205,11 @@ export interface WorkspaceAPI {
 
   // Model API (invocation, routing, handoff)
   model: {
-    invoke(taskId: string, prompt: string, owner?: string, options?: { systemPrompt?: string; cwd?: string }): Promise<any>;
+    invoke(taskId: string, prompt: string, owner?: string, options?: AgentInvocationOptions): Promise<any>;
     cancel(taskId: string): Promise<boolean>;
     getProviders(): Promise<Record<string, any>>;
     getTaskMemory(taskId: string): Promise<TaskMemoryRecord>;
-    resolve(prompt: string, explicitOwner?: string): Promise<string>;
+    resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions): Promise<string>;
     handoff(taskId: string, from: string, to: string): Promise<any>;
     runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }): Promise<any>;
     onProgress(callback: (progress: any) => void): void;

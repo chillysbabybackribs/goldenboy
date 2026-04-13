@@ -1,3 +1,5 @@
+import type { CodexItem, InvocationAttachment } from '../../shared/types/model';
+
 export type AgentMode = 'unrestricted-dev' | 'guarded' | 'production';
 
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -5,6 +7,7 @@ export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'ca
 export type AgentToolStatus = 'running' | 'completed' | 'failed';
 
 export type AgentToolName =
+  | 'runtime.request_tool_pack'
   | 'browser.get_state'
   | 'browser.get_tabs'
   | 'browser.navigate'
@@ -155,14 +158,19 @@ export type AgentRuntimeConfig = {
   role: string;
   task: string;
   taskId?: string;
+  cwd?: string | null;
   contextPrompt?: string | null;
+  systemPromptAddendum?: string | null;
   parentRunId?: string | null;
   depth?: number;
   skillNames?: string[];
   allowedTools?: 'all' | AgentToolName[];
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
+  attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
+  onStatus?: (status: string) => void;
+  onItem?: (event: { item: CodexItem; eventType: 'item.started' | 'item.completed' }) => void;
 };
 
 export type AgentProviderRequest = {
@@ -175,11 +183,17 @@ export type AgentProviderRequest = {
   contextPrompt?: string | null;
   maxToolTurns?: number;
   tools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  toolCatalog?: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
+  onStatus?: (status: string) => void;
+  onItem?: (event: { item: CodexItem; eventType: 'item.started' | 'item.completed' }) => void;
 };
 
 export type AgentProviderResult = {
+  runId?: string;
   output: string;
+  codexItems?: CodexItem[];
   usage?: {
     inputTokens: number;
     outputTokens: number;
@@ -188,5 +202,7 @@ export type AgentProviderResult = {
 };
 
 export interface AgentProvider {
+  supportsAppToolExecutor?: boolean;
   invoke(request: AgentProviderRequest): Promise<AgentProviderResult>;
+  abort?(): void;
 }

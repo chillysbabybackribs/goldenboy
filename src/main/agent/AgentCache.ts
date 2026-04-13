@@ -1,4 +1,7 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { AgentToolName } from './AgentTypes';
+import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 
 type CacheEntry<T> = {
   value: T;
@@ -27,13 +30,37 @@ export class AgentCache {
     });
   }
 
+  invalidateByToolPrefix(prefix: string): void {
+    for (const key of this.toolResults.keys()) {
+      if (key.startsWith(prefix)) {
+        this.toolResults.delete(key);
+      }
+    }
+  }
+
   clear(): void {
     this.toolResults.clear();
   }
 }
 
 export function makeToolCacheKey(name: AgentToolName, input: unknown): string {
-  return `${name}:${stableStringify(input)}`;
+  const freshness = cacheFreshnessKey(name, input);
+  return freshness
+    ? `${name}:${freshness}:${stableStringify(input)}`
+    : `${name}:${stableStringify(input)}`;
+}
+
+function cacheFreshnessKey(name: AgentToolName, input: unknown): string | null {
+  if (name !== 'filesystem.read') return null;
+  const obj = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  if (typeof obj.path !== 'string' || obj.path.trim() === '') return null;
+  const resolved = path.resolve(APP_WORKSPACE_ROOT, obj.path);
+  try {
+    const stat = fs.statSync(resolved);
+    return `${resolved}:${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return `${resolved}:missing`;
+  }
 }
 
 function stableStringify(value: unknown): string {

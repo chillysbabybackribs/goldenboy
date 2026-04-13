@@ -1,13 +1,18 @@
 import { AgentProvider, AgentToolDefinition, AgentToolName } from '../AgentTypes';
 import { SubAgentManager } from '../subagents/SubAgentManager';
 import { SubAgentSpawnInput, SubAgentWaitInput } from '../subagents/SubAgentTypes';
+import {
+  HAIKU_PROVIDER_ID,
+  PRIMARY_PROVIDER_ID,
+  type ProviderId,
+} from '../../../shared/types/model';
 import { appStateStore } from '../../state/appStateStore';
 import { ActionType } from '../../state/actions';
 import { generateId } from '../../../shared/utils/ids';
 
 let sharedManager: SubAgentManager | null = null;
 
-function getManager(providerFactory: () => AgentProvider): SubAgentManager {
+function getManager(providerFactory: (input: SubAgentSpawnInput) => AgentProvider): SubAgentManager {
   if (!sharedManager) sharedManager = new SubAgentManager(providerFactory);
   return sharedManager;
 }
@@ -30,6 +35,14 @@ function parseAllowedTools(value: unknown): 'all' | AgentToolName[] {
   return value.filter((item): item is AgentToolName => typeof item === 'string') as AgentToolName[];
 }
 
+function parseProviderId(value: unknown): ProviderId | 'auto' | undefined {
+  if (value === 'auto') return 'auto';
+  if (value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID) return value;
+  if (value === 'codex') return PRIMARY_PROVIDER_ID;
+  if (value === 'haiku') return HAIKU_PROVIDER_ID;
+  return undefined;
+}
+
 function logSubAgent(level: 'info' | 'warn' | 'error', message: string): void {
   appStateStore.dispatch({
     type: ActionType.ADD_LOG,
@@ -37,19 +50,19 @@ function logSubAgent(level: 'info' | 'warn' | 'error', message: string): void {
       id: generateId('log'),
       timestamp: Date.now(),
       level,
-      source: 'haiku',
+      source: 'system',
       message,
     },
   });
 }
 
-export function createSubAgentToolDefinitions(providerFactory: () => AgentProvider): AgentToolDefinition[] {
+export function createSubAgentToolDefinitions(providerFactory: (input: SubAgentSpawnInput) => AgentProvider): AgentToolDefinition[] {
   const manager = getManager(providerFactory);
 
   return [
     {
       name: 'subagent.spawn',
-      description: 'Spawn a runtime-managed child Haiku agent. Use for independent delegated browser, filesystem, debugging, or research subtasks. Scope children with allowedTools and canSpawnSubagents when possible.',
+      description: 'Spawn a runtime-managed child agent. Use for independent delegated browser, filesystem, debugging, or research subtasks. Scope children with allowedTools and canSpawnSubagents when possible.',
       inputSchema: {
         type: 'object',
         required: ['task'],
@@ -58,6 +71,10 @@ export function createSubAgentToolDefinitions(providerFactory: () => AgentProvid
           role: { type: 'string' },
           mode: { type: 'string', enum: ['unrestricted-dev', 'guarded', 'production'] },
           inheritedContext: { type: 'string', enum: ['full', 'summary', 'none'] },
+          providerId: {
+            type: 'string',
+            enum: ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, 'codex', 'haiku'],
+          },
           allowedTools: { oneOf: [{ type: 'string', enum: ['all'] }, { type: 'array', items: { type: 'string' } }] },
           canSpawnSubagents: { type: 'boolean' },
         },
@@ -70,6 +87,7 @@ export function createSubAgentToolDefinitions(providerFactory: () => AgentProvid
           role: typeof obj.role === 'string' ? obj.role : 'subagent',
           mode: obj.mode === 'guarded' || obj.mode === 'production' ? obj.mode : 'unrestricted-dev',
           inheritedContext: obj.inheritedContext === 'full' || obj.inheritedContext === 'none' ? obj.inheritedContext : 'summary',
+          providerId: parseProviderId(obj.providerId),
           allowedTools: parseAllowedTools(obj.allowedTools),
           canSpawnSubagents: typeof obj.canSpawnSubagents === 'boolean' ? obj.canSpawnSubagents : true,
         };

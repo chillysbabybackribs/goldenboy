@@ -1,14 +1,23 @@
 import { AgentProvider, AgentRuntimeConfig, AgentProviderResult } from './AgentTypes';
-import { agentPromptBuilder } from './AgentPromptBuilder';
+import { agentPromptBuilder, buildResponseStyleAddendum } from './AgentPromptBuilder';
 import { agentRunStore } from './AgentRunStore';
 import { agentSkillLoader } from './AgentSkillLoader';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { appStateStore } from '../state/appStateStore';
 import { ActionType } from '../state/actions';
 import { generateId } from '../../shared/utils/ids';
+import { LogSource } from '../../shared/types/appState';
+import { isProviderId } from '../../shared/types/model';
+import type { AgentProviderRequest } from './AgentTypes';
 
 export class AgentRuntime {
   constructor(private readonly provider: AgentProvider) {}
+
+  abort(): void {
+    if (this.provider.abort) {
+      this.provider.abort();
+    }
+  }
 
   async run(config: AgentRuntimeConfig): Promise<AgentProviderResult> {
     const run = agentRunStore.createRun({
@@ -22,15 +31,41 @@ export class AgentRuntime {
     agentRunStore.updateRun(run.id, { status: 'running' });
 
     try {
-      const skills = agentSkillLoader.loadSkills(config.skillNames ?? []);
-      const tools = filterToolsForConfig(agentToolExecutor.list(), config);
-      const systemPrompt = agentPromptBuilder.buildSystemPrompt({ config, skills, tools });
+      const toolCatalog = filterToolCatalogForConfig(agentToolExecutor.list(), config);
+      const tools = filterToolsForConfig(toolCatalog, config);
+      
+      // OPTIMIZATION: Lazy-load skills.
+      // If config.skillNames is provided, load them for the system prompt.
+      // Otherwise, defer skill loading until the model requests them (via context addendum).
+      const skillNames = config.skillNames ?? [];
+      const skills = skillNames.length > 0 
+        ? agentSkillLoader.loadSkills(skillNames)
+        : [];
+      
+      const responseStyleAddendum = buildResponseStyleAddendum(config.task);
+      const systemPrompt = agentPromptBuilder.buildSystemPrompt({
+        config: responseStyleAddendum
+          ? {
+            ...config,
+            systemPromptAddendum: [config.systemPromptAddendum?.trim(), responseStyleAddendum].filter(Boolean).join('\n\n'),
+          }
+          : config,
+        skills,
+        tools,
+      });
+      
       logPromptBudget(run.id, config, {
         systemPrompt,
         contextPrompt: config.contextPrompt,
         skillCount: skills.length,
-        toolCount: tools.length,
+        tools: tools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+        lazyLoadEnabled: skillNames.length === 0,
       });
+      
       const result = await this.provider.invoke({
         runId: run.id,
         agentId: config.agentId,
@@ -45,11 +80,22 @@ export class AgentRuntime {
           description: tool.description,
           inputSchema: tool.inputSchema,
         })),
+        toolCatalog: toolCatalog.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+        attachments: config.attachments,
         onToken: config.onToken,
+        onStatus: config.onStatus,
+        onItem: config.onItem,
       });
 
       agentRunStore.finishRun(run.id, 'completed', result.output.slice(0, 500));
-      return result;
+      return {
+        ...result,
+        runId: run.id,
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       agentRunStore.finishRun(run.id, 'failed', null, message);
@@ -65,33 +111,68 @@ function logPromptBudget(
     systemPrompt: string;
     contextPrompt?: string | null;
     skillCount: number;
-    toolCount: number;
+    tools: AgentProviderRequest['tools'];
+    lazyLoadEnabled?: boolean;
   },
 ): void {
   const systemChars = input.systemPrompt.length;
   const contextChars = input.contextPrompt?.length ?? 0;
   const taskChars = config.task.length;
-  const totalChars = systemChars + contextChars + taskChars;
+  const sharedChars = systemChars + contextChars + taskChars;
+  const toolPayloadChars = estimateProviderToolPayloadChars(config.agentId, input.tools);
+  const totalChars = sharedChars + toolPayloadChars;
   appStateStore.dispatch({
     type: ActionType.ADD_LOG,
     log: {
       id: generateId('log'),
       timestamp: Date.now(),
       level: 'info',
-      source: 'haiku',
+      source: resolveLogSource(config.agentId),
       taskId: config.taskId,
       message: [
         `Prompt budget run=${runId}`,
         `agent=${config.agentId}`,
         `role=${config.role}`,
         `skills=${input.skillCount}`,
-        `tools=${input.toolCount}`,
+        `tools=${input.tools.length}`,
         `maxToolTurns=${config.maxToolTurns ?? 'default'}`,
-        `chars=${totalChars}`,
-        `estTokens=${Math.ceil(totalChars / 4)}`,
-      ].join(' '),
+        `sharedChars=${sharedChars}`,
+        `sharedTokens=${Math.ceil(sharedChars / 4)}`,
+        `toolPayloadChars=${toolPayloadChars}`,
+        `toolPayloadTokens=${Math.ceil(toolPayloadChars / 4)}`,
+        `totalChars=${totalChars}`,
+        `totalEstTokens=${Math.ceil(totalChars / 4)}`,
+        input.lazyLoadEnabled ? 'lazyLoad=enabled' : '',
+      ].filter(Boolean).join(' '),
     },
   });
+}
+
+function estimateProviderToolPayloadChars(
+  agentId: string,
+  tools: AgentProviderRequest['tools'],
+): number {
+  if (tools.length === 0) return 0;
+  if (agentId === 'haiku') {
+    return JSON.stringify(tools.map((tool) => ({
+      name: tool.name.replace(/\./g, '__'),
+      description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
+      input_schema: tool.inputSchema,
+    }))).length;
+  }
+
+  return tools.map((tool) => {
+    const schema = JSON.stringify(tool.inputSchema, null, 2);
+    return [
+      `- ${tool.name}`,
+      `  Description: ${tool.description}`,
+      `  Input schema: ${schema}`,
+    ].join('\n');
+  }).join('\n\n').length;
+}
+
+function resolveLogSource(agentId: string): LogSource {
+  return isProviderId(agentId) ? agentId : 'system';
 }
 
 function filterToolsForConfig(
@@ -105,5 +186,15 @@ function filterToolsForConfig(
   return tools.filter((tool) => {
     if (config.canSpawnSubagents === false && tool.name.startsWith('subagent.')) return false;
     return !allowed || allowed.has(tool.name);
+  });
+}
+
+function filterToolCatalogForConfig(
+  tools: ReturnType<typeof agentToolExecutor.list>,
+  config: AgentRuntimeConfig,
+): ReturnType<typeof agentToolExecutor.list> {
+  return tools.filter((tool) => {
+    if (config.canSpawnSubagents === false && tool.name.startsWith('subagent.')) return false;
+    return true;
   });
 }

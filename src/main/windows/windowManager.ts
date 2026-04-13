@@ -66,7 +66,11 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      webSecurity: true,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      allowRunningInsecureContent: false,
     },
     show: false,
   });

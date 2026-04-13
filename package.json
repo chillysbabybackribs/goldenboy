@@ -8,9 +8,10 @@
     "build:preload": "tsc -p tsconfig.preload.json",
     "build:renderer": "tsc -p tsconfig.renderer.json",
     "build": "npm run build:main && npm run build:preload && npm run build:renderer && npm run copy:html",
+    "benchmark:tools": "RUN_TOOL_BENCHMARK=1 vitest run src/main/agent/toolPackBenchmark.test.ts --reporter=verbose",
     "copy:html": "node scripts/copy-renderer.js",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
+    "dev": "node scripts/dev.js",
     "test": "vitest run",
     "clean": "rm -rf dist"
   },

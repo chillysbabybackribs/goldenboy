@@ -11,7 +11,7 @@ import {
   SurfaceActionPayloadMap,
   targetForKind, summarizePayload,
   BrowserNavigatePayload, BrowserCloseTabPayload,
-  BrowserActivateTabPayload, BrowserClickPayload, BrowserTypePayload,
+  BrowserActivateTabPayload, BrowserCreateTabPayload, BrowserClickPayload, BrowserTypePayload,
   TerminalExecutePayload, TerminalWritePayload,
 } from '../../shared/actions/surfaceActionTypes';
 import { appStateStore } from '../state/appStateStore';
@@ -312,7 +312,17 @@ class SurfaceActionRouter {
         }
         break;
       }
-      // Empty/optional payloads: browser.back, browser.forward, browser.reload, browser.stop, browser.create-tab, terminal.restart, terminal.interrupt
+      case 'browser.create-tab': {
+        const p = payload as BrowserCreateTabPayload;
+        if (p.url !== undefined && (typeof p.url !== 'string' || p.url.trim().length === 0)) {
+          throw new Error('browser.create-tab, if provided, requires "url" to be a non-empty string');
+        }
+        if (p.insertAfterTabId !== undefined && typeof p.insertAfterTabId !== 'string') {
+          throw new Error('browser.create-tab, if provided, requires "insertAfterTabId" to be a string');
+        }
+        break;
+      }
+      // Empty/optional payloads: browser.back, browser.forward, browser.reload, browser.stop, terminal.restart, terminal.interrupt
       default:
         break;
     }

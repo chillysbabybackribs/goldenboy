@@ -1,8 +1,13 @@
+import * as path from 'path';
+import type { CodexItem } from '../../../shared/types/model';
+import type { AgentToolCallRecord, AgentToolResult, ValidationStatus } from '../AgentTypes';
 import { AgentProvider } from '../AgentTypes';
 import { SubAgentRecord, SubAgentResult, SubAgentSpawnInput } from './SubAgentTypes';
 import { SubAgentRuntime } from './SubAgentRuntime';
+import { agentRunStore } from '../AgentRunStore';
 import { chatKnowledgeStore } from '../../chatKnowledge/ChatKnowledgeStore';
 import { taskMemoryStore } from '../../models/taskMemoryStore';
+import { APP_WORKSPACE_ROOT } from '../../workspaceRoot';
 
 function makeSubAgentId(): string {
   return `sub_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -11,12 +16,167 @@ function makeSubAgentId(): string {
 const MAX_SUB_AGENT_RECORDS = 200;
 const COMPLETED_SUB_AGENT_TTL_MS = 6 * 60 * 60 * 1000;
 
+function unique(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const value = item.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function limitList(items: string[], limit = 6): string[] {
+  return unique(items).slice(0, limit);
+}
+
+function toRelativeWorkspacePath(rawPath: string): string {
+  const absolute = path.isAbsolute(rawPath) ? rawPath : path.resolve(APP_WORKSPACE_ROOT, rawPath);
+  const relative = path.relative(APP_WORKSPACE_ROOT, absolute);
+  if (!relative || relative.startsWith('..')) return rawPath;
+  return relative;
+}
+
+function toolResultShape(value: unknown): AgentToolResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<AgentToolResult>;
+  return typeof candidate.summary === 'string' ? candidate as AgentToolResult : null;
+}
+
+function extractFindings(output: string, toolCalls: AgentToolCallRecord[]): string[] {
+  const bulletLines = output
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, ''))
+    .filter((line, index, all) => index < all.length && line.length > 0 && line.length <= 220);
+
+  const bulletsOnly = bulletLines.filter(line => output.includes(`- ${line}`) || output.includes(`* ${line}`) || output.match(new RegExp(`\\d+\\.\\s+${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)));
+  if (bulletsOnly.length > 0) return limitList(bulletsOnly, 5);
+
+  const paragraphs = output
+    .split(/\n{2,}/)
+    .map(part => part.trim().replace(/\s+/g, ' '))
+    .filter(Boolean);
+  if (paragraphs.length > 0) return limitList(paragraphs, 3);
+
+  return limitList(
+    toolCalls
+      .map(call => toolResultShape(call.output)?.summary || call.error || '')
+      .filter(Boolean),
+    3,
+  );
+}
+
+function extractChangedFiles(toolCalls: AgentToolCallRecord[], codexItems?: CodexItem[]): string[] {
+  const files: string[] = [];
+  for (const item of codexItems || []) {
+    if (item.type !== 'file_change') continue;
+    for (const change of item.changes) files.push(toRelativeWorkspacePath(change.path));
+  }
+
+  for (const call of toolCalls) {
+    const output = toolResultShape(call.output);
+    if (!output) continue;
+    const data = output.data || {};
+    switch (call.toolName) {
+      case 'filesystem.write':
+      case 'filesystem.patch':
+      case 'filesystem.delete':
+      case 'filesystem.mkdir':
+        if (typeof data.path === 'string') files.push(toRelativeWorkspacePath(data.path));
+        break;
+      case 'filesystem.move':
+        if (typeof data.from === 'string') files.push(toRelativeWorkspacePath(data.from));
+        if (typeof data.to === 'string') files.push(toRelativeWorkspacePath(data.to));
+        break;
+      default:
+        break;
+    }
+  }
+
+  return limitList(files, 20);
+}
+
+function extractCommands(toolCalls: AgentToolCallRecord[], codexItems?: CodexItem[]): string[] {
+  const commands: string[] = [];
+
+  for (const item of codexItems || []) {
+    if (item.type !== 'command_execution') continue;
+    const suffix = item.exit_code === null ? '' : ` (exit ${item.exit_code})`;
+    commands.push(`${item.command}${suffix}`);
+  }
+
+  for (const call of toolCalls) {
+    if (call.toolName !== 'terminal.exec' && call.toolName !== 'terminal.spawn') continue;
+    const input = (call.input && typeof call.input === 'object') ? call.input as Record<string, unknown> : {};
+    const output = toolResultShape(call.output);
+    const base = typeof input.command === 'string' ? input.command : '';
+    const exitCode = output?.data && typeof output.data.exitCode === 'number'
+      ? ` (exit ${output.data.exitCode})`
+      : '';
+    if (base) commands.push(`${base}${exitCode}`);
+  }
+
+  return limitList(commands, 20);
+}
+
+function summarizeValidation(toolCalls: AgentToolCallRecord[]): SubAgentResult['validation'] {
+  const summary = { total: 0, valid: 0, invalid: 0, incomplete: 0 };
+  for (const call of toolCalls) {
+    const validation = toolResultShape(call.output)?.validation;
+    if (!validation) continue;
+    summary.total += 1;
+    if (validation.status === 'VALID') summary.valid += 1;
+    else if (validation.status === 'INVALID') summary.invalid += 1;
+    else summary.incomplete += 1;
+  }
+  return summary;
+}
+
+function summarizeToolCalls(toolCalls: AgentToolCallRecord[]): SubAgentResult['toolCalls'] {
+  return toolCalls.map((call) => {
+    const output = toolResultShape(call.output);
+    const validationStatus = output?.validation?.status as ValidationStatus | undefined;
+    return {
+      toolName: call.toolName,
+      status: call.status,
+      summary: output?.summary || call.error || `${call.toolName} ${call.status}`,
+      validationStatus,
+    };
+  });
+}
+
+function extractBlockers(status: SubAgentResult['status'], summary: string, toolCalls: AgentToolCallRecord[]): string[] {
+  const blockers: string[] = [];
+  if (status === 'failed' || status === 'cancelled') blockers.push(summary);
+
+  for (const call of toolCalls) {
+    if (call.status === 'failed' && call.error) {
+      blockers.push(`${call.toolName}: ${call.error}`);
+      continue;
+    }
+    const validation = toolResultShape(call.output)?.validation;
+    if (validation && validation.status !== 'VALID') {
+      blockers.push(`${call.toolName}: ${validation.summary}`);
+    }
+  }
+
+  return limitList(blockers, 8);
+}
+
+function emptyValidation(): SubAgentResult['validation'] {
+  return { total: 0, valid: 0, invalid: 0, incomplete: 0 };
+}
+
 export class SubAgentManager {
   private records = new Map<string, SubAgentRecord>();
   private results = new Map<string, SubAgentResult>();
   private runPromises = new Map<string, Promise<SubAgentResult>>();
 
-  constructor(private readonly providerFactory: () => AgentProvider) {}
+  constructor(private readonly providerFactory: (input: SubAgentSpawnInput) => AgentProvider) {}
 
   spawn(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord {
     const record: SubAgentRecord = {
@@ -39,7 +199,7 @@ export class SubAgentManager {
 
   run(parentRunId: string, input: SubAgentSpawnInput): Promise<SubAgentResult> {
     const record = this.spawn(parentRunId, input);
-    const runtime = new SubAgentRuntime(this.providerFactory());
+    const runtime = new SubAgentRuntime(this.providerFactory(input));
 
     const promise = (async (): Promise<SubAgentResult> => {
       if (this.records.get(record.id)?.status === 'cancelled') {
@@ -49,6 +209,10 @@ export class SubAgentManager {
           summary: 'Cancelled before start',
           findings: [],
           changedFiles: [],
+          commands: [],
+          blockers: ['Cancelled before start'],
+          toolCalls: [],
+          validation: emptyValidation(),
         };
         this.results.set(record.id, cancelled);
         return cancelled;
@@ -70,17 +234,23 @@ export class SubAgentManager {
       const summary = result.output.slice(0, 1000);
       const completed: SubAgentRecord = {
         ...record,
+        runId: result.runId ?? null,
         status: 'completed',
         completedAt: Date.now(),
         summary,
       };
       this.records.set(record.id, completed);
+      const toolCalls = result.runId ? agentRunStore.listToolCalls(result.runId) : [];
       const subResult: SubAgentResult = {
         id: record.id,
         status: 'completed',
         summary,
-        findings: [],
-        changedFiles: [],
+        findings: extractFindings(result.output, toolCalls),
+        changedFiles: extractChangedFiles(toolCalls, result.codexItems),
+        commands: extractCommands(toolCalls, result.codexItems),
+        blockers: extractBlockers('completed', summary, toolCalls),
+        toolCalls: summarizeToolCalls(toolCalls),
+        validation: summarizeValidation(toolCalls),
       };
       this.results.set(record.id, subResult);
       this.prune();
@@ -95,12 +265,17 @@ export class SubAgentManager {
         completedAt: Date.now(),
         error: message,
       });
+      const toolCalls = record.runId ? agentRunStore.listToolCalls(record.runId) : [];
       const subResult: SubAgentResult = {
         id: record.id,
         status,
         summary: message,
         findings: [],
-        changedFiles: [],
+        changedFiles: extractChangedFiles(toolCalls),
+        commands: extractCommands(toolCalls),
+        blockers: extractBlockers(status, message, toolCalls),
+        toolCalls: summarizeToolCalls(toolCalls),
+        validation: summarizeValidation(toolCalls),
       };
       this.results.set(record.id, subResult);
       this.prune();
@@ -157,6 +332,10 @@ export class SubAgentManager {
       summary: 'Cancelled',
       findings: [],
       changedFiles: [],
+      commands: [],
+      blockers: ['Cancelled'],
+      toolCalls: [],
+      validation: emptyValidation(),
     });
     this.prune();
     return { ...next };

@@ -1,5 +1,92 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { IPC_CHANNELS } from '../shared/types/ipc';
+import type { AgentInvocationOptions } from '../shared/types/model';
+
+const IPC_CHANNELS = {
+  GET_STATE: 'workspace:get-state',
+  GET_ROLE: 'workspace:get-role',
+  EMIT_EVENT: 'workspace:emit-event',
+  STATE_UPDATE: 'workspace:state-update',
+  EVENT_BROADCAST: 'workspace:event-broadcast',
+  CREATE_TASK: 'workspace:create-task',
+  UPDATE_TASK_STATUS: 'workspace:update-task-status',
+  SET_ACTIVE_TASK: 'workspace:set-active-task',
+  RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
+  ADD_LOG: 'workspace:add-log',
+
+  APPLY_EXECUTION_PRESET: 'workspace:apply-execution-preset',
+  SET_SPLIT_RATIO: 'workspace:set-split-ratio',
+
+  SUBMIT_SURFACE_ACTION: 'workspace:submit-surface-action',
+  CANCEL_QUEUED_ACTION: 'workspace:cancel-queued-action',
+  GET_RECENT_ACTIONS: 'workspace:get-recent-actions',
+  GET_ACTIONS_BY_TARGET: 'workspace:get-actions-by-target',
+  GET_ACTIONS_BY_TASK: 'workspace:get-actions-by-task',
+  GET_QUEUE_DIAGNOSTICS: 'workspace:get-queue-diagnostics',
+  SURFACE_ACTION_UPDATE: 'workspace:surface-action-update',
+
+  BROWSER_GET_STATE: 'browser:get-state',
+  BROWSER_GET_HISTORY: 'browser:get-history',
+  BROWSER_CLEAR_HISTORY: 'browser:clear-history',
+  BROWSER_CLEAR_DATA: 'browser:clear-data',
+  BROWSER_CLEAR_SITE_DATA: 'browser:clear-site-data',
+  BROWSER_REPORT_BOUNDS: 'browser:report-bounds',
+  BROWSER_GET_TABS: 'browser:get-tabs',
+  BROWSER_CAPTURE_TAB_SNAPSHOT: 'browser:capture-tab-snapshot',
+  BROWSER_GET_ACTIONABLE_ELEMENTS: 'browser:get-actionable-elements',
+  BROWSER_GET_FORM_MODEL: 'browser:get-form-model',
+  BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
+  BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
+  BROWSER_RECORD_FINDING: 'browser:record-finding',
+  BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
+  BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',
+  BROWSER_SAVE_SITE_STRATEGY: 'browser:save-site-strategy',
+  BROWSER_EXPORT_SURFACE_EVAL_FIXTURE: 'browser:export-surface-eval-fixture',
+  BROWSER_ADD_BOOKMARK: 'browser:add-bookmark',
+  BROWSER_REMOVE_BOOKMARK: 'browser:remove-bookmark',
+  BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
+  BROWSER_SPLIT_TAB: 'browser:split-tab',
+  BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
+  BROWSER_ZOOM_IN: 'browser:zoom-in',
+  BROWSER_ZOOM_OUT: 'browser:zoom-out',
+  BROWSER_ZOOM_RESET: 'browser:zoom-reset',
+  BROWSER_FIND_IN_PAGE: 'browser:find-in-page',
+  BROWSER_FIND_NEXT: 'browser:find-next',
+  BROWSER_FIND_PREVIOUS: 'browser:find-previous',
+  BROWSER_STOP_FIND: 'browser:stop-find',
+  BROWSER_TOGGLE_DEVTOOLS: 'browser:toggle-devtools',
+  BROWSER_GET_SETTINGS: 'browser:get-settings',
+  BROWSER_UPDATE_SETTINGS: 'browser:update-settings',
+  BROWSER_GET_AUTH_DIAGNOSTICS: 'browser:get-auth-diagnostics',
+  BROWSER_CLEAR_GOOGLE_AUTH_STATE: 'browser:clear-google-auth-state',
+  BROWSER_LOAD_EXTENSION: 'browser:load-extension',
+  BROWSER_REMOVE_EXTENSION: 'browser:remove-extension',
+  BROWSER_GET_EXTENSIONS: 'browser:get-extensions',
+  BROWSER_GET_DOWNLOADS: 'browser:get-downloads',
+  BROWSER_CANCEL_DOWNLOAD: 'browser:cancel-download',
+  BROWSER_CLEAR_DOWNLOADS: 'browser:clear-downloads',
+  BROWSER_STATE_UPDATE: 'browser:state-update',
+  BROWSER_NAV_UPDATE: 'browser:nav-update',
+  BROWSER_FIND_UPDATE: 'browser:find-update',
+  DEBUG_TEST_DISK_EXTRACT: 'debug:test-disk-extract',
+
+  MODEL_INVOKE: 'model:invoke',
+  MODEL_CANCEL: 'model:cancel',
+  MODEL_GET_PROVIDERS: 'model:get-providers',
+  MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
+  MODEL_RESOLVE: 'model:resolve',
+  MODEL_HANDOFF: 'model:handoff',
+  MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
+  MODEL_PROGRESS: 'model:progress',
+
+  TERMINAL_START_SESSION: 'terminal:start-session',
+  TERMINAL_GET_SESSION: 'terminal:get-session',
+  TERMINAL_WRITE: 'terminal:write',
+  TERMINAL_RESIZE: 'terminal:resize',
+  TERMINAL_OUTPUT: 'terminal:output',
+  TERMINAL_STATUS: 'terminal:status',
+  TERMINAL_EXIT: 'terminal:exit',
+  TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+} as const;
 
 const api = {
   getState() {
@@ -20,6 +107,10 @@ const api = {
 
   setActiveTask(taskId: string | null) {
     return ipcRenderer.invoke(IPC_CHANNELS.SET_ACTIVE_TASK, taskId);
+  },
+
+  resetTokenUsage() {
+    return ipcRenderer.invoke(IPC_CHANNELS.RESET_TOKEN_USAGE);
   },
 
   addLog(level: string, source: string, message: string, taskId?: string) {
@@ -90,6 +181,9 @@ const api = {
     clearData() {
       return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_DATA);
     },
+    clearSiteData(origin?: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_SITE_DATA, origin);
+    },
     reportBounds(bounds: { x: number; y: number; width: number; height: number }) {
       return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REPORT_BOUNDS, bounds);
     },
@@ -128,6 +222,8 @@ const api = {
     loadExtension(extPath: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_LOAD_EXTENSION, extPath); },
     removeExtension(extensionId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REMOVE_EXTENSION, extensionId); },
     getExtensions() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_EXTENSIONS); },
+    splitTab(tabId?: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SPLIT_TAB, tabId); },
+    clearSplitView() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_SPLIT_VIEW); },
     // Downloads
     getDownloads() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_DOWNLOADS); },
     cancelDownload(downloadId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CANCEL_DOWNLOAD, downloadId); },
@@ -149,7 +245,7 @@ const api = {
   // ── Agent model API ─────────────────────────────────────────────────────
 
   model: {
-    invoke(taskId: string, prompt: string, owner?: string, options?: { systemPrompt?: string; cwd?: string }) {
+    invoke(taskId: string, prompt: string, owner?: string, options?: AgentInvocationOptions) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_INVOKE, taskId, prompt, owner, options);
     },
     cancel(taskId: string) {
@@ -161,8 +257,8 @@ const api = {
     getTaskMemory(taskId: string) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_GET_TASK_MEMORY, taskId);
     },
-    resolve(prompt: string, explicitOwner?: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RESOLVE, prompt, explicitOwner);
+    resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions) {
+      return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RESOLVE, prompt, explicitOwner, options);
     },
     handoff(taskId: string, from: string, to: string) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_HANDOFF, taskId, from, to);

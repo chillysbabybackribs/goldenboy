@@ -7,11 +7,14 @@ import { terminalService } from './terminal/TerminalService';
 import { browserService } from './browser/BrowserService';
 import { agentModelService } from './agent/AgentModelService';
 
-process.env.ELECTRON_DISABLE_GPU = '1';
-app.disableHardwareAcceleration();
-app.commandLine.appendSwitch('disable-gpu');
-app.commandLine.appendSwitch('disable-gpu-compositing');
-app.commandLine.appendSwitch('disable-gpu-sandbox');
+const disableGpu = process.env.V2_DISABLE_HARDWARE_ACCELERATION === '1';
+if (disableGpu) {
+  process.env.ELECTRON_DISABLE_GPU = '1';
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -23,6 +26,19 @@ if (!gotLock) {
 }
 
 app.on('ready', () => {
+  app.on('web-contents-created', (_event, webContents) => {
+    webContents.on('will-attach-webview', (event, webPreferences, params) => {
+      webPreferences.preload = '';
+      webPreferences.nodeIntegration = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.webSecurity = true;
+      if (params?.src && params.src.startsWith('file://')) {
+        event.preventDefault();
+      }
+    });
+  });
+
   terminalService.init();
   agentModelService.init();
   registerIpc();

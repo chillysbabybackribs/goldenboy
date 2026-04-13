@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
-import { AppState, createDefaultAppState, ExecutionSplitState } from '../../shared/types/appState';
+import { AppState, createDefaultAppState, ExecutionSplitState, TaskRecord } from '../../shared/types/appState';
 import { PhysicalWindowRole } from '../../shared/types/windowRoles';
+import { isProviderId } from '../../shared/types/model';
 
 const STATE_FILE = 'workspace-state.json';
 
@@ -10,9 +11,21 @@ function getStatePath(): string {
   return path.join(app.getPath('userData'), STATE_FILE);
 }
 
+type PersistedTaskRecord = {
+  id: string;
+  title: string;
+  status: string;
+  owner: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 type PersistedState = {
   executionSplit: ExecutionSplitState;
   windows: AppState['windows'];
+  tasks?: PersistedTaskRecord[];
+  activeTaskId?: string | null;
+  tokenUsage?: { inputTokens: number; outputTokens: number };
 };
 
 export function loadPersistedState(): Partial<PersistedState> {
@@ -59,12 +72,28 @@ export function savePersistedState(state: AppState): void {
     const persisted: PersistedState = {
       executionSplit: state.executionSplit,
       windows: state.windows,
+      tasks: state.tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        owner: t.owner,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+      })),
+      activeTaskId: state.activeTaskId,
+      tokenUsage: state.tokenUsage,
     };
     const filePath = getStatePath();
     fs.writeFileSync(filePath, JSON.stringify(persisted, null, 2), 'utf-8');
   } catch (err) {
     console.error('Failed to persist state:', err);
   }
+}
+
+function normalizePersistedTaskOwner(owner: string): TaskRecord['owner'] {
+  if (owner === 'user') return 'user';
+  if (isProviderId(owner)) return owner;
+  return 'user';
 }
 
 export function buildInitialState(): AppState {
@@ -83,9 +112,39 @@ export function buildInitialState(): AppState {
     windows = merged as AppState['windows'];
   }
 
+  // Restore persisted tasks
+  let tasks = defaults.tasks;
+  let activeTaskId = defaults.activeTaskId;
+  if (persisted.tasks && Array.isArray(persisted.tasks)) {
+    tasks = persisted.tasks
+      .filter(t => t && t.id && t.title)
+      .map(t => ({
+        id: t.id,
+        title: t.title,
+        status: (t.status === 'running' ? 'completed' : t.status) as TaskRecord['status'],
+        owner: normalizePersistedTaskOwner(t.owner),
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+      } as TaskRecord));
+    // Restore active task only if it still exists
+    if (persisted.activeTaskId && tasks.some(t => t.id === persisted.activeTaskId)) {
+      activeTaskId = persisted.activeTaskId;
+    }
+  }
+
+  // Restore persisted token usage
+  const tokenUsage = (persisted.tokenUsage &&
+    typeof persisted.tokenUsage.inputTokens === 'number' &&
+    typeof persisted.tokenUsage.outputTokens === 'number')
+    ? persisted.tokenUsage
+    : defaults.tokenUsage;
+
   return {
     ...defaults,
     executionSplit: persisted.executionSplit ?? defaults.executionSplit,
     windows,
+    tasks,
+    activeTaskId,
+    tokenUsage,
   };
 }

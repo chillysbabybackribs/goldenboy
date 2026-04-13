@@ -7,7 +7,7 @@
   <title>Command Center</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../shared/styles.css">
   <link rel="stylesheet" href="command.css">
 </head>
@@ -25,70 +25,11 @@
 
       <!-- Left column: metric boxes + chat -->
       <div class="cc-left">
-
-        <!-- Codex metrics row -->
-        <div class="cc-metrics">
-          <div class="cc-metric-box" id="metricContext">
-            <div class="cc-metric-label">Codex All Time</div>
-            <div class="cc-metric-value" id="metricContextValue">...</div>
-            <div class="cc-metric-sub" id="metricContextSub">loading</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="metricContextBar"></div></div>
-          </div>
-          <div class="cc-metric-box" id="metric5h">
-            <div class="cc-metric-label">Codex 5h</div>
-            <div class="cc-metric-value" id="metric5hValue">...</div>
-            <div class="cc-metric-sub" id="metric5hSub">loading</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="metric5hBar"></div></div>
-          </div>
-          <div class="cc-metric-box" id="metricWeekly">
-            <div class="cc-metric-label">Codex Week</div>
-            <div class="cc-metric-value" id="metricWeeklyValue">...</div>
-            <div class="cc-metric-sub" id="metricWeeklySub">loading</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="metricWeeklyBar"></div></div>
-          </div>
-          <div class="cc-metric-box cc-metric-controls">
-            <div class="cc-metric-label">Threads</div>
-            <div class="cc-metric-value" id="metricCreditsValue">...</div>
-            <div class="cc-controls-group">
-              <div class="cc-toggle-row" id="modelSelector">
-                <button class="cc-toggle active" data-owner="auto">Auto</button>
-                <button class="cc-toggle" data-owner="codex">Codex</button>
-                <button class="cc-toggle" data-owner="haiku">Haiku</button>
-              </div>
-              <div class="cc-toggle-row" id="splitSelector">
-                <button class="cc-toggle active" data-preset="balanced">Bal</button>
-                <button class="cc-toggle" data-preset="focus-browser">Brws</button>
-                <button class="cc-toggle" data-preset="focus-terminal">Term</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Haiku metrics row -->
-        <div class="cc-metrics">
-          <div class="cc-metric-box">
-            <div class="cc-metric-label">Haiku Tokens</div>
-            <div class="cc-metric-value" id="haikuTokensValue">0</div>
-            <div class="cc-metric-sub" id="haikuTokensSub">no usage yet</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="haikuTokensBar"></div></div>
-          </div>
-          <div class="cc-metric-box">
-            <div class="cc-metric-label">Haiku Cost</div>
-            <div class="cc-metric-value" id="haikuCostValue">$0.00</div>
-            <div class="cc-metric-sub" id="haikuCostSub">this session</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="haikuCostBar"></div></div>
-          </div>
-          <div class="cc-metric-box">
-            <div class="cc-metric-label">Haiku Turns</div>
-            <div class="cc-metric-value" id="haikuTurnsValue">0</div>
-            <div class="cc-metric-sub" id="haikuTurnsSub">this session</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="haikuTurnsBar"></div></div>
-          </div>
-          <div class="cc-metric-box">
-            <div class="cc-metric-label">Session Total</div>
-            <div class="cc-metric-value" id="sessionTotalValue">$0.00</div>
-            <div class="cc-metric-sub" id="sessionTotalSub">all models</div>
-            <div class="cc-metric-bar"><div class="cc-metric-bar-fill" id="sessionTotalBar"></div></div>
+        <div class="cc-chat-toolbar" aria-label="Chat zoom controls">
+          <div class="cc-zoom-controls">
+            <button class="cc-zoom-btn" id="chatZoomOutBtn" type="button" title="Zoom out chat" aria-label="Zoom out chat">A-</button>
+            <button class="cc-zoom-btn cc-zoom-btn-reset" id="chatZoomResetBtn" type="button" title="Reset chat zoom" aria-label="Reset chat zoom">100%</button>
+            <button class="cc-zoom-btn" id="chatZoomInBtn" type="button" title="Zoom in chat" aria-label="Zoom in chat">A+</button>
           </div>
         </div>
 
@@ -97,18 +38,103 @@
           <div class="cc-chat-empty" id="chatEmptyState">Send a message to start a conversation.</div>
         </div>
 
-        <!-- Input footer -->
+        <!-- Input footer — Command Center -->
         <div class="cc-input-footer">
-          <input type="text" class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off">
-          <button class="cc-send-btn" id="chatSubmitBtn">Send</button>
+          <button class="cc-copy-btn" id="chatCopyLastBtn" type="button" title="No agent response yet" aria-label="No agent response yet" disabled hidden>Copy</button>
+
+          <!-- Attachment preview sidebar (floats beside the compose shell) -->
+          <div class="cc-attach-preview" id="attachPreview" hidden>
+            <div class="cc-attach-preview-list" id="attachPreviewList"></div>
+          </div>
+
+          <div class="cc-compose-shell">
+
+            <!-- Top bar: model selector + token gauge + history -->
+            <div class="cc-compose-topbar">
+              <div class="cc-model-toggle" id="modelToggleGroup" role="group" aria-label="Primary model selection">
+                <button class="cc-model-toggle-btn" id="modelToggleGpt54Btn" type="button" data-owner="gpt-5.4" aria-pressed="false">GPT-5.4</button>
+                <button class="cc-model-toggle-btn" id="modelToggleHaikuBtn" type="button" data-owner="haiku" aria-pressed="false">HAIKU</button>
+              </div>
+              <div class="cc-token-gauge" id="tokenGauge">
+                <svg class="cc-token-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM8 3v5l3.5 2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="cc-token-in" id="tokenInLabel">0 in</span>
+                <span class="cc-token-sep">/</span>
+                <span class="cc-token-out" id="tokenOutLabel">0 out</span>
+                <button class="cc-token-reset" id="tokenResetBtn" type="button" title="Reset token counter" aria-label="Reset token counter">
+                  <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                    <path d="M1.5 6.5a4.5 4.5 0 018.24-2.5M10.5 5.5a4.5 4.5 0 01-8.24 2.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+                    <path d="M9.5 1.5v2.5h-2.5M2.5 10.5v-2.5h2.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+              <button class="cc-history-btn" id="chatHistoryBtn" type="button" title="Chat history" aria-label="Chat history">
+                <svg class="cc-history-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M2 4h12M2 8h8M2 12h10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+                HISTORY
+              </button>
+            </div>
+
+            <!-- Textarea -->
+            <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
+
+            <!-- Bottom bar: attach buttons + stop + send -->
+            <div class="cc-compose-bottombar">
+              <div class="cc-attach-group">
+                <button class="cc-attach-btn" id="attachDocBtn" type="button" title="Attach document" aria-label="Attach document">
+                  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span>Doc</span>
+                </button>
+                <button class="cc-attach-btn" id="attachImgBtn" type="button" title="Attach image" aria-label="Attach image">
+                  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.1"/>
+                    <circle cx="5.5" cy="6" r="1.25" fill="none" stroke="currentColor" stroke-width="1"/>
+                    <path d="M1.5 11l3.5-3.5L8.5 11l2.5-2.5 3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span>Image</span>
+                </button>
+              </div>
+              <div class="cc-compose-actions">
+                <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
+                <button class="cc-send-btn" id="chatSubmitBtn" type="button" title="Send message" aria-label="Send message">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M12 6v12"></path>
+                    <path d="M7 11l5-5 5 5"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Hidden file inputs -->
+            <input type="file" id="docFileInput" accept=".txt,.md,.pdf,.json,.csv,.log,.xml,.yaml,.yml,.toml,.html,.css,.js,.ts,.py,.sh,.go,.rs,.c,.cpp,.h,.java" multiple hidden>
+            <input type="file" id="imgFileInput" accept="image/*" multiple hidden>
+          </div>
+        </div>
+
+        <!-- History popup overlay -->
+        <div class="cc-history-overlay" id="historyOverlay" hidden>
+          <div class="cc-history-popup">
+            <div class="cc-history-header">
+              <span class="cc-history-title">CHAT HISTORY</span>
+              <button class="cc-history-new" id="historyNewBtn" type="button">NEW CHAT</button>
+              <button class="cc-history-close" id="historyCloseBtn" type="button">CLOSE</button>
+            </div>
+            <div class="cc-history-list" id="historyList"></div>
+          </div>
         </div>
       </div>
 
       <!-- Right column: logs (full height) -->
-      <div class="cc-logs">
+      <div class="cc-logs" id="logsPanel">
         <div class="cc-logs-header">
           <span class="cc-logs-title">Logs</span>
           <div class="cc-logs-actions">
+            <button class="cc-logs-action cc-logs-toggle" id="logsToggleBtn" type="button" title="Expand logs" aria-label="Expand logs" aria-expanded="false">▸</button>
             <button class="cc-logs-action cc-logs-copy" id="logsCopyBtn" type="button" title="Copy visible logs" aria-label="Copy visible logs">
               <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                 <rect x="5" y="3" width="8" height="10" rx="1.2"></rect>
@@ -126,7 +152,8 @@
     <div class="cc-status">
       <span id="syncLabel">synced</span>
       <span id="splitLabel">split 50/50</span>
-      <span id="modelLabel">—</span>
+      <span id="targetLabel">target auto</span>
+      <span id="modelLabel">idle</span>
       <span id="sessionLabel">—</span>
       <span id="taskCount">tasks: 0</span>
     </div>

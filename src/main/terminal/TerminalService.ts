@@ -13,6 +13,7 @@ import { ActionType } from '../state/actions';
 import { AppEventType } from '../../shared/types/events';
 import { generateId } from '../../shared/utils/ids';
 import { loadTerminalData, saveTerminalData, PersistedTerminalData } from './terminalSessionStore';
+import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 
 function resolveShell(): string {
   if (process.platform === 'win32') {
@@ -26,10 +27,13 @@ export class TerminalService {
   private ptyProcess: pty.IPty | null = null;
   private disposed = false;
   private commandState: CommandState = createDefaultCommandState();
+  private shellIntegrationEnabled = false;
+  private shellIntegrationReady = false;
   private outputBuffer: string[] = [];
   private readonly MAX_BUFFER_LINES = 200;
   private readonly MAX_COMMAND_OUTPUT = 65536; // 64KB cap on per-command output
   private commandFinishResolvers: Array<(result: CommandFinishResult) => void> = [];
+  private shellReadyResolvers: Array<(ready: boolean) => void> = [];
 
   getSession(): TerminalSessionInfo | null {
     return this.session;
@@ -48,7 +52,7 @@ export class TerminalService {
 
     const shell = resolveShell();
     const persisted = loadTerminalData();
-    const cwd = persisted.lastCwd || process.env.HOME || os.homedir();
+    const cwd = persisted.lastCwd || APP_WORKSPACE_ROOT || process.env.HOME || os.homedir();
     const c = (cols && cols > 0) ? cols : 80;
     const r = (rows && rows > 0) ? rows : 24;
     const id = generateId('term');
@@ -94,10 +98,14 @@ export class TerminalService {
       // Inject shell integration for structured command tracking
       const integrationScript = getShellIntegrationScript(shell);
       if (integrationScript) {
+        this.shellIntegrationEnabled = true;
+        this.shellIntegrationReady = false;
         this.ptyProcess!.write(integrationScript + '\n');
         this.commandState = createDefaultCommandState(cwd);
         this.emitLog('info', 'Shell integration injected (OSC 633)');
       } else {
+        this.shellIntegrationEnabled = false;
+        this.shellIntegrationReady = true;
         this.commandState = createDefaultCommandState(cwd);
         this.emitLog('info', 'Shell integration unavailable for this shell — using fallback');
       }
@@ -166,6 +174,42 @@ export class TerminalService {
 
       this.commandFinishResolvers.push(wrappedResolve);
     });
+  }
+
+  waitForShellReady(timeoutMs: number = 2_000): Promise<boolean> {
+    if (!this.shellIntegrationEnabled || this.shellIntegrationReady) {
+      return Promise.resolve(true);
+    }
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+
+      const wrappedResolve = (ready: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const idx = this.shellReadyResolvers.indexOf(wrappedResolve);
+        if (idx !== -1) this.shellReadyResolvers.splice(idx, 1);
+        resolve(ready);
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const idx = this.shellReadyResolvers.indexOf(wrappedResolve);
+        if (idx !== -1) this.shellReadyResolvers.splice(idx, 1);
+        resolve(false);
+      }, timeoutMs);
+
+      this.shellReadyResolvers.push(wrappedResolve);
+    });
+  }
+
+  async executeCommand(command: string, timeoutMs: number = 10_000): Promise<CommandFinishResult | null> {
+    await this.waitForShellReady(Math.min(timeoutMs, 2_000));
+    const resultPromise = this.waitForCommandFinish(timeoutMs);
+    this.write(`${command}\n`);
+    return resultPromise;
   }
 
   resize(cols: number, rows: number): void {
@@ -242,23 +286,22 @@ export class TerminalService {
       this.session.lastActivityAt = Date.now();
 
       // Parse OSC 633 sequences — extract markers, clean output for renderer
-      const { cleaned, events } = parseOscSequences(data);
+      const { cleaned, parts } = parseOscSequences(data);
 
-      // Process shell integration events
-      for (const event of events) {
-        this.handleOscEvent(event);
-      }
+      for (const part of parts) {
+        if (part.type === 'event') {
+          this.handleOscEvent(part.event);
+          continue;
+        }
 
-      // Append ANSI-stripped lines to ring buffer
-      if (cleaned.length > 0) {
-        const stripped = stripAnsi(cleaned);
+        if (part.value.length === 0) continue;
+        const stripped = stripAnsi(part.value);
         const lines = stripped.split('\n');
         this.outputBuffer.push(...lines);
         if (this.outputBuffer.length > this.MAX_BUFFER_LINES) {
           this.outputBuffer = this.outputBuffer.slice(-this.MAX_BUFFER_LINES);
         }
 
-        // Accumulate output for current command
         if (this.commandState.phase === 'executing') {
           this.commandState.outputSinceCommandStart += stripped;
           if (this.commandState.outputSinceCommandStart.length > this.MAX_COMMAND_OUTPUT) {
@@ -277,6 +320,7 @@ export class TerminalService {
       this.session.status = 'exited';
       this.session.exitCode = exitCode;
       this.ptyProcess = null;
+      this.resolveShellReady(false);
       this.updateState();
       this.emitStatus();
       eventBus.emit(AppEventType.TERMINAL_SESSION_EXITED, { sessionId, exitCode });
@@ -289,6 +333,9 @@ export class TerminalService {
       try { this.ptyProcess.kill(); } catch {}
       this.ptyProcess = null;
     }
+    this.resolveShellReady(false);
+    this.shellIntegrationEnabled = false;
+    this.shellIntegrationReady = false;
     if (this.session) {
       this.session.status = 'exited';
     }
@@ -367,6 +414,11 @@ export class TerminalService {
         break;
 
       case 'prompt-started': {
+        if (this.shellIntegrationEnabled && !this.shellIntegrationReady) {
+          this.shellIntegrationReady = true;
+          this.resolveShellReady(true);
+          this.emitLog('info', 'Shell integration ready');
+        }
         if (this.commandState.phase === 'executing') {
           const result: CommandFinishResult = {
             exitCode: this.commandState.lastExitCode ?? 0,
@@ -400,6 +452,13 @@ export class TerminalService {
     const resolvers = this.commandFinishResolvers.splice(0);
     for (const resolve of resolvers) {
       resolve(result);
+    }
+  }
+
+  private resolveShellReady(ready: boolean): void {
+    const resolvers = this.shellReadyResolvers.splice(0);
+    for (const resolve of resolvers) {
+      resolve(ready);
     }
   }
 }

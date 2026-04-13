@@ -103,6 +103,21 @@ export function appReducer(state: AppState, action: Action): AppState {
         },
       };
 
+    case ActionType.ACCUMULATE_TOKEN_USAGE:
+      return {
+        ...state,
+        tokenUsage: {
+          inputTokens: state.tokenUsage.inputTokens + action.inputTokens,
+          outputTokens: state.tokenUsage.outputTokens + action.outputTokens,
+        },
+      };
+
+    case ActionType.RESET_TOKEN_USAGE:
+      return {
+        ...state,
+        tokenUsage: { inputTokens: 0, outputTokens: 0 },
+      };
+
     case ActionType.REPLACE_STATE:
       return action.state;
 
