@@ -11,7 +11,6 @@ import {
   replaceWithError as replaceWithErrorInternal,
   replaceWithResult as replaceWithResultInternal,
 } from './live-run.js';
-import { TaskStatusBar } from './taskStatusBar.js';
 
 const getWorkspaceAPI = () => (window as any).workspaceAPI as WorkspaceAPI | null;
 const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
@@ -64,11 +63,7 @@ const attachPreview = document.getElementById('attachPreview') as HTMLDivElement
 const attachPreviewList = document.getElementById('attachPreviewList') as HTMLDivElement;
 const docFileInput = document.getElementById('docFileInput') as HTMLInputElement;
 const imgFileInput = document.getElementById('imgFileInput') as HTMLInputElement;
-const taskStatusBarEl = document.getElementById('taskStatusBar') as HTMLDivElement;
 
-// ─── Task Status Bar ─────────────────────────────────────────────────────
-
-const taskStatusBar = new TaskStatusBar(taskStatusBarEl);
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
@@ -615,24 +610,17 @@ function replaceWithError(taskId: string, error: string): void {
 }
 
 function appendMemoryEntry(entry: TaskMemoryEntry): void {
+  // History view: only show the final model result, nothing else
+  if (entry.kind !== 'model_result') return;
+
   if (chatEmptyState.parentNode) chatEmptyState.remove();
+  updateLastAgentResponseText(entry.text);
 
-  if (entry.kind === 'user_prompt') {
-    const el = document.createElement('div');
-    el.className = 'chat-history-prompt';
-    el.textContent = entry.text;
-    chatInner.appendChild(el);
-    return;
-  }
-
-  if (entry.kind === 'model_result') {
-    updateLastAgentResponseText(entry.text);
-    const el = document.createElement('div');
-    el.className = 'chat-msg chat-msg-model chat-msg-done';
-    el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
-    chatInner.appendChild(el);
-    return;
-  }
+  const el = document.createElement('div');
+  el.className = 'chat-msg chat-msg-model chat-msg-done';
+  el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
+  chatInner.appendChild(el);
+  scheduleChatScrollToBottom(true);
 }
 
 async function refreshTaskConversation(taskId: string | null): Promise<void> {
@@ -659,12 +647,9 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
   renderedTaskMemoryKey = memoryKey;
   clearChatThread();
 
-  // Render full conversation history in order
-  const visible = memory.entries.filter(shouldShowMemoryEntry);
-  for (const entry of visible) {
-    appendMemoryEntry(entry);
-  }
-  scheduleChatScrollToBottom(true);
+  // Show only the last model result entry for completed tasks
+  const lastResult = [...memory.entries].reverse().find(e => e.kind === 'model_result');
+  if (lastResult) appendMemoryEntry(lastResult);
 }
 
 // ─── Chat Submission ───────────────────────────────────────────────────────
@@ -772,7 +757,6 @@ async function submitChat(): Promise<void> {
   }
 
   runningTaskId = taskId;
-  taskStatusBar.start();
   createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
 
   const invokeOptions = pendingAttachments.length > 0
@@ -787,7 +771,6 @@ async function submitChat(): Promise<void> {
   } catch (err: any) {
     replaceWithError(taskId, err.message || String(err));
   } finally {
-    taskStatusBar.end();
     runningTaskId = null;
     chatStopBtn.hidden = true;
     chatInput.focus();
@@ -796,7 +779,6 @@ async function submitChat(): Promise<void> {
 chatStopBtn.addEventListener('click', () => {
   const modelApi = getModelAPI();
   if (runningTaskId && modelApi?.cancel) {
-    taskStatusBar.end(true);
     void modelApi.cancel(runningTaskId);
   }
 });

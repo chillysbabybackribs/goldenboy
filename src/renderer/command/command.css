@@ -93,41 +93,6 @@
   margin-bottom: auto;
 }
 
-/* ─── Task Status Bar ─────────────────────────────────────── */
-
-.cc-task-status {
-  /* Mirror compose shell: 75% width, centered */
-  width: 75%;
-  margin: 0 auto;
-  padding: 0 0 8px 2px;
-  display: flex;
-  align-items: center;
-  background: transparent;
-  flex-shrink: 0;
-}
-
-.cc-task-status-text {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: 0.2px;
-  white-space: nowrap;
-  overflow: hidden;
-  /* shimmer sweep across the text */
-  background: linear-gradient(90deg, #444 0%, #444 30%, #888 50%, #444 70%, #444 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: cc-status-shimmer 2.4s linear infinite;
-}
-
-@keyframes cc-status-shimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-.cc-task-status[hidden] { display: none; }
-
 .cc-chat-empty {
   font-style: italic;
   font-size: calc(15px * var(--cc-chat-zoom));
@@ -169,8 +134,6 @@
 
 .chat-msg-user {
   align-self: flex-end;
-  width: fit-content;
-  max-width: 80%;
   background: #131313;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 10px 10px 3px 10px;
@@ -180,6 +143,8 @@
   font-size: calc(15px * var(--cc-chat-zoom));
   font-weight: 400;
   letter-spacing: 0.1px;
+  max-width: 100%;
+  width: 100%;
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.03);
@@ -231,16 +196,6 @@
 /* ─── Live prompt line — shown during run, removed on completion ──────── */
 
 .chat-live-prompt {
-  font-family: var(--font-reading);
-  font-size: calc(12px * var(--cc-chat-zoom));
-  font-weight: 400;
-  color: #3a3a3a;
-  letter-spacing: 0.2px;
-  margin-bottom: 20px;
-  line-height: 1.5;
-}
-
-.chat-history-prompt {
   font-family: var(--font-reading);
   font-size: calc(12px * var(--cc-chat-zoom));
   font-weight: 400;
