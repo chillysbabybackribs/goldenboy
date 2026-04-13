@@ -64,7 +64,6 @@ const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }
 class AgentModelService {
   private providers = new Map<ProviderId, ProviderEntry>();
   private activeTaskProviders = new Map<string, ProviderId>();
-  private appServerProvider: AppServerProvider | null = null;
 
   init(): void {
     agentToolExecutor.registerMany([
@@ -312,10 +311,11 @@ class AgentModelService {
 
     this.setRuntime(config.id, { status: 'unavailable', activeTaskId: null, errorDetail: 'Starting...' }, config.modelId);
 
+    let bridge: V2ToolBridge | null = null;
     try {
       const contextPath = path.join(os.tmpdir(), 'v2-tool-context.json');
 
-      const bridge = new V2ToolBridge(contextPath);
+      bridge = new V2ToolBridge(contextPath);
       await bridge.start();
       const bridgePort = bridge.getPort();
       this.log(config.id, 'info', `V2ToolBridge started on port ${bridgePort}`);
@@ -333,8 +333,6 @@ class AgentModelService {
       });
       await provider.connect(wsPort);
 
-      this.appServerProvider = provider;
-
       this.providers.set(config.id, {
         id: config.id,
         label: config.label,
@@ -345,6 +343,7 @@ class AgentModelService {
       this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, provider.modelId);
       this.log(config.id, 'info', `${config.label} ready (app-server mode)`);
     } catch (err) {
+      await bridge?.stop();  // cleanup on partial startup
       const message = err instanceof Error ? err.message : String(err);
       this.setRuntime(config.id, { status: 'error', activeTaskId: null, errorDetail: message }, config.modelId);
       this.log(config.id, 'error', `${config.label} startup failed: ${message}`);
@@ -433,10 +432,6 @@ class AgentModelService {
     }
     if (providerId === HAIKU_PROVIDER_ID) {
       return new HaikuProvider();
-    }
-    // Reuse the persistent app-server provider for sub-agents if available
-    if (this.appServerProvider) {
-      return this.appServerProvider;
     }
     return new CodexProvider({ providerId: config.id, modelId: config.modelId });
   }
