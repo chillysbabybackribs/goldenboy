@@ -9,8 +9,9 @@ export const fileEditToolPack: ToolPackManifest = {
     'filesystem.read',
     'filesystem.write',
     'filesystem.patch',
+    'filesystem.delete',
     'filesystem.mkdir',
     'filesystem.move',
   ],
-  relatedPackIds: ['implementation', 'debug'],
+  relatedPackIds: ['implementation', 'debug', 'file-cache'],
 };

@@ -71,8 +71,14 @@
 
 /* ─── Chat Thread ─────────────────────────────────────────────────────── */
 
-.cc-chat {
+.cc-chat-shell {
+  position: relative;
   flex: 1;
+  min-height: 0;
+}
+
+.cc-chat {
+  height: 100%;
   overflow-y: auto;
   min-height: 0;
 }
@@ -115,6 +121,58 @@
   animation: text-shimmer 3s ease-in-out infinite;
 }
 
+.cc-chat-scroll-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(14, 14, 14, 0.92);
+  color: #9a9a96;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+  transition: color 140ms, border-color 140ms, background 140ms, transform 140ms, opacity 140ms;
+  -webkit-app-region: no-drag;
+}
+
+.cc-chat.cc-chat-scroll-idle .cc-chat-scroll-btn {
+  opacity: 0.28;
+}
+
+.cc-chat-scroll-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cc-chat-scroll-btn[hidden] {
+  display: none;
+}
+
+.cc-chat-scroll-btn:hover {
+  color: #e4e4e0;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(22, 22, 22, 0.96);
+  transform: translateX(-50%) scale(1.03);
+}
+
+.cc-chat-scroll-btn:active {
+  transform: translateX(-50%) scale(0.97);
+}
+
+.cc-chat-scroll-top {
+  top: 12px;
+}
+
+.cc-chat-scroll-bottom {
+  bottom: 12px;
+}
+
 @keyframes text-shimmer {
   0% { background-position: 100% 50%; }
   100% { background-position: -100% 50%; }
@@ -143,8 +201,9 @@
   font-size: calc(15px * var(--cc-chat-zoom));
   font-weight: 400;
   letter-spacing: 0.1px;
-  max-width: 100%;
-  width: 100%;
+  width: 75%;
+  max-width: 75%;
+  margin-left: auto;
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.03);
@@ -187,6 +246,9 @@
   line-height: 1.75;
   letter-spacing: 0.01em;
   font-weight: 400;
+  transition:
+    color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .chat-msg-streaming {
@@ -1275,6 +1337,7 @@
 .cc-status {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 14px;
   padding: 0 14px;
@@ -1285,6 +1348,7 @@
   font-size: 12px;
   color: #666;
   flex-shrink: 0;
+  text-align: center;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────────────────── */
@@ -1326,18 +1390,36 @@
   display: none;
 }
 
-/* Live card — task in progress, centered in the chat area */
+/* Live card — task in progress, aligned with the conversation flow */
 .chat-msg-live {
-  margin: auto;
+  margin: 0 auto;
   width: 75%;
   animation: cc-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Done card — only final response visible */
+/* Done card — final response stays in the same slot as the live card */
 .chat-msg-done {
-  margin: auto;
+  margin: 0 auto;
   width: 75%;
   animation: cc-fade-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.chat-msg-done.chat-msg-done-compact .chat-msg-text p:first-child,
+.chat-msg-done.chat-msg-done-compact .chat-msg-text > p:first-child,
+.chat-msg-done.chat-msg-done-compact .chat-msg-text p,
+.chat-msg-done.chat-msg-done-compact .chat-msg-text li {
+  font-size: calc(15px * var(--cc-chat-zoom));
+  line-height: 1.75;
+  color: #c8c8c4;
+  margin-bottom: 0;
+}
+
+.chat-msg-done.chat-msg-done-compact .chat-msg-text strong {
+  color: #d8d8d3;
+}
+
+.chat-msg-done.chat-msg-done-compact .chat-msg-text p + p {
+  margin-top: 6px;
 }
 
 /* ─── Process Disclosure — collapsed tool/thought trail ──────────────── */

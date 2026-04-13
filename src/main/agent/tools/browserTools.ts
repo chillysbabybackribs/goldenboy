@@ -7,6 +7,7 @@ import { ActionType } from '../../state/actions';
 import { generateId } from '../../../shared/utils/ids';
 import { geminiSidecar } from '../GeminiSidecar';
 import { WebIntentInstruction, WebIntentVM } from '../../browser/WebIntentVM';
+import { agentCache } from '../AgentCache';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -48,6 +49,10 @@ function logBrowserCache(message: string, level: 'info' | 'warn' | 'error' = 'in
       message,
     },
   });
+}
+
+function invalidateBrowserCaches(): void {
+  agentCache.invalidateByToolPrefix('browser.');
 }
 
 function requireBrowserCreated(): void {
@@ -266,13 +271,14 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.navigate',
-      description: 'Navigate the active browser tab to a URL or direct address. For user requests phrased as "search ..." use browser.search_web instead.',
+      description: 'Navigate the active browser tab to a URL or direct address. This does not open a new tab; use browser.create_tab when the user asks for a new, separate, or additional tab. For user requests phrased as "search ..." use browser.search_web instead.',
       inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } } },
       async execute(input) {
         requireBrowserCreated();
         const url = requireString(objectInput(input), 'url');
         browserService.navigate(url);
         await waitForBrowserSettled();
+        invalidateBrowserCaches();
         const state = browserService.getState();
         return {
           summary: `Navigated to ${state.navigation.url || url}`,
@@ -299,6 +305,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const query = requireString(objectInput(input), 'query');
         browserService.navigate(query);
         await waitForBrowserSettled();
+        invalidateBrowserCaches();
         const state = browserService.getState();
         logBrowserCache(`Opened web search for "${query}"`);
         return {
@@ -437,6 +444,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         }
 
         browserService.activateTab(searchTabId);
+        invalidateBrowserCaches();
         logBrowserCache(`Research search "${query}" parsed ${searchResults.length} results, opened ${openedPages.length} page(s), stoppedEarly=${stoppedEarly}`);
 
         return {
@@ -484,6 +492,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         browserService.goBack();
         await waitForBrowserSettled();
+        invalidateBrowserCaches();
         return { summary: 'Navigated back', data: { navigation: browserService.getState().navigation } };
       },
     },
@@ -495,6 +504,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         browserService.goForward();
         await waitForBrowserSettled();
+        invalidateBrowserCaches();
         return { summary: 'Navigated forward', data: { navigation: browserService.getState().navigation } };
       },
     },
@@ -506,23 +516,32 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         browserService.reload();
         await waitForBrowserSettled();
+        invalidateBrowserCaches();
         return { summary: 'Reloaded browser tab', data: { navigation: browserService.getState().navigation } };
       },
     },
     {
       name: 'browser.create_tab',
-      description: 'Create a browser tab.',
+      description: 'Create a new browser tab, optionally with a starting URL. Use this when the user asks to open something in a new, separate, or additional tab.',
       inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
       async execute(input) {
         requireBrowserCreated();
         const tab = browserService.createTab(optionalString(objectInput(input), 'url'));
         await waitForBrowserSettled();
-        return { summary: `Created tab ${tab.id}`, data: { tab } };
+        invalidateBrowserCaches();
+        return {
+          summary: `Created tab ${tab.id}`,
+          data: {
+            tab,
+            activeTabId: browserService.getState().activeTabId,
+            tabs: browserService.getTabs(),
+          },
+        };
       },
     },
     {
       name: 'browser.close_tab',
-      description: 'Close one or more browser tabs by id. Use browser.get_tabs first when tab ids are unknown.',
+      description: 'Close one or more browser tabs by id. Use browser.get_tabs first when tab ids are unknown, and read browser.get_tabs again before claiming the final tab state.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -541,7 +560,15 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         for (const tabId of ids) {
           browserService.closeTab(tabId);
         }
-        return { summary: `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`, data: { tabIds: ids } };
+        invalidateBrowserCaches();
+        return {
+          summary: `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`,
+          data: {
+            tabIds: ids,
+            activeTabId: browserService.getState().activeTabId,
+            tabs: browserService.getTabs(),
+          },
+        };
       },
     },
     {
@@ -552,7 +579,15 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const tabId = requireString(objectInput(input), 'tabId');
         browserService.activateTab(tabId);
-        return { summary: `Activated tab ${tabId}`, data: { tabId } };
+        invalidateBrowserCaches();
+        return {
+          summary: `Activated tab ${tabId}`,
+          data: {
+            tabId,
+            activeTabId: browserService.getState().activeTabId,
+            tabs: browserService.getTabs(),
+          },
+        };
       },
     },
     {
@@ -564,6 +599,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const result = await browserService.clickElement(selector, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return { summary: `Clicked ${selector}`, data: { result } };
       },
     },
@@ -577,6 +613,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const selector = requireString(obj, 'selector');
         const text = requireString(obj, 'text');
         const result = await browserService.typeInElement(selector, text, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return { summary: `Typed into ${selector}`, data: { result } };
       },
     },
@@ -590,6 +627,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const selector = requireString(obj, 'selector');
         const filePath = requireString(obj, 'filePath');
         const result = await browserService.uploadFileToElement(selector, filePath, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return {
           summary: result.uploaded
             ? `Attached ${result.fileName || result.filePath || filePath} to ${selector}`
@@ -607,6 +645,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const result = await browserService.downloadLink(selector, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return {
           summary: result.started
             ? `Started browser download from ${result.href || selector}`
@@ -624,6 +663,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const url = requireString(obj, 'url');
         const result = await browserService.downloadUrl(url, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return {
           summary: result.started
             ? `Started browser download for ${url}`
@@ -710,6 +750,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const sourceSelector = requireString(obj, 'sourceSelector');
         const targetSelector = requireString(obj, 'targetSelector');
         const result = await browserService.dragElement(sourceSelector, targetSelector, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return {
           summary: result.dragged
             ? `Dragged ${sourceSelector} to ${targetSelector}`
@@ -734,6 +775,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const result = await browserService.hoverElement(selector, optionalString(obj, 'tabId'));
+        invalidateBrowserCaches();
         return {
           summary: result.hovered
             ? `Hovered ${selector}`
@@ -1243,6 +1285,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           dialogId: optionalString(obj, 'dialogId'),
           promptText: optionalString(obj, 'promptText'),
         });
+        invalidateBrowserCaches();
         return {
           summary: result.accepted
             ? `Accepted JavaScript dialog${result.dialog?.message ? `: ${result.dialog.message}` : ''}`
@@ -1268,6 +1311,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           tabId: optionalString(obj, 'tabId'),
           dialogId: optionalString(obj, 'dialogId'),
         });
+        invalidateBrowserCaches();
         return {
           summary: result.dismissed
             ? `Dismissed JavaScript dialog${result.dialog?.message ? `: ${result.dialog.message}` : ''}`
@@ -1304,6 +1348,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           tabId: optionalString(obj, 'tabId'),
           failFast: obj.failFast === false ? false : true,
         });
+        invalidateBrowserCaches();
         const failedStep = result.failedAt !== null ? result.steps[result.failedAt] : null;
         const failureReason = failedStep?.error || failedStep?.evidence || 'unknown error';
         return {

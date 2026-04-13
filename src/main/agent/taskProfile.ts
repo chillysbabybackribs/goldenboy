@@ -52,6 +52,8 @@ function normalizeTaskKind(kind: AgentTaskKind): AgentTaskKind {
       return 'orchestration';
     case 'browser-search':
       return 'research';
+    case 'browser-automation':
+      return 'browser-automation';
     case 'local-code':
       return 'implementation';
     default:
@@ -65,6 +67,7 @@ function resolveTaskKind(prompt: string, overrides?: AgentTaskProfileOverride): 
   if (looksLikeResearchTask(prompt)) return 'research';
   if (looksLikeReviewTask(prompt)) return 'review';
   if (looksLikeDebugTask(prompt)) return 'debug';
+  if (looksLikeBrowserAutomationTask(prompt)) return 'browser-automation';
   if (looksLikeImplementationTask(prompt)) return 'implementation';
   return 'general';
 }
@@ -92,6 +95,15 @@ function defaultTaskProfileForKind(
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: true,
+      };
+    case 'browser-automation':
+      return {
+        kind: 'browser-automation',
+        skillNames: ['browser-operation'],
+        allowedTools: resolveAllowedToolsForTaskKind('browser-automation', toolPackPreset),
+        canSpawnSubagents: false,
+        maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
+        requiresBrowserSearchDirective: false,
       };
     case 'implementation':
       return {
@@ -163,6 +175,22 @@ export function looksLikeResearchTask(prompt: string): boolean {
   return explicitSearchIntent || freshnessIntent;
 }
 
+export function looksLikeBrowserAutomationTask(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const localContext = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|typescript|javascript|electron|build|test|server|ci)\b/.test(normalized);
+  const browserSurface = /\b(browser|tab|tabs|page|pages|site|website|webpage|url|link|links|window|windows)\b/.test(normalized);
+  const tabManagement = /\b(close|close out|close all|switch|activate|focus|reopen|restore|arrange|cleanup|clean up)\b/.test(normalized)
+    && /\b(tab|tabs|window|windows)\b/.test(normalized);
+  const browserActions = /\b(navigate|go to|open|visit|click|type|fill|submit|login|log in|sign in|upload|download|checkout)\b/.test(normalized);
+
+  return !localContext
+    && !looksLikeResearchTask(prompt)
+    && !looksLikeReviewTask(prompt)
+    && !looksLikeDebugTask(prompt)
+    && !looksLikeOrchestrationTask(prompt)
+    && (tabManagement || (browserSurface && browserActions));
+}
+
 export function looksLikeReviewTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   const reviewVerb = /\b(review|code review|pull request|requested changes|inline comments?|diff)\b/.test(normalized);
@@ -189,4 +217,5 @@ export function looksLikeDebugTask(prompt: string): boolean {
 
 export const looksLikeDelegationTask = looksLikeOrchestrationTask;
 export const looksLikeBrowserSearchTask = looksLikeResearchTask;
+export const looksLikeBrowserAutomationWork = looksLikeBrowserAutomationTask;
 export const looksLikeLocalCodeTask = looksLikeImplementationTask;

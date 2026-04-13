@@ -11,7 +11,7 @@ import {
   publishProviderFinalOutput,
   resolveToolPackExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools } from './toolPacks';
+import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
 
 function loadEnvValue(key: string): string | null {
   if (process.env[key]) return process.env[key] || null;
@@ -212,6 +212,30 @@ export class HaikuProvider implements AgentProvider {
       );
 
       if (toolUses.length === 0) {
+        const autoExpansion = resolveAutoExpandedToolPack(finalOutput, currentTools, toolCatalog);
+        if (autoExpansion) {
+          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
+          messages.push({
+            role: 'assistant',
+            content: response.content as Anthropic.Messages.ContentBlockParam[],
+          });
+          const expandedToolNames = autoExpansion.scope === 'all'
+            ? ['all eligible tools']
+            : autoExpansion.tools;
+          messages.push({
+            role: 'user',
+            content: [
+              `Host auto-expanded tool pack "${autoExpansion.pack}".`,
+              `Reason: ${autoExpansion.reason}`,
+              `Description: ${autoExpansion.description}`,
+              `Expanded tools: ${expandedToolNames.join(', ')}`,
+              'Continue with the expanded tool scope instead of stopping if more work is still needed.',
+            ].join('\n'),
+          });
+          request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
+          continue;
+        }
+
         if (request.onToken && turnTextBuffer) {
           request.onToken(turnTextBuffer);
         }

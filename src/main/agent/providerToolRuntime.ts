@@ -127,6 +127,7 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'subagent.cancel': return 'Subagent: cancel';
     case 'subagent.list': return 'Subagent: list';
     case 'runtime.request_tool_pack': return `Runtime: load tool pack ${args.pack || ''}`.trim();
+    case 'runtime.list_tool_packs': return 'Runtime: list tool packs';
     default: {
       const short = toolName.replace(/^(browser|filesystem|terminal|subagent|chat)\./, '');
       return short.replace(/_/g, ' ');

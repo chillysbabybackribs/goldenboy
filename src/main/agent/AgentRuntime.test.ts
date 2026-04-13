@@ -229,4 +229,148 @@ describe('AgentRuntime', () => {
       error: 'command exploded',
     });
   });
+
+  it('preflight-expands the tool scope before the first provider turn when the task clearly needs adjacent tools', async () => {
+    const browserTabsTool: AgentToolDefinition = {
+      name: 'browser.get_tabs',
+      description: 'Return open browser tabs',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+      },
+      execute: async () => ({
+        summary: 'Read browser tabs',
+        data: { tabs: [{ id: 'tab-1' }] },
+      }),
+    };
+
+    agentToolExecutor.register(browserTabsTool);
+
+    const provider = {
+      requests: [] as AgentProviderRequest[],
+      async invoke(request: AgentProviderRequest) {
+        this.requests.push(request);
+        return {
+          output: 'ok',
+          usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            durationMs: 1,
+          },
+        };
+      },
+    };
+    const runtime = new AgentRuntime(provider);
+    await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: 'Close the extra browser tabs and report what remains open.',
+      taskId: 'task-runtime-preflight-browser',
+      allowedTools: ['runtime.request_tool_pack', 'runtime.list_tool_packs'],
+      canSpawnSubagents: false,
+      maxToolTurns: 4,
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
+      'browser.get_tabs',
+    ]));
+  });
+
+  it('preflight-adds browser.create_tab for explicit multi-tab requests even when the baseline scope only has navigate', async () => {
+    const browserTools: AgentToolDefinition[] = [
+      {
+        name: 'browser.get_state',
+        description: 'Return current browser state',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => ({ summary: 'state', data: {} }),
+      },
+      {
+        name: 'browser.get_tabs',
+        description: 'Return open browser tabs',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => ({ summary: 'tabs', data: { tabs: [] } }),
+      },
+      {
+        name: 'browser.navigate',
+        description: 'Navigate the active tab',
+        inputSchema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { url: { type: 'string' } },
+          required: ['url'],
+        },
+        execute: async () => ({ summary: 'navigated', data: {} }),
+      },
+      {
+        name: 'browser.close_tab',
+        description: 'Close a tab',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => ({ summary: 'closed', data: {} }),
+      },
+      {
+        name: 'browser.click',
+        description: 'Click an element',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => ({ summary: 'clicked', data: {} }),
+      },
+      {
+        name: 'browser.type',
+        description: 'Type into an element',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => ({ summary: 'typed', data: {} }),
+      },
+      {
+        name: 'browser.create_tab',
+        description: 'Create a new browser tab',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => ({ summary: 'created', data: {} }),
+      },
+    ];
+
+    for (const tool of browserTools) {
+      agentToolExecutor.register(tool);
+    }
+
+    const provider = {
+      requests: [] as AgentProviderRequest[],
+      async invoke(request: AgentProviderRequest) {
+        this.requests.push(request);
+        return {
+          output: 'ok',
+          usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            durationMs: 1,
+          },
+        };
+      },
+    };
+
+    const runtime = new AgentRuntime(provider);
+    await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: 'Open three new tabs one for yahoo one for reddit and one for gmail.',
+      taskId: 'task-runtime-preflight-create-tab',
+      allowedTools: [
+        'browser.get_state',
+        'browser.get_tabs',
+        'browser.close_tab',
+        'browser.navigate',
+        'browser.click',
+        'browser.type',
+      ],
+      canSpawnSubagents: false,
+      maxToolTurns: 4,
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
+      'browser.create_tab',
+    ]));
+  });
 });

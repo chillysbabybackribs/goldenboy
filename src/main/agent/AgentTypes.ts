@@ -8,6 +8,7 @@ export type AgentToolStatus = 'running' | 'completed' | 'failed';
 
 export type AgentToolName =
   | 'runtime.request_tool_pack'
+  | 'runtime.list_tool_packs'
   | 'browser.get_state'
   | 'browser.get_tabs'
   | 'browser.navigate'

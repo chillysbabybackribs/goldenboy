@@ -28,5 +28,5 @@ export const researchToolPack: ToolPackManifest = {
     'browser.get_state',
     'browser.capture_snapshot',
   ],
-  relatedPackIds: ['browser-automation'],
+  relatedPackIds: ['browser-automation', 'browser-advanced'],
 };

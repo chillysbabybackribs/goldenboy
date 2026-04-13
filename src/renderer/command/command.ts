@@ -35,6 +35,8 @@ const logsCloseBtn = document.getElementById('logsCloseBtn')!;
 const chatThread = document.getElementById('chatThread')!;
 const chatInner = document.getElementById('chatInner')!;
 const chatEmptyState = document.getElementById('chatEmptyState')!;
+const chatScrollTopBtn = document.getElementById('chatScrollTopBtn') as HTMLButtonElement;
+const chatScrollBottomBtn = document.getElementById('chatScrollBottomBtn') as HTMLButtonElement;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
 const modelChip = document.getElementById('modelChip') as HTMLButtonElement;
@@ -96,6 +98,10 @@ let chatAutoPinned = true;
 let chatScrollRaf: number | null = null;
 let chatScrollFramesRemaining = 0;
 let suppressChatScrollEvent = false;
+let suppressNextChatScrollActivation = false;
+let chatScrollControlsActivated = false;
+let chatScrollControlsDimmed = false;
+let chatScrollControlsIdleTimer: number | null = null;
 let lastAgentResponseText = '';
 let chatCopyFeedbackTimer: number | null = null;
 let chatZoom = 1;
@@ -326,10 +332,64 @@ function isChatNearBottom(threshold = 56): boolean {
   return distanceFromBottom <= threshold;
 }
 
+function isChatNearTop(threshold = 56): boolean {
+  return chatThread.scrollTop <= threshold;
+}
+
+function scheduleChatScrollControlsIdle(): void {
+  if (chatScrollControlsIdleTimer !== null) window.clearTimeout(chatScrollControlsIdleTimer);
+  chatScrollControlsDimmed = false;
+  chatThread.classList.remove('cc-chat-scroll-idle');
+  chatScrollControlsIdleTimer = window.setTimeout(() => {
+    chatScrollControlsDimmed = true;
+    chatThread.classList.add('cc-chat-scroll-idle');
+  }, 900);
+}
+
+function activateChatScrollControls(): void {
+  chatScrollControlsActivated = true;
+  scheduleChatScrollControlsIdle();
+  updateChatScrollControls();
+}
+
+function updateChatScrollControls(): void {
+  const maxScrollTop = Math.max(0, chatThread.scrollHeight - chatThread.clientHeight);
+  const hasOverflow = maxScrollTop > 8;
+  if (!hasOverflow || !chatScrollControlsActivated) {
+    chatScrollTopBtn.hidden = true;
+    chatScrollBottomBtn.hidden = true;
+    chatThread.classList.remove('cc-chat-scroll-idle');
+    return;
+  }
+
+  const nearTop = isChatNearTop();
+  const nearBottom = isChatNearBottom();
+
+  if (nearTop) {
+    chatScrollTopBtn.hidden = true;
+    chatScrollBottomBtn.hidden = false;
+    return;
+  }
+
+  if (nearBottom) {
+    chatScrollTopBtn.hidden = false;
+    chatScrollBottomBtn.hidden = true;
+    return;
+  }
+
+  const scrollMidpoint = maxScrollTop / 2;
+  const inUpperHalf = chatThread.scrollTop < scrollMidpoint;
+  chatScrollTopBtn.hidden = inUpperHalf;
+  chatScrollBottomBtn.hidden = !inUpperHalf;
+}
+
 function performChatScrollToBottom(): void {
   suppressChatScrollEvent = true;
   chatThread.scrollTop = chatThread.scrollHeight;
-  queueMicrotask(() => { suppressChatScrollEvent = false; });
+  queueMicrotask(() => {
+    suppressChatScrollEvent = false;
+    updateChatScrollControls();
+  });
 }
 
 function scheduleChatScrollToBottom(force = false, frames = 3): void {
@@ -353,11 +413,20 @@ function scheduleChatScrollToBottom(force = false, frames = 3): void {
 
 chatThread.addEventListener('scroll', () => {
   if (suppressChatScrollEvent) return;
+  if (suppressNextChatScrollActivation) {
+    suppressNextChatScrollActivation = false;
+  } else {
+    activateChatScrollControls();
+  }
   chatAutoPinned = isChatNearBottom();
+  updateChatScrollControls();
 });
 
 chatThread.addEventListener('wheel', (e: WheelEvent) => {
   // User scrolling up — immediately unpin auto-scroll
+  if (e.deltaY !== 0) {
+    activateChatScrollControls();
+  }
   if (e.deltaY < 0) {
     chatAutoPinned = false;
     // Cancel any pending scroll-to-bottom animation
@@ -382,9 +451,26 @@ chatResizeObserver.observe(chatThread);
 
 const chatMutationObserver = new MutationObserver(() => {
   scheduleChatScrollToBottom(false, 1);
+  updateChatScrollControls();
 });
 chatMutationObserver.observe(chatInner, {
   childList: true,
+});
+
+chatScrollTopBtn.addEventListener('click', () => {
+  activateChatScrollControls();
+  chatAutoPinned = false;
+  suppressNextChatScrollActivation = true;
+  chatThread.scrollTo({ top: 0, behavior: 'smooth' });
+  updateChatScrollControls();
+});
+
+chatScrollBottomBtn.addEventListener('click', () => {
+  activateChatScrollControls();
+  chatAutoPinned = true;
+  suppressNextChatScrollActivation = true;
+  chatThread.scrollTo({ top: chatThread.scrollHeight, behavior: 'smooth' });
+  updateChatScrollControls();
 });
 
 // ─── Markdown Rendering ────────────────────────────────────────────────────
@@ -745,6 +831,7 @@ async function submitChat(): Promise<void> {
 
   chatInput.value = '';
   clearAttachments();
+  appendUserMessage(prompt, imagePreviewUrls.length > 0 ? imagePreviewUrls : undefined);
   chatStopBtn.hidden = false;
 
   let resolvedOwner: string = owner || '';
@@ -757,7 +844,7 @@ async function submitChat(): Promise<void> {
   }
 
   runningTaskId = taskId;
-  createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
+  createLiveRunCard(taskId, resolvedOwner);
 
   const invokeOptions = pendingAttachments.length > 0
     ? { attachments: pendingAttachments }

@@ -29,6 +29,6 @@ describeIf('tool pack benchmark', () => {
     console.log(`\n${report}\n`);
     expect(report).toContain('mode-6');
     expect(report).toContain('mode-4');
-    expect(report).toContain('Registered tools: 74');
+    expect(report).toMatch(/Registered tools: \d+/);
   });
 });

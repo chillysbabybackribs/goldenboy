@@ -16,6 +16,7 @@ export type ProviderRoutingCapabilities = Partial<Record<ProviderId, {
 export function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {
   return kind === 'orchestration'
     || kind === 'research'
+    || kind === 'browser-automation'
     || kind === 'implementation'
     || kind === 'debug'
     || kind === 'review';
@@ -54,6 +55,11 @@ export function pickProviderForPrompt(
   if (profile.kind === 'research') {
     if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
     if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
+  }
+
+  if (profile.kind === 'browser-automation') {
+    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
+    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
   }
 
   if (profile.kind === 'implementation') {

@@ -25,5 +25,5 @@ export const reviewToolPack: ToolPackManifest = {
     'chat.read_window',
     'chat.read_message',
   ],
-  relatedPackIds: ['chat-recall'],
+  relatedPackIds: ['chat-recall', 'file-cache'],
 };

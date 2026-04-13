@@ -17,17 +17,20 @@ Use this skill when a task requires navigation, web search, page inspection, cli
 1. Read current browser state.
 2. If the user asks to search, look up, find online, research, or get current web information, call `browser.research_search` with the user query first. Let it open/cache one result at a time and stop when enough evidence is found. Do not answer from model memory.
 3. Identify the active tab and URL.
-4. For page understanding, search cached chunks before requesting broad page text.
-5. Use page extraction or actionable element inspection before clicking.
-6. Prefer semantic or ranked actions when available.
-7. Record navigation and important page findings.
-8. Return concise page evidence, not full raw page dumps.
+4. When the user asks for a new or separate tab, use `browser.create_tab` rather than reusing `browser.navigate` on the active tab.
+5. For page understanding, search cached chunks before requesting broad page text.
+6. Use page extraction or actionable element inspection before clicking.
+7. Prefer semantic or ranked actions when available.
+8. Record navigation and important page findings.
+9. Return concise page evidence, not full raw page dumps.
 
 ## Preferred Tools
 
 - `browser.get_state`
 - `browser.get_tabs`
 - `browser.navigate`
+- `browser.create_tab`
+- `browser.activate_tab`
 - `browser.search_web`
 - `browser.research_search`
 - `browser.cache_current_page`

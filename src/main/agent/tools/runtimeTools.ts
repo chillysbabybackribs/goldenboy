@@ -21,6 +21,31 @@ function optionalString(input: Record<string, unknown>, key: string): string | u
 export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
   return [
     {
+      name: 'runtime.list_tool_packs',
+      description: 'List the available host-managed tool packs, including their baseline tools, full tool membership, scope, and related packs. Use this first when you suspect the current runtime tool scope is too narrow.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+      },
+      async execute() {
+        const packs = listToolPacks().map((pack) => ({
+          id: pack.id,
+          description: pack.description,
+          baseline4: pack.baseline4 ?? [],
+          baseline6: pack.baseline6 ?? [],
+          tools: pack.tools,
+          scope: pack.scope ?? 'named',
+          relatedPackIds: pack.relatedPackIds ?? [],
+        }));
+
+        return {
+          summary: `Listed ${packs.length} tool packs`,
+          data: { packs },
+        };
+      },
+    },
+    {
       name: 'runtime.request_tool_pack',
       description: buildRuntimeRequestToolDescription(),
       inputSchema: {

@@ -375,9 +375,9 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         const target = resolveLocalPath(requireString(objectInput(input), 'path'));
         fs.rmSync(target, { recursive: true, force: true });
-        fileKnowledgeStore.removeFile(target);
+        const removedRecords = fileKnowledgeStore.removePathTree(target);
         invalidateFilesystemCaches();
-        return { summary: `Deleted ${target}`, data: { path: target } };
+        return { summary: `Deleted ${target}`, data: { path: target, removedRecords } };
       },
     },
     {
@@ -387,6 +387,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         const target = resolveLocalPath(requireString(objectInput(input), 'path'));
         fs.mkdirSync(target, { recursive: true });
+        invalidateFilesystemCaches();
         return { summary: `Created directory ${target}`, data: { path: target } };
       },
     },
@@ -400,10 +401,16 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const to = resolveLocalPath(requireString(obj, 'to'));
         fs.mkdirSync(path.dirname(to), { recursive: true });
         fs.renameSync(from, to);
-        fileKnowledgeStore.removeFile(from);
-        fileKnowledgeStore.refreshFile(to, APP_WORKSPACE_ROOT);
+        const stat = fs.statSync(to);
+        const removedRecords = fileKnowledgeStore.removePathTree(from);
+        if (stat.isFile()) {
+          fileKnowledgeStore.refreshFile(to, APP_WORKSPACE_ROOT);
+        }
         invalidateFilesystemCaches();
-        return { summary: `Moved ${from} to ${to}`, data: { from, to } };
+        return {
+          summary: `Moved ${from} to ${to}`,
+          data: { from, to, removedRecords, refreshed: stat.isFile() },
+        };
       },
     },
   ];

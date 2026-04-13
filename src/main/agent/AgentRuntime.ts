@@ -3,6 +3,7 @@ import { agentPromptBuilder, buildResponseStyleAddendum } from './AgentPromptBui
 import { agentRunStore } from './AgentRunStore';
 import { agentSkillLoader } from './AgentSkillLoader';
 import { agentToolExecutor } from './AgentToolExecutor';
+import { resolvePreflightToolPackExpansions } from './toolPacks';
 import { appStateStore } from '../state/appStateStore';
 import { ActionType } from '../state/actions';
 import { generateId } from '../../shared/utils/ids';
@@ -32,7 +33,25 @@ export class AgentRuntime {
 
     try {
       const toolCatalog = filterToolCatalogForConfig(agentToolExecutor.list(), config);
-      const tools = filterToolsForConfig(toolCatalog, config);
+      let tools = filterToolsForConfig(toolCatalog, config);
+      const preflightExpansions = resolvePreflightToolPackExpansions(
+        config.task,
+        tools.map(tool => ({ name: tool.name })),
+        toolCatalog.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      );
+      for (const expansion of preflightExpansions) {
+        const toolCatalogByName = new Map(toolCatalog.map(tool => [tool.name, tool]));
+        const currentToolNames = new Set(tools.map(tool => tool.name));
+        const added = expansion.tools
+          .map((name) => toolCatalogByName.get(name))
+          .filter((tool): tool is (typeof toolCatalog)[number] => Boolean(tool))
+          .filter((tool) => !currentToolNames.has(tool.name));
+        tools = [...tools, ...added];
+      }
       
       // OPTIMIZATION: Lazy-load skills.
       // If config.skillNames is provided, load them for the system prompt.
@@ -64,6 +83,7 @@ export class AgentRuntime {
           inputSchema: tool.inputSchema,
         })),
         lazyLoadEnabled: skillNames.length === 0,
+        preflightExpansions,
       });
       
       const result = await this.provider.invoke({
@@ -113,6 +133,7 @@ function logPromptBudget(
     skillCount: number;
     tools: AgentProviderRequest['tools'];
     lazyLoadEnabled?: boolean;
+    preflightExpansions?: Array<{ pack: string; reason: string }>;
   },
 ): void {
   const systemChars = input.systemPrompt.length;
@@ -142,6 +163,9 @@ function logPromptBudget(
         `toolPayloadTokens=${Math.ceil(toolPayloadChars / 4)}`,
         `totalChars=${totalChars}`,
         `totalEstTokens=${Math.ceil(totalChars / 4)}`,
+        input.preflightExpansions?.length
+          ? `preflightPacks=${input.preflightExpansions.map((expansion) => `${expansion.pack}:${expansion.reason}`).join('|')}`
+          : '',
         input.lazyLoadEnabled ? 'lazyLoad=enabled' : '',
       ].filter(Boolean).join(' '),
     },

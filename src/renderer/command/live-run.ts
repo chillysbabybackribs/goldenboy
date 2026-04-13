@@ -56,11 +56,6 @@ export function createLiveRunCard(
 ): LiveRunCard {
   container.querySelector('.cc-chat-empty')?.remove();
 
-  // Hide all existing cards — new task takes over the full space
-  container.querySelectorAll<HTMLElement>('.chat-msg').forEach(el => {
-    el.classList.add('chat-msg-archived');
-  });
-
   const root = document.createElement('div');
   root.className = 'chat-msg chat-msg-model chat-msg-live';
   root.dataset.taskId = taskId;
@@ -426,14 +421,24 @@ function collapseStreamIntoDisclosure(card: LiveRunCard): void {
   streamEl.remove();
 }
 
+function isCompactFinalOutput(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || normalized.length > 220) return false;
+  if (/\n\s*\n/.test(normalized)) return false;
+  if (/^(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```)/m.test(normalized)) return false;
+  return normalized.split('\n').filter(Boolean).length <= 2;
+}
+
 function flushFinalResult(taskId: string, result: any, _provider?: string): void {
   const card = liveRunCards.get(taskId);
   if (!card) return;
 
   clearWaitingShimmer(card);
+  let compactFinalOutput = false;
 
   if (result.success) {
     const finalOutput = String(result.output || '');
+    compactFinalOutput = isCompactFinalOutput(finalOutput);
     if (finalOutput && finalOutput !== card.tokenBuffer) {
       card.output.className = 'chat-msg-text chat-markdown';
       card.output.innerHTML = card.callbacks.renderMarkdown(finalOutput);
@@ -450,17 +455,14 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
     card.callbacks.updateLastAgentResponseText(String(errorText));
   }
 
+  card.root.classList.toggle('chat-msg-done-compact', compactFinalOutput);
+
   // Remove the prompt line and collapse stream into disclosure
   card.root.querySelector('.chat-live-prompt')?.remove();
   collapseStreamIntoDisclosure(card);
   card.meta.closest('.chat-msg-header')?.remove();
   card.root.classList.remove('chat-msg-live');
   card.root.classList.add('chat-msg-done');
-
-  // Restore previous archived cards so the user can scroll back through history
-  card.root.parentElement?.querySelectorAll<HTMLElement>('.chat-msg-archived').forEach(el => {
-    el.classList.remove('chat-msg-archived');
-  });
 
   card.callbacks.scheduleChatScrollToBottom(false, 6);
 }

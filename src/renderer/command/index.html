@@ -27,10 +27,22 @@
       <div class="cc-left">
 
         <!-- Chat thread -->
-        <div class="cc-chat" id="chatThread">
-          <div class="cc-chat-inner" id="chatInner">
-            <div class="cc-chat-empty" id="chatEmptyState">Send a message to start a conversation.</div>
+        <div class="cc-chat-shell">
+          <div class="cc-chat" id="chatThread">
+            <div class="cc-chat-inner" id="chatInner">
+              <div class="cc-chat-empty" id="chatEmptyState">Send a message to start a conversation.</div>
+            </div>
           </div>
+          <button class="cc-chat-scroll-btn cc-chat-scroll-top" id="chatScrollTopBtn" type="button" title="Scroll to top" aria-label="Scroll to top" hidden>
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 10l4-4 4 4"/>
+            </svg>
+          </button>
+          <button class="cc-chat-scroll-btn cc-chat-scroll-bottom" id="chatScrollBottomBtn" type="button" title="Scroll to bottom" aria-label="Scroll to bottom" hidden>
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6l4 4 4-4"/>
+            </svg>
+          </button>
         </div>
 
         <!-- Input footer — Command Center -->

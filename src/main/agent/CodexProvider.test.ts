@@ -348,6 +348,114 @@ describe('CodexProvider', () => {
     expect(result.output).toBe('Expansion worked.');
   });
 
+  it('auto-expands a related tool pack when the model says the current scope is missing browser tools', async () => {
+    const blockedTurn = createMockChildProcess();
+    const workTurn = createMockChildProcess();
+    const finalTurn = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(blockedTurn)
+      .mockReturnValueOnce(workTurn)
+      .mockReturnValueOnce(finalTurn);
+
+    executeMock.mockResolvedValueOnce({
+      summary: 'Read browser tabs',
+      data: { tabs: [{ id: 'tab-1' }, { id: 'tab-2' }] },
+    });
+
+    const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
+    const resultPromise = provider.invoke(buildRequest({
+      task: 'Close the extra browser tabs and tell me what remains open.',
+      maxToolTurns: 3,
+      tools: [
+        {
+          name: 'runtime.request_tool_pack',
+          description: 'Request a tool pack.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { pack: { type: 'string' } },
+            required: ['pack'],
+          },
+        },
+        {
+          name: 'runtime.list_tool_packs',
+          description: 'List tool packs.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+      ],
+      toolCatalog: [
+        {
+          name: 'runtime.request_tool_pack',
+          description: 'Request a tool pack.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { pack: { type: 'string' } },
+            required: ['pack'],
+          },
+        },
+        {
+          name: 'runtime.list_tool_packs',
+          description: 'List tool packs.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+        {
+          name: 'browser.get_tabs',
+          description: 'Return open browser tabs.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+      ],
+    }));
+
+    await completeTurn(
+      blockedTurn,
+      JSON.stringify({
+        kind: 'final',
+        tool_calls: [],
+        message: 'I cannot continue because the current scope does not have browser tab tools.',
+      }),
+    );
+    await completeTurn(
+      workTurn,
+      JSON.stringify({
+        kind: 'tool_calls',
+        tool_calls: [
+          {
+            name: 'browser.get_tabs',
+            arguments_json: '{}',
+          },
+        ],
+        message: 'Now checking the current browser tabs.',
+      }),
+    );
+    await completeTurn(
+      finalTurn,
+      JSON.stringify({
+        kind: 'final',
+        tool_calls: [],
+        message: 'Two tabs remain open.',
+      }),
+    );
+
+    const result = await resultPromise;
+
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock).toHaveBeenCalledWith('browser.get_tabs', {}, expect.any(Object));
+    expect(result.output).toBe('Two tabs remain open.');
+  });
+
   it('aborts an active Codex process', () => {
     const child = createMockChildProcess();
     spawnMock.mockReturnValue(child);

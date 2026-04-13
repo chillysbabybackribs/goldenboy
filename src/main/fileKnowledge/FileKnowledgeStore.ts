@@ -362,6 +362,22 @@ export class FileKnowledgeStore {
     return true;
   }
 
+  removePathTree(filePath: string): number {
+    const normalizedPath = normalizePathKey(filePath);
+    const prefix = `${normalizedPath}${path.sep}`;
+    const matches = Array.from(this.files.values())
+      .filter((record) => {
+        const recordPath = normalizePathKey(record.path);
+        return recordPath === normalizedPath || recordPath.startsWith(prefix);
+      });
+    if (matches.length === 0) return 0;
+    for (const record of matches) {
+      this.deleteRecord(record);
+    }
+    this.save();
+    return matches.length;
+  }
+
   getStats(): FileCacheStats {
     const chunks = Array.from(this.chunks.values());
     return {

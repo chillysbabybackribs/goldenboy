@@ -65,6 +65,7 @@ export class AgentPromptBuilder {
       input.config.systemPromptAddendum?.trim()
         ? `\n\n## Additional Invocation Instructions\n\n${input.config.systemPromptAddendum.trim()}`
         : '',
+      '\n\n## Tool Scope Recovery\n\nIf the current tool scope appears too narrow for the task, inspect the available packs with runtime.list_tool_packs, then expand with runtime.request_tool_pack. Do this immediately when the current tool subset is missing a browser, filesystem, terminal, chat, or subagent capability you need.',
       `\n\n## Available Tools\n\nTool schemas are provided separately. Available tool names: ${toolText}`,
       skillText,
     ].join('');

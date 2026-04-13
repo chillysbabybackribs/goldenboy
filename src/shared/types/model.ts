@@ -84,6 +84,7 @@ export type ModelOwner = ProviderId | 'user';
 export type AgentTaskKind =
   | 'orchestration'
   | 'research'
+  | 'browser-automation'
   | 'implementation'
   | 'debug'
   | 'review'

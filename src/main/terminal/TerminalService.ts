@@ -34,6 +34,8 @@ export class TerminalService {
   private readonly MAX_COMMAND_OUTPUT = 65536; // 64KB cap on per-command output
   private commandFinishResolvers: Array<(result: CommandFinishResult) => void> = [];
   private shellReadyResolvers: Array<(ready: boolean) => void> = [];
+  private commandExecutionChain: Promise<unknown> = Promise.resolve();
+  private lastCommandDispatchAt: number | null = null;
 
   getSession(): TerminalSessionInfo | null {
     return this.session;
@@ -133,6 +135,11 @@ export class TerminalService {
     this.ptyProcess.write(data);
   }
 
+  dispatchCommand(command: string): void {
+    this.lastCommandDispatchAt = Date.now();
+    this.write(`${command}\n`);
+  }
+
   getRecentOutput(lineCount: number = 50): string {
     const count = Math.min(Math.max(1, lineCount), this.MAX_BUFFER_LINES);
     return this.outputBuffer.slice(-count).join('\n');
@@ -144,6 +151,12 @@ export class TerminalService {
 
   getCwd(): string {
     return this.commandState.cwd || this.session?.cwd || '';
+  }
+
+  isBusy(graceMs = 1500): boolean {
+    if (this.commandState.phase === 'executing') return true;
+    if (this.lastCommandDispatchAt === null) return false;
+    return (Date.now() - this.lastCommandDispatchAt) <= graceMs;
   }
 
   waitForCommandFinish(timeoutMs: number = 10_000): Promise<CommandFinishResult | null> {
@@ -206,10 +219,12 @@ export class TerminalService {
   }
 
   async executeCommand(command: string, timeoutMs: number = 10_000): Promise<CommandFinishResult | null> {
-    await this.waitForShellReady(Math.min(timeoutMs, 2_000));
-    const resultPromise = this.waitForCommandFinish(timeoutMs);
-    this.write(`${command}\n`);
-    return resultPromise;
+    return this.enqueueExclusiveCommand(async () => {
+      await this.waitForShellReady(Math.min(timeoutMs, 2_000));
+      const resultPromise = this.waitForCommandFinish(timeoutMs);
+      this.dispatchCommand(command);
+      return resultPromise;
+    });
   }
 
   resize(cols: number, rows: number): void {
@@ -336,9 +351,18 @@ export class TerminalService {
     this.resolveShellReady(false);
     this.shellIntegrationEnabled = false;
     this.shellIntegrationReady = false;
+    this.lastCommandDispatchAt = null;
     if (this.session) {
       this.session.status = 'exited';
     }
+  }
+
+  private enqueueExclusiveCommand<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.commandExecutionChain
+      .catch(() => undefined)
+      .then(work);
+    this.commandExecutionChain = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   private updateState(): void {
@@ -431,6 +455,7 @@ export class TerminalService {
           };
 
           this.commandState.phase = 'idle';
+          this.lastCommandDispatchAt = null;
 
           // Emit event
           if (this.session) {

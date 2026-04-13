@@ -2,6 +2,7 @@ import type { AgentToolName } from './AgentTypes';
 import type { AgentTaskProfileOverride } from '../../shared/types/model';
 import {
   buildTaskProfile,
+  looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
   looksLikeImplementationTask,
   looksLikeOrchestrationTask,
@@ -35,6 +36,7 @@ export function withBrowserSearchDirective(prompt: string, overrides?: AgentTask
 }
 
 export {
+  looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
   looksLikeImplementationTask,
   looksLikeOrchestrationTask,

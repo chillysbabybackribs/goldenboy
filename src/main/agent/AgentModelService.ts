@@ -28,9 +28,20 @@ import { createSubAgentToolDefinitions } from './tools/subagentTools';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
 import { scopeForPrompt, withBrowserSearchDirective } from './runtimeScope';
-import { pickProviderForPrompt } from './providerRouting';
+import { pickProviderForPrompt, taskKindRequiresV2ToolRuntime } from './providerRouting';
 import { SubAgentSpawnInput } from './subagents/SubAgentTypes';
 import { buildTaskProfile } from './taskProfile';
+import { browserService } from '../browser/BrowserService';
+import type { AgentTaskKind } from '../../shared/types/model';
+import { buildStartupStatusMessages, shouldPrimeResearchBrowserSurface } from './startupProgress';
+import {
+  backgroundResearchSynthesisProviderId,
+  buildBackgroundResearchSynthesisContext,
+  buildBackgroundResearchSynthesisTask,
+  formatBackgroundResearchSynthesis,
+  NO_MATERIAL_RESEARCH_UPDATE,
+  shouldRunBackgroundResearchSynthesis,
+} from './researchSynthesis';
 
 type ProviderEntry = {
   id: ProviderId;
@@ -123,6 +134,12 @@ class AgentModelService {
     this.log(providerId, 'info', `${provider.label} invocation started`, taskId);
 
     try {
+      const taskProfile = buildTaskProfile(prompt, options?.taskProfile);
+      this.emitStartupStatuses(taskId, providerId, taskProfile.kind);
+      if (shouldPrimeResearchBrowserSurface(taskProfile.kind, browserService.isCreated())) {
+        void this.primeResearchBrowserSurface(prompt, providerId, taskId);
+      }
+
       const runtimePrompt = withBrowserSearchDirective(prompt, options?.taskProfile);
       const contextPrompt = buildContextPrompt([
         buildAutomaticTaskContinuationContext(taskId, prompt),
@@ -202,6 +219,13 @@ class AgentModelService {
         errorDetail: null,
       });
       this.log(providerId, 'info', `${provider.label} invocation completed`, taskId);
+      this.queueBackgroundResearchSynthesis({
+        taskId,
+        prompt,
+        taskKind: taskProfile.kind,
+        primaryProviderId: providerId,
+        fastAnswer: response.output,
+      });
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -306,11 +330,7 @@ class AgentModelService {
     const autoProvider = this.pickAutoProvider(prompt, options);
     if (autoProvider) return autoProvider;
     const profile = buildTaskProfile(prompt, options?.taskProfile);
-    const requiresAppTools = profile.kind === 'orchestration'
-      || profile.kind === 'research'
-      || profile.kind === 'implementation'
-      || profile.kind === 'debug'
-      || profile.kind === 'review';
+    const requiresAppTools = taskKindRequiresV2ToolRuntime(profile.kind);
     if (requiresAppTools) {
       throw new Error(
         `No model provider that executes through the V2 tool runtime is available for ${profile.kind} tasks.`,
@@ -375,11 +395,7 @@ class AgentModelService {
     if (!provider) return;
 
     const profile = buildTaskProfile(prompt, options?.taskProfile);
-    const requiresAppTools = profile.kind === 'orchestration'
-      || profile.kind === 'research'
-      || profile.kind === 'implementation'
-      || profile.kind === 'debug'
-      || profile.kind === 'review';
+    const requiresAppTools = taskKindRequiresV2ToolRuntime(profile.kind);
 
     if (!requiresAppTools || provider.supportsAppToolExecutor) return;
 
@@ -437,6 +453,148 @@ class AgentModelService {
       win.webContents.send(IPC_CHANNELS.MODEL_PROGRESS, progress);
     }
   }
+
+  private emitStartupStatuses(
+    taskId: string,
+    providerId: ProviderId,
+    taskKind: AgentTaskKind,
+  ): void {
+    const statuses = buildStartupStatusMessages({
+      taskKind,
+      browserSurfaceReady: browserService.isCreated(),
+    });
+
+    for (const status of statuses) {
+      this.emitProgress({
+        taskId,
+        providerId,
+        type: 'status',
+        data: status,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  private async primeResearchBrowserSurface(prompt: string, providerId: ProviderId, taskId: string): Promise<void> {
+    try {
+      browserService.createTab(prompt);
+      this.log(providerId, 'info', 'Pre-opened browser search tab for research task', taskId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(providerId, 'warn', `Browser search prewarm skipped: ${message}`, taskId);
+    }
+  }
+
+  private queueBackgroundResearchSynthesis(input: {
+    taskId: string;
+    prompt: string;
+    taskKind: AgentTaskKind;
+    primaryProviderId: ProviderId;
+    fastAnswer: string;
+  }): void {
+    const synthesisProviderId = backgroundResearchSynthesisProviderId();
+    const synthesisProviderAvailable = this.providers.has(synthesisProviderId)
+      && !Array.from(this.activeTaskProviders.values()).includes(synthesisProviderId);
+
+    if (!shouldRunBackgroundResearchSynthesis({
+      prompt: input.prompt,
+      taskKind: input.taskKind,
+      primaryProviderId: input.primaryProviderId,
+      synthesisProviderAvailable,
+    })) {
+      return;
+    }
+
+    this.emitProgress({
+      taskId: input.taskId,
+      providerId: input.primaryProviderId,
+      type: 'status',
+      data: 'Launching background synthesis from cached browser evidence.',
+      timestamp: Date.now(),
+    });
+
+    void this.runBackgroundResearchSynthesis({
+      ...input,
+      synthesisProviderId,
+    });
+  }
+
+  private async runBackgroundResearchSynthesis(input: {
+    taskId: string;
+    prompt: string;
+    taskKind: AgentTaskKind;
+    primaryProviderId: ProviderId;
+    synthesisProviderId: ProviderId;
+    fastAnswer: string;
+  }): Promise<void> {
+    const toolTranscript = chatKnowledgeStore.readLast(input.taskId, {
+      role: 'tool',
+      count: 8,
+      maxChars: 10_000,
+    });
+    if (!toolTranscript.text.trim()) {
+      this.log(input.synthesisProviderId, 'info', 'Background research synthesis skipped: no cached tool evidence', input.taskId);
+      return;
+    }
+
+    try {
+      const synthesisRuntime = new AgentRuntime(this.createProviderInstance(input.synthesisProviderId));
+      const synthesisContext = buildBackgroundResearchSynthesisContext({
+        prompt: input.prompt,
+        fastAnswer: input.fastAnswer,
+        threadSummary: chatKnowledgeStore.threadSummary(input.taskId),
+        evidenceTranscript: toolTranscript.text,
+      });
+      const response = await synthesisRuntime.run({
+        mode: 'unrestricted-dev',
+        agentId: input.synthesisProviderId,
+        role: 'secondary',
+        taskId: input.taskId,
+        task: buildBackgroundResearchSynthesisTask(),
+        contextPrompt: synthesisContext,
+        allowedTools: [],
+        canSpawnSubagents: false,
+        maxToolTurns: 1,
+        onStatus: (status) => {
+          if (!status.trim()) return;
+          this.log(input.synthesisProviderId, 'info', `Background synthesis status: ${status}`, input.taskId);
+        },
+      });
+
+      const formatted = formatBackgroundResearchSynthesis(response.output);
+      if (!formatted || formatted === NO_MATERIAL_RESEARCH_UPDATE) {
+        this.log(input.synthesisProviderId, 'info', 'Background research synthesis found no material update', input.taskId);
+        return;
+      }
+
+      chatKnowledgeStore.recordAssistantMessage(input.taskId, formatted, input.synthesisProviderId);
+      taskMemoryStore.recordInvocationResult({
+        taskId: input.taskId,
+        providerId: input.synthesisProviderId,
+        success: true,
+        output: formatted,
+        artifacts: [],
+        usage: response.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
+        codexItems: response.codexItems,
+      });
+      appStateStore.dispatch({
+        type: ActionType.UPDATE_TASK,
+        taskId: input.taskId,
+        updates: { updatedAt: Date.now() },
+      });
+      this.emitProgress({
+        taskId: input.taskId,
+        providerId: input.synthesisProviderId,
+        type: 'status',
+        data: 'Background synthesis appended a refined answer.',
+        timestamp: Date.now(),
+      });
+      this.log(input.synthesisProviderId, 'info', 'Background research synthesis appended to task memory', input.taskId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(input.synthesisProviderId, 'warn', `Background research synthesis failed: ${message}`, input.taskId);
+    }
+  }
 }
 
 function isSupportedProvider(value: string): value is ProviderId {
@@ -444,12 +602,7 @@ function isSupportedProvider(value: string): value is ProviderId {
 }
 
 function buildContextPrompt(parts: Array<string | null | undefined>): string | null {
-  const context = parts
-    .map(part => part?.trim())
-    .filter((part): part is string => Boolean(part))
-    .join('\n\n');
-  if (!context) return null;
-  return context.length > 4_000 ? `${context.slice(0, 4_000)}\n...[context truncated]` : context;
+  return packContextSections(parts, 4_000, '\n...[context truncated]');
 }
 
 function buildAutomaticTaskContinuationContext(taskId: string, prompt: string): string | null {
@@ -498,6 +651,42 @@ function getLastFailureText(taskId: string): string | null {
     entry => entry.kind === 'model_result' && entry.metadata?.success === false,
   );
   return latestFailed?.text || null;
+}
+
+function packContextSections(
+  parts: Array<string | null | undefined>,
+  maxChars: number,
+  truncationSuffix: string,
+): string | null {
+  const normalized = parts
+    .map(part => part?.trim())
+    .filter((part): part is string => Boolean(part));
+  if (normalized.length === 0) return null;
+
+  const packed: string[] = [];
+  let used = 0;
+
+  for (const part of normalized) {
+    const separator = packed.length > 0 ? '\n\n' : '';
+    const available = maxChars - used - separator.length;
+    if (available <= 0) break;
+
+    if (part.length <= available) {
+      packed.push(separator ? `${separator}${part}` : part);
+      used += separator.length + part.length;
+      continue;
+    }
+
+    const reserveForSuffix = truncationSuffix.length;
+    if (available <= reserveForSuffix) break;
+    const truncated = `${part.slice(0, available - reserveForSuffix)}${truncationSuffix}`;
+    packed.push(separator ? `${separator}${truncated}` : truncated);
+    used += separator.length + truncated.length;
+    break;
+  }
+
+  const context = packed.join('');
+  return context || null;
 }
 
 export const agentModelService = new AgentModelService();

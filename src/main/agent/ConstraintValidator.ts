@@ -234,6 +234,85 @@ function checkResearchEvidenceSufficiency(result: AgentToolResult): ConstraintVe
   };
 }
 
+function checkBrowserCreateTab(result: AgentToolResult): ConstraintVerdict | null {
+  const tab = result.data.tab;
+  const tabs = result.data.tabs;
+  if (!tab || typeof tab !== 'object' || !Array.isArray(tabs)) {
+    return {
+      name: 'tab_created',
+      status: 'UNKNOWN',
+      observed: 'create-tab result did not include post-action tab state',
+      expected: 'created tab present in current tab list',
+    };
+  }
+
+  const tabId = typeof (tab as Record<string, unknown>).id === 'string'
+    ? (tab as Record<string, unknown>).id
+    : '';
+  const present = !!tabId && tabs.some((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).id === tabId);
+  return {
+    name: 'tab_created',
+    status: present ? 'PASS' : 'FAIL',
+    observed: present ? `tab ${tabId} present in tab list` : `tab ${tabId || '<missing>'} absent from tab list`,
+    expected: 'new tab present in current tab list',
+  };
+}
+
+function checkBrowserClosedTabs(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
+  const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+  const requested = [
+    ...(typeof obj.tabId === 'string' ? [obj.tabId] : []),
+    ...(Array.isArray(obj.tabIds) ? obj.tabIds.filter((value): value is string => typeof value === 'string') : []),
+  ];
+  if (requested.length === 0) return null;
+
+  const tabs = Array.isArray(result.data.tabs) ? result.data.tabs : null;
+  if (!tabs) {
+    return {
+      name: 'tab_closed',
+      status: 'UNKNOWN',
+      observed: 'close-tab result did not include post-action tab state',
+      expected: `tabs absent: ${requested.join(', ')}`,
+    };
+  }
+
+  const survivors = requested.filter((tabId) =>
+    tabs.some((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).id === tabId),
+  );
+
+  return {
+    name: 'tab_closed',
+    status: survivors.length === 0 ? 'PASS' : 'FAIL',
+    observed: survivors.length === 0
+      ? `requested tabs are absent: ${requested.join(', ')}`
+      : `tabs still present after close: ${survivors.join(', ')}`,
+    expected: `tabs absent: ${requested.join(', ')}`,
+  };
+}
+
+function checkBrowserActivatedTab(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
+  const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+  const requestedTabId = typeof obj.tabId === 'string' ? obj.tabId : null;
+  if (!requestedTabId) return null;
+
+  const activeTabId = typeof result.data.activeTabId === 'string' ? result.data.activeTabId : '';
+  if (!activeTabId) {
+    return {
+      name: 'active_tab',
+      status: 'UNKNOWN',
+      observed: 'no activeTabId in activate-tab result',
+      expected: requestedTabId,
+    };
+  }
+
+  return {
+    name: 'active_tab',
+    status: activeTabId === requestedTabId ? 'PASS' : 'FAIL',
+    observed: activeTabId,
+    expected: requestedTabId,
+  };
+}
+
 // --- Helpers ----------------------------------------------------------------
 
 function extractCommand(input: unknown): string | null {
@@ -312,11 +391,35 @@ const RESEARCH_SEARCH_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
   return verdicts;
 };
 
+const BROWSER_CREATE_TAB_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  const createCheck = checkBrowserCreateTab(result);
+  if (createCheck) verdicts.push(createCheck);
+  return verdicts;
+};
+
+const BROWSER_CLOSE_TAB_CONSTRAINTS: ConstraintExtractor = (result, input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  const closeCheck = checkBrowserClosedTabs(result, input);
+  if (closeCheck) verdicts.push(closeCheck);
+  return verdicts;
+};
+
+const BROWSER_ACTIVATE_TAB_CONSTRAINTS: ConstraintExtractor = (result, input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  const activateCheck = checkBrowserActivatedTab(result, input);
+  if (activateCheck) verdicts.push(activateCheck);
+  return verdicts;
+};
+
 // Map tool names to their constraint extractors
 const TOOL_CONSTRAINTS = new Map<AgentToolName, ConstraintExtractor>([
   ['terminal.exec', TERMINAL_EXEC_CONSTRAINTS],
   ['browser.navigate', BROWSER_NAVIGATE_CONSTRAINTS],
   ['browser.research_search', RESEARCH_SEARCH_CONSTRAINTS],
+  ['browser.create_tab', BROWSER_CREATE_TAB_CONSTRAINTS],
+  ['browser.close_tab', BROWSER_CLOSE_TAB_CONSTRAINTS],
+  ['browser.activate_tab', BROWSER_ACTIVATE_TAB_CONSTRAINTS],
 ]);
 
 // --- Public API -------------------------------------------------------------

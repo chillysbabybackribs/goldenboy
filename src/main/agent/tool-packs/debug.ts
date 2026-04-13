@@ -23,7 +23,8 @@ export const debugToolPack: ToolPackManifest = {
     'terminal.exec',
     'terminal.spawn',
     'terminal.write',
+    'terminal.kill',
     'chat.thread_summary',
   ],
-  relatedPackIds: ['terminal-heavy', 'file-edit'],
+  relatedPackIds: ['terminal-heavy', 'file-edit', 'file-cache', 'browser-advanced'],
 };

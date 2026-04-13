@@ -18,7 +18,7 @@ import {
   publishProviderFinalOutput,
   resolveToolPackExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools } from './toolPacks';
+import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
 
 const CODEX_INACTIVITY_TIMEOUT_MS = 180_000;
 
@@ -301,6 +301,33 @@ export class CodexProvider implements AgentProvider {
 
       const response = turnResult.response;
       if (response.kind === 'final') {
+        const autoExpansion = resolveAutoExpandedToolPack(response.message, currentTools, toolCatalog);
+        if (autoExpansion) {
+          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
+          if (response.message.trim()) {
+            request.onStatus?.(response.message.trim());
+            transcript.push({
+              type: 'assistant',
+              content: response.message.trim(),
+            });
+          }
+          const expandedToolNames = autoExpansion.scope === 'all'
+            ? ['all eligible tools']
+            : autoExpansion.tools;
+          const hostNote = [
+            `Host auto-expanded tool pack "${autoExpansion.pack}".`,
+            `Reason: ${autoExpansion.reason}`,
+            `Description: ${autoExpansion.description}`,
+            `Expanded tools: ${expandedToolNames.join(', ')}`,
+          ].join('\n');
+          request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
+          transcript.push({
+            type: 'tool',
+            content: hostNote,
+          });
+          continue;
+        }
+
         const finalItem = publishProviderFinalOutput({
           request,
           itemId: `${this.itemPrefix('final')}-${Date.now()}`,

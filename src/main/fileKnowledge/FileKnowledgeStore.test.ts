@@ -115,4 +115,18 @@ describe('FileKnowledgeStore', () => {
     const results = store.search('value', { pathPrefix: '', limit: 5 });
     expect(results.some(result => result.path === filePath)).toBe(true);
   });
+
+  it('removes cached descendants when deleting a directory tree path', () => {
+    const store = new FileKnowledgeStore();
+    const nestedDir = path.join(workspaceDir, 'src');
+    const nestedFile = path.join(nestedDir, 'example.ts');
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(nestedFile, 'export const value = 3;\n', 'utf-8');
+    store.indexWorkspace(workspaceDir);
+
+    expect(store.getFreshChunksForPath(nestedFile)).not.toBeNull();
+    fs.rmSync(nestedDir, { recursive: true, force: true });
+    expect(store.removePathTree(nestedDir)).toBe(1);
+    expect(store.getFreshChunksForPath(nestedFile)).toBeNull();
+  });
 });

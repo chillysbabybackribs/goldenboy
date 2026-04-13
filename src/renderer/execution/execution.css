@@ -61,7 +61,10 @@ html, body { overflow: hidden; }
 
 /* ── Tab Bar ──────────────────────────────────────────────────────────── */
 .tab-bar {
-  display: flex; align-items: flex-start; min-height: 56px; flex-wrap: wrap;
+  --browser-tab-width: 180px;
+  --browser-tab-height: 40px;
+  --browser-tab-strip-height: 56px;
+  display: flex; align-items: flex-start; min-height: var(--browser-tab-strip-height); flex-wrap: wrap;
   background: var(--bg-secondary);
   border-bottom: none;
   flex-shrink: 0; padding: 0 4px; gap: 0; overflow: visible;
@@ -75,19 +78,24 @@ html, body { overflow: hidden; }
 .tab-list {
   display: flex; align-items: center; flex: 1;
   overflow-x: auto; overflow-y: hidden; gap: 2px; min-width: 0;
-  scrollbar-width: none; padding-bottom: 0; height: 56px;
+  scrollbar-width: none; padding-bottom: 0; height: var(--browser-tab-strip-height);
 }
 .tab-list::-webkit-scrollbar { display: none; }
 
 /* ── Inactive Tab ── */
 .browser-tab {
   display: flex; align-items: center; gap: 5px;
-  padding: 0 12px; height: 40px; min-width: 72px; max-width: 240px;
+  width: var(--browser-tab-width);
+  min-width: var(--browser-tab-width);
+  max-width: var(--browser-tab-width);
+  height: var(--browser-tab-height);
+  padding: 0 12px;
   background: transparent;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  cursor: pointer; flex-shrink: 0;
+  box-sizing: border-box;
+  cursor: pointer; flex: 0 0 var(--browser-tab-width);
   font-family: var(--font-mono); font-size: 12px;
   line-height: 1;
   color: var(--text-secondary);
@@ -214,7 +222,7 @@ html, body { overflow: hidden; }
 /* ── New Tab Button ── */
 .btn-tab-new {
   display: none; align-items: center; justify-content: center;
-  width: 40px; height: 40px;
+  width: 40px; height: var(--browser-tab-height);
   border: 1px solid transparent; background: transparent;
   color: #ffffff; font-size: 18px; font-weight: 300;
   cursor: pointer; border-radius: 6px 6px 0 0;
@@ -270,7 +278,7 @@ html, body { overflow: hidden; }
 /* ── Tab Scroll Arrows ───────────────────────────────────────────────── */
 .tab-scroll-btn {
   display: none; align-items: center; justify-content: center;
-  width: 24px; height: 40px; flex-shrink: 0;
+  width: 24px; height: var(--browser-tab-height); flex-shrink: 0;
   border: none; background: transparent;
   color: #ffffff; font-size: 18px; font-weight: 300;
   cursor: pointer; z-index: 3;
@@ -293,7 +301,7 @@ html, body { overflow: hidden; }
 /* ── Tab Overflow Button ─────────────────────────────────────────────── */
 .btn-tab-overflow {
   display: none; align-items: center; justify-content: center;
-  width: 28px; height: 40px; flex-shrink: 0;
+  width: 28px; height: var(--browser-tab-height); flex-shrink: 0;
   border: 1px solid transparent; border-radius: 4px;
   background: transparent;
   color: #ffffff; font-size: 14px;

@@ -1,5 +1,6 @@
 import { AgentToolDefinition } from '../AgentTypes';
 import { terminalService } from '../../terminal/TerminalService';
+import { agentCache } from '../AgentCache';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -43,6 +44,12 @@ function compactOutput(output: string, maxChars: number): string {
   return `${output.slice(-maxChars)}\n...[terminal output truncated to last ${maxChars} chars]`;
 }
 
+function invalidateFilesystemViewsFromTerminal(): void {
+  // Shell commands may mutate files or cwd outside the host's direct view.
+  // Drop cached filesystem tool results so follow-up reads re-observe state.
+  agentCache.invalidateByToolPrefix('filesystem.');
+}
+
 export function createTerminalToolDefinitions(): AgentToolDefinition[] {
   return [
     {
@@ -70,6 +77,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
         const effectiveCommand = commandWithCwd(command, cwd);
 
         const result = await terminalService.executeCommand(effectiveCommand, timeoutMs);
+        invalidateFilesystemViewsFromTerminal();
 
         if (!result) {
           const output = terminalService.getRecentOutput(80);
@@ -81,6 +89,8 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
               timedOut: true,
               output: compactOutput(output, maxOutputChars),
               session,
+              filesystemCacheInvalidated: true,
+              followUp: 'If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.',
             },
           };
         }
@@ -94,6 +104,8 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
             durationMs: result.durationMs,
             output: compactOutput(result.output, maxOutputChars),
             sessionId: session.id,
+            filesystemCacheInvalidated: true,
+            followUp: 'If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.',
           },
         };
       },
@@ -113,9 +125,13 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const command = requireString(obj, 'command');
         if (command.length > 4000) throw new Error('Command is too long');
+        if (terminalService.isBusy()) {
+          throw new Error('Terminal already has an active or pending foreground command. Wait for it to finish or use terminal.kill before spawning another.');
+        }
 
         const session = ensureSession();
-        terminalService.write(`${commandWithCwd(command, optionalString(obj, 'cwd'))}\n`);
+        terminalService.dispatchCommand(commandWithCwd(command, optionalString(obj, 'cwd')));
+        invalidateFilesystemViewsFromTerminal();
         return {
           summary: `Spawned long-running command: ${command}`,
           data: {
@@ -123,6 +139,8 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
             cwd: terminalService.getCwd() || session.cwd,
             sessionId: session.id,
             recentOutput: compactOutput(terminalService.getRecentOutput(30), 4000),
+            filesystemCacheInvalidated: true,
+            followUp: 'Use terminal.write for process input and terminal.kill to interrupt the foreground process.',
           },
         };
       },
@@ -140,6 +158,9 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         const obj = objectInput(input);
         const rawInput = requireString(obj, 'input');
+        if (!terminalService.isBusy()) {
+          throw new Error('No active terminal process is ready to receive input.');
+        }
         const session = ensureSession();
         terminalService.write(rawInput);
         return {
@@ -153,13 +174,18 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
       description: 'Interrupt the current terminal foreground process with Ctrl+C. Use to stop long-running commands started in the shared terminal.',
       inputSchema: { type: 'object', properties: {} },
       async execute() {
+        if (!terminalService.isBusy()) {
+          throw new Error('No active terminal foreground process is running.');
+        }
         const session = ensureSession();
         terminalService.write('\x03');
+        invalidateFilesystemViewsFromTerminal();
         return {
           summary: 'Sent interrupt to terminal',
           data: {
             sessionId: session.id,
             recentOutput: compactOutput(terminalService.getRecentOutput(30), 4000),
+            filesystemCacheInvalidated: true,
           },
         };
       },

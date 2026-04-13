@@ -1,4 +1,5 @@
 import {
+  looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
   looksLikeImplementationTask,
   looksLikeOrchestrationTask,
@@ -17,8 +18,9 @@ describe('runtime scope', () => {
     expect(looksLikeOrchestrationTask('Split this work across multiple agents and run in parallel')).toBe(true);
     expect(looksLikeDelegationTask('Split this work across multiple agents and run in parallel')).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(6);
+    expect(scope.allowedTools).toHaveLength(7);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
+    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
     expect(scope.canSpawnSubagents).toBe(true);
     expect(scope.skillNames).toEqual([]);
   });
@@ -29,8 +31,9 @@ describe('runtime scope', () => {
     expect(looksLikeResearchTask(prompt)).toBe(true);
     expect(looksLikeBrowserSearchTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(6);
+    expect(scope.allowedTools).toHaveLength(7);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
+    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
     expect(scope.canSpawnSubagents).toBe(false);
     expect(scope.skillNames).toEqual([]);
     expect(withBrowserSearchDirective(prompt)).toContain('browser.research_search first');
@@ -43,14 +46,32 @@ describe('runtime scope', () => {
     expect(withBrowserSearchDirective(prompt)).toBe(prompt);
   });
 
+  it('routes tab-management requests into browser automation mode', () => {
+    const prompt = 'Close out the browser tabs except the active one';
+    const scope = scopeForPrompt(prompt);
+    expect(looksLikeBrowserAutomationTask(prompt)).toBe(true);
+    expect(scope.allowedTools).not.toBe('all');
+    expect(scope.allowedTools).toHaveLength(8);
+    expect(scope.allowedTools).toEqual(expect.arrayContaining([
+      'runtime.request_tool_pack',
+      'runtime.list_tool_packs',
+      'browser.get_state',
+      'browser.get_tabs',
+      'browser.close_tab',
+      'browser.navigate',
+    ]));
+    expect(scope.skillNames).toEqual(['browser-operation']);
+  });
+
   it('detects implementation work and keeps non-orchestration execution broad', () => {
     const prompt = 'Patch this TypeScript file and run the local build';
     const scope = scopeForPrompt(prompt);
     expect(looksLikeImplementationTask(prompt)).toBe(true);
     expect(looksLikeLocalCodeTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(6);
+    expect(scope.allowedTools).toHaveLength(7);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
+    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
     expect(scope.canSpawnSubagents).toBe(false);
     expect(scope.skillNames).toEqual([]);
   });
@@ -116,7 +137,8 @@ describe('runtime scope', () => {
     });
 
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(4);
+    expect(scope.allowedTools).toHaveLength(5);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
+    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
   });
 });
