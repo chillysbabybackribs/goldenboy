@@ -579,24 +579,15 @@ function replaceWithError(taskId: string, error: string): void {
 }
 
 function appendMemoryEntry(entry: TaskMemoryEntry): void {
-  if (!shouldShowMemoryEntry(entry)) return;
-
-  if (entry.kind === 'user_prompt') {
-    appendUserMessage(entry.text);
-    return;
-  }
+  // History view: only show the final model result, nothing else
+  if (entry.kind !== 'model_result') return;
 
   if (chatEmptyState.parentNode) chatEmptyState.remove();
-  if (entry.kind === 'model_result') {
-    updateLastAgentResponseText(entry.text);
-  }
+  updateLastAgentResponseText(entry.text);
+
   const el = document.createElement('div');
-  el.className = 'chat-msg chat-msg-model';
-  el.innerHTML =
-    `<div class="chat-msg-header">` +
-    `<span class="chat-msg-meta">${escapeHtml(formatTime(entry.createdAt))}</span>` +
-    `</div>` +
-    `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
+  el.className = 'chat-msg chat-msg-model chat-msg-done';
+  el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
   chatThread.appendChild(el);
   scheduleChatScrollToBottom(true);
 }
@@ -624,9 +615,10 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
 
   renderedTaskMemoryKey = memoryKey;
   clearChatThread();
-  for (const entry of memory.entries) {
-    appendMemoryEntry(entry);
-  }
+
+  // Show only the last model result entry for completed tasks
+  const lastResult = [...memory.entries].reverse().find(e => e.kind === 'model_result');
+  if (lastResult) appendMemoryEntry(lastResult);
 }
 
 // ─── Chat Submission ───────────────────────────────────────────────────────

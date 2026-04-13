@@ -1297,13 +1297,66 @@
   animation: cc-fade-in 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Subtle divider between consecutive model responses */
-.chat-msg-model + .chat-msg-model {
-  padding-top: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.03);
+/* Archived cards (previous tasks) — hidden when new task starts */
+.chat-msg-archived {
+  display: none;
 }
 
-/* Divider between user message and model response */
-.chat-msg-user + .chat-msg-model {
-  margin-top: 4px;
+/* Live card — task in progress, full space */
+.chat-msg-live {
+  animation: cc-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Done card — only final response visible */
+.chat-msg-done {
+  animation: cc-fade-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ─── Process Disclosure — collapsed tool/thought trail ──────────────── */
+
+.chat-process-details {
+  margin-top: 16px;
+}
+
+.chat-process-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  color: #444;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  outline: none;
+  transition: color 140ms;
+}
+
+.chat-process-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-process-summary::before {
+  content: '▸';
+  font-size: 9px;
+  transition: transform 140ms;
+}
+
+.chat-process-details[open] .chat-process-summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-process-summary:hover {
+  color: #777;
+}
+
+.chat-process-inner {
+  margin-top: 10px;
+  padding-left: 4px;
+  border-left: 1px solid #1e1e1e;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }

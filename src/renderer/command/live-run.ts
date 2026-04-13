@@ -48,17 +48,17 @@ export function createLiveRunCard(
   container: HTMLElement,
   callbacks: LiveRunRenderCallbacks,
 ): LiveRunCard {
-  if (container.querySelector('.chat-empty-state')) {
-    container.querySelector('.chat-empty-state')?.remove();
-  }
+  container.querySelector('.chat-empty-state')?.remove();
+
+  // Hide all existing cards — new task takes over the full space
+  container.querySelectorAll<HTMLElement>('.chat-msg').forEach(el => {
+    el.classList.add('chat-msg-archived');
+  });
 
   const root = document.createElement('div');
   root.className = 'chat-msg chat-msg-model chat-msg-live';
   root.dataset.taskId = taskId;
   root.innerHTML =
-    `<div class="chat-msg-header">` +
-    `<span class="chat-msg-meta chat-msg-meta-working"></span>` +
-    `</div>` +
     `<div class="chat-stream"></div>` +
     `<div class="chat-msg-text chat-markdown"></div>`;
   container.appendChild(root);
@@ -348,20 +348,45 @@ export function appendCodexItemProgress(taskId: string, progressData: string, it
 
 // ─── Final Result / Error ───────────────────────────────────────────────────
 
+function collapseStreamIntoDisclosure(card: LiveRunCard): void {
+  const streamEl = card.stream;
+  if (!streamEl.parentNode) return;
+  const children = Array.from(streamEl.children);
+  if (children.length === 0) {
+    streamEl.remove();
+    return;
+  }
+
+  // Count tool lines for the summary label
+  const toolCount = children.filter(el => el.classList.contains('chat-tool-line')).length;
+  const label = toolCount > 0 ? `${toolCount} tool${toolCount === 1 ? '' : 's'} used` : 'Show process';
+
+  const details = document.createElement('details');
+  details.className = 'chat-process-details';
+  const summary = document.createElement('summary');
+  summary.className = 'chat-process-summary';
+  summary.textContent = label;
+  details.appendChild(summary);
+
+  // Move all stream children into the details
+  const inner = document.createElement('div');
+  inner.className = 'chat-process-inner';
+  while (streamEl.firstChild) {
+    inner.appendChild(streamEl.firstChild);
+  }
+  details.appendChild(inner);
+
+  streamEl.parentNode.insertBefore(details, streamEl);
+  streamEl.remove();
+}
+
 function flushFinalResult(taskId: string, result: any, _provider?: string): void {
   const card = liveRunCards.get(taskId);
   if (!card) return;
 
   clearWaitingShimmer(card);
 
-  const usage = result.usage;
-  const meta = `${usage.durationMs}ms | ${usage.inputTokens}in / ${usage.outputTokens}out`;
-
   if (result.success) {
-    card.meta.classList.remove('chat-msg-meta-working');
-    card.meta.textContent = meta;
-    // Only re-render if final output differs from what was streamed
-    // (avoids the jarring flash)
     const finalOutput = String(result.output || '');
     if (finalOutput && finalOutput !== card.tokenBuffer) {
       card.output.className = 'chat-msg-text chat-markdown';
@@ -373,13 +398,17 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
       card.callbacks.updateLastAgentResponseText(finalOutput);
     }
   } else {
-    card.meta.classList.remove('chat-msg-meta-working');
-    card.meta.textContent = 'failed';
     card.output.className = 'chat-msg-error';
     const errorText = result.error || 'Unknown error';
     card.output.textContent = errorText;
     card.callbacks.updateLastAgentResponseText(String(errorText));
   }
+
+  // Collapse thoughts/tool lines into a disclosure, hide the header meta line
+  collapseStreamIntoDisclosure(card);
+  card.meta.closest('.chat-msg-header')?.remove();
+  card.root.classList.remove('chat-msg-live');
+  card.root.classList.add('chat-msg-done');
 
   card.callbacks.scheduleChatScrollToBottom(false, 6);
 }
