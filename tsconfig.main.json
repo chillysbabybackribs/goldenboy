@@ -2,7 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "dist/main",
-    "rootDir": "src"
+    "rootDir": "src",
+    "allowJs": true
   },
   "include": ["src/main/**/*", "src/shared/**/*"],
   "exclude": [

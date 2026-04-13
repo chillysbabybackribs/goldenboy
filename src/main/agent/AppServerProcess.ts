@@ -32,10 +32,13 @@ export function mergeTomlMcpEntry(
     `V2_TOOL_CONTEXT_PATH = "${contextPath}"`,
   ].join('\n');
 
-  const cleaned = existing.replace(
-    /\[mcp_servers\.v2-tools\][\s\S]*?(?=\n\[|\n*$)/,
-    '',
-  ).trimEnd();
+  // Remove all v2-tools sections (both [mcp_servers.v2-tools] and any
+  // [mcp_servers.v2-tools.*] subsections like .env that may appear anywhere).
+  // Also remove any stray quoted-path sections left by previous bad runs.
+  const cleaned = existing
+    .replace(/\[mcp_servers\.v2-tools[^\]]*\][^\[]*/g, '')
+    .replace(/\["[^"]*v2-mcp-shim[^"]*"\][^\[]*/g, '')
+    .trimEnd();
 
   return cleaned ? `${cleaned}\n\n${newBlock}\n` : `${newBlock}\n`;
 }
@@ -149,7 +152,7 @@ export class AppServerProcess extends EventEmitter {
         }
       }, READYZ_TIMEOUT_MS);
 
-      child.stdout?.on('data', (data: Buffer) => {
+      const scanForPort = (data: Buffer): void => {
         const text = data.toString();
         for (const line of text.split('\n')) {
           const port = parseListeningPort(line.trim());
@@ -159,10 +162,13 @@ export class AppServerProcess extends EventEmitter {
             resolve(port);
           }
         }
-      });
+      };
 
+      // codex app-server writes "listening on: ws://..." to stderr (not stdout)
+      child.stdout?.on('data', scanForPort);
       child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
+        scanForPort(data);
       });
 
       child.on('error', (err) => {
