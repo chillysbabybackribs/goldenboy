@@ -464,25 +464,26 @@
 }
 
 .cc-zoom-btn {
-  padding: 0 5px;
+  padding: 4px 10px;
   border: none;
   background: none;
-  color: #404040;
+  color: #505050;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: color 120ms;
   -webkit-app-region: no-drag;
   line-height: 1;
+  user-select: none;
 }
 
 .cc-zoom-btn:hover {
-  color: #888;
+  color: #aaa;
 }
 
 .cc-zoom-btn:active {
-  color: #bbb;
+  color: #ddd;
 }
 
 .cc-zoom-btn:disabled {
@@ -492,9 +493,10 @@
 }
 
 .cc-zoom-btn-reset {
-  color: #505050;
-  min-width: 34px;
+  color: #606060;
+  min-width: 42px;
   text-align: center;
+  font-size: 11px;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
