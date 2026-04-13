@@ -523,7 +523,8 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 .cc-compose-shell {
-  width: min(100%, 100%);
+  width: 100%;
+  max-width: 680px;
   display: flex;
   flex-direction: column;
   border: none;
@@ -531,7 +532,7 @@
   background: transparent;
   box-shadow: none;
   transition: box-shadow 280ms ease;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .cc-compose-shell:focus-within {
@@ -541,6 +542,7 @@
 /* ─── Compose Box — unified textarea container ───────────────────────── */
 
 .cc-compose-box {
+  position: relative;
   background: #0f0f0f;
   border: 1px solid #222;
   border-radius: 7px;
@@ -579,16 +581,16 @@
 .cc-model-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
   background: #181818;
-  border: 1px solid #252525;
-  border-radius: 5px;
-  padding: 3px 8px;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 5px 12px;
   color: #888;
   font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
   text-transform: uppercase;
   cursor: pointer;
   transition: border-color 140ms, background 140ms, color 140ms;
@@ -596,9 +598,9 @@
 }
 
 .cc-model-chip:hover {
-  border-color: #333;
+  border-color: #363636;
   background: #1e1e1e;
-  color: #aaa;
+  color: #b0b0b0;
 }
 
 .cc-model-chip:active {
@@ -611,8 +613,8 @@
 }
 
 .cc-model-chip-dot {
-  width: 5px;
-  height: 5px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #3a3a3a;
   flex-shrink: 0;
@@ -633,44 +635,47 @@
 }
 
 .cc-model-chip-chevron {
-  width: 8px;
-  height: 8px;
-  color: #444;
+  width: 9px;
+  height: 9px;
+  color: #505050;
   flex-shrink: 0;
 }
 
-/* ─── History Button — icon only ────────────────────────────────────── */
+/* ─── History Button — inside box, top-right ────────────────────────── */
 
 .cc-history-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   background: none;
   border: none;
-  border-radius: 5px;
-  color: #555;
+  border-radius: 4px;
+  color: #3a3a3a;
   cursor: pointer;
   transition: color 140ms, background 140ms;
   -webkit-app-region: no-drag;
-  flex-shrink: 0;
   padding: 0;
+  z-index: 1;
 }
 
 .cc-history-btn:hover {
-  color: #999;
+  color: #777;
   background: rgba(255, 255, 255, 0.04);
 }
 
 .cc-history-btn:active {
-  color: #ccc;
-  transform: scale(0.94);
+  color: #aaa;
+  transform: scale(0.92);
 }
 
 .cc-history-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
 }
 
 /* ─── Attachment Preview Sidebar ─────────────────────────────────────── */
@@ -832,7 +837,7 @@
   resize: none;
   background: transparent;
   border: none;
-  padding: 12px 14px;
+  padding: 12px 44px 12px 14px;
   color: #e8e8e8;
   font-family: var(--font-mono);
   font-size: 15px;

@@ -49,7 +49,7 @@
 
           <div class="cc-compose-shell">
 
-            <!-- Top bar: model chip + history icon -->
+            <!-- Top bar: model chip only -->
             <div class="cc-compose-topbar">
               <button class="cc-model-chip" id="modelChip" type="button" aria-haspopup="true" aria-label="Select model">
                 <span class="cc-model-chip-dot" aria-hidden="true"></span>
@@ -58,15 +58,15 @@
                   <path d="M2 3.5l3 3 3-3"/>
                 </svg>
               </button>
+            </div>
+
+            <!-- Unified input box: textarea + history icon (top-right) + inner bottom bar -->
+            <div class="cc-compose-box">
               <button class="cc-history-btn" id="chatHistoryBtn" type="button" title="Chat history" aria-label="Chat history">
                 <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
                   <path d="M2 4h12M2 8h8M2 12h10"/>
                 </svg>
               </button>
-            </div>
-
-            <!-- Unified input box: textarea + inner bottom bar -->
-            <div class="cc-compose-box">
               <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
               <div class="cc-compose-innerbar">
                 <div class="cc-attach-group">
