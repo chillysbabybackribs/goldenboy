@@ -49,64 +49,52 @@
 
           <div class="cc-compose-shell">
 
-            <!-- Top bar: model selector + token gauge + history -->
+            <!-- Top bar: model chip + history icon -->
             <div class="cc-compose-topbar">
-              <div class="cc-model-toggle" id="modelToggleGroup" role="group" aria-label="Primary model selection">
-                <button class="cc-model-toggle-btn" id="modelToggleGpt54Btn" type="button" data-owner="gpt-5.4" aria-pressed="false">GPT-5.4</button>
-                <button class="cc-model-toggle-btn" id="modelToggleHaikuBtn" type="button" data-owner="haiku" aria-pressed="false">HAIKU</button>
-              </div>
-              <div class="cc-token-gauge" id="tokenGauge">
-                <svg class="cc-token-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                  <path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM8 3v5l3.5 2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              <button class="cc-model-chip" id="modelChip" type="button" aria-haspopup="true" aria-label="Select model">
+                <span class="cc-model-chip-dot" aria-hidden="true"></span>
+                <span class="cc-model-chip-label" id="modelChipLabel">AUTO</span>
+                <svg class="cc-model-chip-chevron" viewBox="0 0 10 10" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                  <path d="M2 3.5l3 3 3-3"/>
                 </svg>
-                <span class="cc-token-in" id="tokenInLabel">0 in</span>
-                <span class="cc-token-sep">/</span>
-                <span class="cc-token-out" id="tokenOutLabel">0 out</span>
-                <button class="cc-token-reset" id="tokenResetBtn" type="button" title="Reset token counter" aria-label="Reset token counter">
-                  <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-                    <path d="M1.5 6.5a4.5 4.5 0 018.24-2.5M10.5 5.5a4.5 4.5 0 01-8.24 2.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-                    <path d="M9.5 1.5v2.5h-2.5M2.5 10.5v-2.5h2.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
-              </div>
+              </button>
               <button class="cc-history-btn" id="chatHistoryBtn" type="button" title="Chat history" aria-label="Chat history">
-                <svg class="cc-history-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                  <path d="M2 4h12M2 8h8M2 12h10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+                  <path d="M2 4h12M2 8h8M2 12h10"/>
                 </svg>
-                HISTORY
               </button>
             </div>
 
-            <!-- Textarea -->
-            <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
-
-            <!-- Bottom bar: attach buttons + stop + send -->
-            <div class="cc-compose-bottombar">
-              <div class="cc-attach-group">
-                <button class="cc-attach-btn" id="attachDocBtn" type="button" title="Attach document" aria-label="Attach document">
-                  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                    <path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <span>Doc</span>
-                </button>
-                <button class="cc-attach-btn" id="attachImgBtn" type="button" title="Attach image" aria-label="Attach image">
-                  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                    <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.1"/>
-                    <circle cx="5.5" cy="6" r="1.25" fill="none" stroke="currentColor" stroke-width="1"/>
-                    <path d="M1.5 11l3.5-3.5L8.5 11l2.5-2.5 3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <span>Image</span>
-                </button>
-              </div>
-              <div class="cc-compose-actions">
-                <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
-                <button class="cc-send-btn" id="chatSubmitBtn" type="button" title="Send message" aria-label="Send message">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="M12 6v12"></path>
-                    <path d="M7 11l5-5 5 5"></path>
-                  </svg>
-                </button>
+            <!-- Unified input box: textarea + inner bottom bar -->
+            <div class="cc-compose-box">
+              <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
+              <div class="cc-compose-innerbar">
+                <div class="cc-attach-group">
+                  <button class="cc-attach-btn" id="attachDocBtn" type="button" title="Attach document" aria-label="Attach document">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                      <path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                      <path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Doc</span>
+                  </button>
+                  <button class="cc-attach-btn" id="attachImgBtn" type="button" title="Attach image" aria-label="Attach image">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                      <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.1"/>
+                      <circle cx="5.5" cy="6" r="1.25" fill="none" stroke="currentColor" stroke-width="1"/>
+                      <path d="M1.5 11l3.5-3.5L8.5 11l2.5-2.5 3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Image</span>
+                  </button>
+                </div>
+                <div class="cc-compose-actions">
+                  <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
+                  <button class="cc-send-btn" id="chatSubmitBtn" type="button" title="Send message" aria-label="Send message">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 6v12"></path>
+                      <path d="M7 11l5-5 5 5"></path>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -156,6 +144,7 @@
       <span id="modelLabel">idle</span>
       <span id="sessionLabel">—</span>
       <span id="taskCount">tasks: 0</span>
+      <span id="tokenStatusLabel">0 in / 0 out</span>
     </div>
   </div>
   <script type="module" src="command.js"></script>
