@@ -1,6 +1,7 @@
 import * as path from 'path';
 
-const DEFAULT_WORKSPACE_ROOT = '/home/dp/Desktop/v2workspace';
+// Default to the repository root when launched from a normal source checkout.
+const DEFAULT_WORKSPACE_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 export const APP_WORKSPACE_ROOT = path.resolve(
   process.env.V2_WORKSPACE_ROOT && process.env.V2_WORKSPACE_ROOT.trim()

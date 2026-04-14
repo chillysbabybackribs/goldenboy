@@ -1,7 +1,7 @@
 {
   "name": "v2-workspace",
   "version": "1.0.0",
-  "description": "V2 Workspace browser build",
+  "description": "Desktop AI workspace with chat, browser, and terminal surfaces",
   "main": "dist/main/main/main.js",
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",

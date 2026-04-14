@@ -1,22 +1,35 @@
 # V2 Workspace
 
-V2 Workspace is a desktop Electron workbench for running agent tasks against three local surfaces at once:
+V2 Workspace is an Electron desktop app for running AI tasks against three live surfaces at once:
 
-- a chat-driven command window
+- a chat-driven command center
 - an embedded multi-tab browser
-- a live terminal backed by `node-pty`
+- a real terminal backed by `node-pty`
 
-The current codebase uses two model backends:
+It is designed for hands-on local workflows where the model can reason in chat, inspect the browser, and use the terminal during the same task.
 
-- `gpt-5.4` via the local `codex` CLI
-- `haiku` via the Anthropic API
+The current codebase supports:
 
-This is not a React app. The renderers are plain HTML/CSS plus TypeScript compiled with `tsc`.
+- Codex via the local `codex` CLI
+- Haiku via the Anthropic API
+
+The UI stack is plain HTML/CSS plus TypeScript compiled with `tsc`. This is not a React app.
+
+## Quick Start
+
+```bash
+git clone https://github.com/chillysbabybackribs/goldenboy.git
+cd goldenboy
+npm install
+npm start
+```
+
+If you want the Haiku provider, copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`.
 
 ## What The App Does
 
 - Opens two windows: `Command Center` and `Execution`
-- Lets you chat with an agent, attach images, and keep task history
+- Lets you chat with an agent, attach files, and keep task history
 - Gives the agent host-managed browser, filesystem, terminal, runtime, and sub-agent tools
 - Persists browser session data, bookmarks, settings, tasks, token counters, and chat memory across launches
 - Restores browser state and terminal context on the next run
@@ -49,15 +62,15 @@ Renderer windows
 
 - Node.js 18+ and npm
 - `codex` available on your `PATH`
-- a working `codex` authentication setup for `gpt-5.4`
+- a working `codex` authentication setup
 - optional: `ANTHROPIC_API_KEY` if you want the Haiku provider
 
 ## Environment
 
-The app works without extra environment variables, but these are the important ones:
+The app works without extra environment variables for the default Codex flow, but these are the important ones:
 
 ```bash
-# Recommended if your checkout is not /home/dp/Desktop/v2workspace
+# Optional: override the detected repository root
 export V2_WORKSPACE_ROOT=/absolute/path/to/your/repo
 
 # Optional: enables the Haiku provider
@@ -70,8 +83,6 @@ export ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 export V2_DISABLE_HARDWARE_ACCELERATION=1
 ```
 
-Important: the current codebase defaults `V2_WORKSPACE_ROOT` to `/home/dp/Desktop/v2workspace`. If you clone the repo anywhere else, set `V2_WORKSPACE_ROOT` before launching.
-
 The Haiku provider also reads `.env` in the project root, so putting `ANTHROPIC_API_KEY=...` there works too.
 Use [.env.example](./.env.example) as the template for a local `.env` file.
 
@@ -83,6 +94,8 @@ cd goldenboy
 npm install
 cp .env.example .env  # optional: only if you want local provider env vars
 ```
+
+Before launching, make sure `codex --version` works in your shell if you plan to use Codex.
 
 ## Run
 
@@ -130,7 +143,7 @@ The execution window initializes the embedded browser and starts or reconnects t
 
 In the `Command Center`, the top compose bar has provider buttons:
 
-- `GPT-5.4`
+- `Codex`
 - `HAIKU`
 
 Behavior:
@@ -141,9 +154,9 @@ Behavior:
 Default routing is prompt-based:
 
 - research-style prompts prefer `haiku` when it is available
-- implementation, debug, review, and orchestration prompts prefer `gpt-5.4`
+- implementation, debug, review, and orchestration prompts prefer Codex
 
-If `codex` is unavailable, `gpt-5.4` will not be selectable. If `ANTHROPIC_API_KEY` is missing, Haiku will not be available.
+If `codex` is unavailable, Codex will not be selectable. If `ANTHROPIC_API_KEY` is missing, Haiku will not be available.
 
 ### 3. Start a task
 
@@ -165,11 +178,6 @@ The command window supports:
 - document selection from the `Doc` button
 - image selection from the `Image` button
 - direct image paste into the chat input
-
-Current behavior:
-
-- image attachments are sent to the model
-- documents are shown in the UI, but the model invocation path is currently image-focused
 
 ### 5. Switch between tasks
 
@@ -277,7 +285,7 @@ On restart:
 
 ## Accuracy Notes About The Current Codebase
 
-- `gpt-5.4` is not a direct SDK integration here. It is run through `codex exec`.
+- Codex is not a direct SDK integration here. It is run through `codex exec`.
 - Haiku is the only provider using the Anthropic SDK directly.
 - The renderer stack is vanilla TypeScript/HTML/CSS, not React.
 - The browser session uses Electron persistent partition `persist:workspace-browser`.
@@ -291,7 +299,7 @@ On restart:
 
 ## Troubleshooting
 
-- If `GPT-5.4` is unavailable, check that `codex --version` works and that your Codex CLI is authenticated.
+- If Codex is unavailable, check that `codex --version` works and that your Codex CLI is authenticated.
 - If Haiku is unavailable, set `ANTHROPIC_API_KEY`.
 - If the app opens in the wrong workspace, set `V2_WORKSPACE_ROOT`.
 - If Electron rendering is unstable or black, try `V2_DISABLE_HARDWARE_ACCELERATION=1`.
