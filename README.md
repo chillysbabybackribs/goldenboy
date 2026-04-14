@@ -73,6 +73,7 @@ export V2_DISABLE_HARDWARE_ACCELERATION=1
 Important: the current codebase defaults `V2_WORKSPACE_ROOT` to `/home/dp/Desktop/v2workspace`. If you clone the repo anywhere else, set `V2_WORKSPACE_ROOT` before launching.
 
 The Haiku provider also reads `.env` in the project root, so putting `ANTHROPIC_API_KEY=...` there works too.
+Use [.env.example](./.env.example) as the template for a local `.env` file.
 
 ## Install
 
@@ -80,6 +81,7 @@ The Haiku provider also reads `.env` in the project root, so putting `ANTHROPIC_
 git clone https://github.com/chillysbabybackribs/goldenboy.git
 cd goldenboy
 npm install
+cp .env.example .env  # optional: only if you want local provider env vars
 ```
 
 ## Run
@@ -283,7 +285,7 @@ On restart:
 
 ## Benchmarks And Tests
 
-- Browser capability notes live in [BROWSER_BENCHMARKS.md](./BROWSER_BENCHMARKS.md)
+- Browser capability notes live in [docs/archive/root/BROWSER_BENCHMARKS.md](./docs/archive/root/BROWSER_BENCHMARKS.md)
 - Tool-pack benchmarking is exposed through `npm run benchmark:tools`
 - Unit and integration coverage is in `vitest`
 
