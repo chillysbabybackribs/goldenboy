@@ -169,6 +169,8 @@ describe('CodexProvider', () => {
         '--json',
         '--model',
         PRIMARY_PROVIDER_ID,
+        '-c',
+        'web_search="disabled"',
         '--dangerously-bypass-approvals-and-sandbox',
         '--output-schema',
       ]),
@@ -240,6 +242,30 @@ describe('CodexProvider', () => {
       },
     });
     expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it('disables native web_search in exec mode', async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const provider = new CodexProvider();
+    const resultPromise = provider.invoke(buildRequest());
+    await completeTurn(child, JSON.stringify({
+      kind: 'final',
+      tool_calls: [],
+      message: '4',
+    }));
+    await resultPromise;
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'codex',
+      expect.arrayContaining([
+        'exec',
+        '-c',
+        'web_search="disabled"',
+      ]),
+      expect.any(Object),
+    );
   });
 
   it('expands the active tool scope after requesting a tool pack', async () => {

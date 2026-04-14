@@ -121,6 +121,40 @@ describe('providerToolRuntime', () => {
     ]);
   });
 
+  it('passes a progress callback into tool execution context', async () => {
+    const statusUpdates: string[] = [];
+    executeMock.mockImplementation(async (_toolName, _toolInput, context) => {
+      context.onProgress?.('tool-progress:Browser: research "x" -> opening result 1');
+      return {
+        summary: 'done',
+        data: {},
+      };
+    });
+
+    await executeProviderToolCallWithEvents({
+      providerId: PRIMARY_PROVIDER_ID,
+      request: {
+        runId: 'run-progress',
+        agentId: PRIMARY_PROVIDER_ID,
+        mode: 'unrestricted-dev',
+        taskId: 'task-progress',
+        systemPrompt: 'system',
+        task: 'task',
+        tools: [],
+        onStatus: (status) => statusUpdates.push(status),
+      },
+      itemId: 'tool-progress-1',
+      toolName: 'browser.research_search',
+      toolInput: { query: 'x' },
+    });
+
+    expect(statusUpdates).toEqual([
+      'tool-start:Browser: research "x"',
+      'tool-progress:Browser: research "x" -> opening result 1',
+      'tool-done:Browser: research "x" -> done',
+    ]);
+  });
+
   it('records tool errors for non-chat tools', async () => {
     executeMock.mockRejectedValue(new Error('tool exploded'));
 

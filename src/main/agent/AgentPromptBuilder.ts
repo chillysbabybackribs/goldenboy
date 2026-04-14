@@ -213,6 +213,17 @@ function buildCurrentDateTimeLine(): string {
 
 export function buildResponseStyleAddendum(task: string): string {
   const normalized = task.toLowerCase();
+  if (/\b(search(?: the web| online)?|look up|lookup|find online|research|latest|current|browser|tab|tabs|page|pages|url|navigate|visit|click|type|form|login|upload|download|automation)\b/.test(normalized)) {
+    return [
+      'For browser, research, and web tasks:',
+      '1. Do not narrate your plan or restate obvious tool actions.',
+      '2. Keep interim text to zero or one short sentence before tool calls; prefer no interim text when the next step is obvious from the tool call.',
+      '3. As soon as observed browser evidence or verified tool results satisfy the task, stop calling tools and produce the final answer immediately.',
+      '4. Do not add an extra recap after the task is complete.',
+      '5. Keep the final answer concise and focused on the result, not the tool trace.',
+    ].join('\n');
+  }
+
   if (/\b(review|audit|regression|pull request|diff|requested changes|code review)\b/.test(normalized)) {
     return [
       'For review and audit tasks, produce the final answer in this order:',

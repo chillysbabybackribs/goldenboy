@@ -16,7 +16,7 @@ type ProviderToolCallItem = Extract<CodexItem, { type: 'mcp_tool_call' }>;
 
 type ExecuteProviderToolCallInput = {
   providerId: AnyProviderId;
-  request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId'>;
+  request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus'>;
   toolName: AgentToolName;
   toolInput: unknown;
 };
@@ -128,6 +128,7 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'subagent.list': return 'Subagent: list';
     case 'runtime.request_tool_pack': return `Runtime: load tool pack ${args.pack || ''}`.trim();
     case 'runtime.list_tool_packs': return 'Runtime: list tool packs';
+    case 'runtime.haiku_browser_session': return `Runtime: Haiku browser session ${args.prompt || 'prompt'}`;
     default: {
       const short = toolName.replace(/^(browser|filesystem|terminal|subagent|chat)\./, '');
       return short.replace(/_/g, ' ');
@@ -184,6 +185,7 @@ export async function executeProviderToolCall(
       agentId: input.request.agentId,
       mode: input.request.mode,
       taskId: input.request.taskId,
+      onProgress: input.request.onStatus,
     });
 
     recordToolMemory(input, { result });

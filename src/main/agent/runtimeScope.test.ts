@@ -18,9 +18,10 @@ describe('runtime scope', () => {
     expect(looksLikeOrchestrationTask('Split this work across multiple agents and run in parallel')).toBe(true);
     expect(looksLikeDelegationTask('Split this work across multiple agents and run in parallel')).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(7);
+    expect(scope.allowedTools).toHaveLength(8);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
     expect(scope.allowedTools).toContain('runtime.list_tool_packs');
+    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
     expect(scope.canSpawnSubagents).toBe(true);
     expect(scope.skillNames).toEqual([]);
   });
@@ -31,9 +32,12 @@ describe('runtime scope', () => {
     expect(looksLikeResearchTask(prompt)).toBe(true);
     expect(looksLikeBrowserSearchTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(7);
+    expect(scope.allowedTools).toHaveLength(8);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
     expect(scope.allowedTools).toContain('runtime.list_tool_packs');
+    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
+    expect(scope.allowedTools).toContain('browser.answer_from_cache');
+    expect(scope.allowedTools).toContain('browser.extract_page');
     expect(scope.canSpawnSubagents).toBe(false);
     expect(scope.skillNames).toEqual([]);
     expect(withBrowserSearchDirective(prompt)).toContain('browser.research_search first');
@@ -51,10 +55,11 @@ describe('runtime scope', () => {
     const scope = scopeForPrompt(prompt);
     expect(looksLikeBrowserAutomationTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(8);
+    expect(scope.allowedTools).toHaveLength(9);
     expect(scope.allowedTools).toEqual(expect.arrayContaining([
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
       'browser.get_state',
       'browser.get_tabs',
       'browser.close_tab',
@@ -69,9 +74,10 @@ describe('runtime scope', () => {
     expect(looksLikeImplementationTask(prompt)).toBe(true);
     expect(looksLikeLocalCodeTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(7);
+    expect(scope.allowedTools).toHaveLength(8);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
     expect(scope.allowedTools).toContain('runtime.list_tool_packs');
+    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
     expect(scope.canSpawnSubagents).toBe(false);
     expect(scope.skillNames).toEqual([]);
   });
@@ -88,8 +94,26 @@ describe('runtime scope', () => {
     const reviewScope = scopeForPrompt(reviewPrompt);
     expect(looksLikeReviewTask(reviewPrompt)).toBe(true);
     expect(looksLikeImplementationTask(reviewPrompt)).toBe(false);
+    expect(reviewScope.allowedTools).not.toBe('all');
+    expect(reviewScope.allowedTools).toHaveLength(8);
     expect(reviewScope.canSpawnSubagents).toBe(false);
     expect(reviewScope.skillNames).toEqual([]);
+  });
+
+  it('keeps the broader default preset for general tasks', () => {
+    const scope = scopeForPrompt('Help me think through a product naming idea');
+    expect(scope.allowedTools).not.toBe('all');
+    expect(scope.allowedTools).toHaveLength(9);
+    expect(scope.allowedTools).toEqual(expect.arrayContaining([
+      'runtime.request_tool_pack',
+      'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
+      'filesystem.search',
+      'filesystem.read',
+      'filesystem.patch',
+      'terminal.exec',
+      'chat.thread_summary',
+    ]));
   });
 
   it('treats CI failure investigation as debug work and repo-wide planning as orchestration', () => {
@@ -137,8 +161,9 @@ describe('runtime scope', () => {
     });
 
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(5);
+    expect(scope.allowedTools).toHaveLength(6);
     expect(scope.allowedTools).toContain('runtime.request_tool_pack');
     expect(scope.allowedTools).toContain('runtime.list_tool_packs');
+    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
   });
 });

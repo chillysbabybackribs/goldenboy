@@ -58,6 +58,12 @@ export class TaskMemoryStore {
     return this.memoryByTask.get(taskId) || createEmptyTaskMemoryRecord(taskId);
   }
 
+  clearTask(taskId: string): void {
+    if (!this.memoryByTask.has(taskId)) return;
+    this.memoryByTask.delete(taskId);
+    saveMemory(Array.from(this.memoryByTask.values()));
+  }
+
   hasEntries(taskId: string): boolean {
     const record = this.memoryByTask.get(taskId);
     return !!record && record.entries.length > 0;

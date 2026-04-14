@@ -28,7 +28,7 @@ import type { AppServerProcess } from './AppServerProcess';
 const THREAD_FILE = 'codex-threads.json';
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const TURN_TIMEOUT_MS = 3 * 60 * 1000;
-const CONTEXT_PATH = path.join(os.tmpdir(), 'v2-tool-context.json');
+const DEFAULT_CONTEXT_PATH = path.join(os.tmpdir(), 'v2-tool-context.json');
 
 // Use the Node 24 built-in WebSocket global via type cast.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -104,6 +104,7 @@ type AppServerProviderOptions = {
   providerId?: ProviderId;
   modelId?: string;
   process: AppServerProcess;
+  contextPath?: string;
 };
 
 // ─── Provider Implementation ─────────────────────────────────────────────
@@ -118,10 +119,12 @@ export class AppServerProvider implements AgentProvider {
   private ws: WebSocket | null = null;
   private threadRegistry: ThreadRegistry = loadThreadRegistry();
   private nextId = 1;
+  private readonly contextPath: string;
 
   constructor(private readonly options: AppServerProviderOptions) {
     this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;
     this.modelId = options.modelId ?? this.providerId;
+    this.contextPath = options.contextPath ?? DEFAULT_CONTEXT_PATH;
   }
 
   abort(): void {
@@ -208,12 +211,12 @@ export class AppServerProvider implements AgentProvider {
     const ws = this.ws;
     if (!ws) throw new Error('AppServerProvider: not connected');
 
-    // Write context file for the MCP shim to discover tool metadata
     this.writeContextFile(request);
 
     // Acquire or resume a thread
     const taskId = request.taskId ?? request.runId;
     const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);
+    if (this.aborted) throw new Error('Task cancelled by user.');
 
     let accumulatedMessage = '';
     let nextTurnInput: string | null = null;
@@ -237,6 +240,7 @@ export class AppServerProvider implements AgentProvider {
         currentTools,
         toolCatalog,
       });
+      if (this.aborted) throw new Error('Task cancelled by user.');
 
       inputTokens += turnResult.inputTokens;
       outputTokens += turnResult.outputTokens;
@@ -282,7 +286,6 @@ export class AppServerProvider implements AgentProvider {
           request,
           itemId: `${this.itemPrefix('final')}-${Date.now()}`,
           text: turnResult.message,
-          emitToken: false,
         });
         codexItems.push(finalItem);
 
@@ -305,7 +308,6 @@ export class AppServerProvider implements AgentProvider {
       request,
       itemId: `${this.itemPrefix('final')}-${Date.now()}`,
       text: accumulatedMessage || 'Max tool turns reached without a final answer.',
-      emitToken: false,
     });
     codexItems.push(finalItem);
 
@@ -486,10 +488,14 @@ export class AppServerProvider implements AgentProvider {
       let expandedTools: AgentProviderRequest['tools'] | undefined;
       const turnCodexItems: CodexItem[] = [];
 
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('AppServerProvider: turn timed out'));
-      }, TURN_TIMEOUT_MS);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const resetTimer = (): void => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('AppServerProvider: turn timed out'));
+        }, TURN_TIMEOUT_MS);
+      };
 
       // Wire abort — JSON-RPC notification (no id)
       this.abortCurrentTurn = (): void => {
@@ -502,6 +508,7 @@ export class AppServerProvider implements AgentProvider {
 
       const handler = (event: MessageEvent): void => {
         try {
+          resetTimer();
           const raw = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
           ) as WsMsg;
@@ -517,7 +524,6 @@ export class AppServerProvider implements AgentProvider {
             case 'item/agentMessage/delta': {
               const delta = typeof params.delta === 'string' ? params.delta : '';
               message += delta;
-              request.onToken?.(delta);
               break;
             }
 
@@ -662,13 +668,14 @@ export class AppServerProvider implements AgentProvider {
       };
 
       const cleanup = (): void => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         this.abortCurrentTurn = null;
         ws.removeEventListener('message', handler);
       };
 
       const turnReqId = this.nextId++;
       ws.addEventListener('message', handler);
+      resetTimer();
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
         id: turnReqId,
@@ -692,7 +699,7 @@ export class AppServerProvider implements AgentProvider {
     try {
       const toolNames = (currentTools ?? request.tools).map((t) => t.name);
       fs.writeFileSync(
-        CONTEXT_PATH,
+        this.contextPath,
         JSON.stringify({
           runId: request.runId,
           agentId: request.agentId,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentProvider, AgentProviderRequest, AgentProviderResult } from '../AgentTypes';
 import { agentRunStore } from '../AgentRunStore';
+import { agentToolExecutor } from '../AgentToolExecutor';
 import { SubAgentManager } from './SubAgentManager';
 import type { SubAgentSpawnInput } from './SubAgentTypes';
 import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../../shared/types/model';
@@ -16,6 +17,22 @@ function createStubProvider(output = 'sub-agent completed'): AgentProvider {
 
 describe('SubAgentManager', () => {
   it('selects the child provider using the spawn input', async () => {
+    agentToolExecutor.register({
+      name: 'browser.research_search',
+      description: 'Search the web',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string' },
+        },
+      },
+      execute: async () => ({
+        summary: 'searched',
+        data: {},
+      }),
+    });
+
     const providerFactory = vi.fn((input: SubAgentSpawnInput) => {
       return createStubProvider(`handled:${input.providerId ?? 'auto'}:${input.task}`);
     });

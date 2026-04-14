@@ -10,6 +10,7 @@ import { generateId } from '../../shared/utils/ids';
 import { LogSource } from '../../shared/types/appState';
 import { isProviderId } from '../../shared/types/model';
 import type { AgentProviderRequest } from './AgentTypes';
+import { buildTaskProfile } from './taskProfile';
 
 export class AgentRuntime {
   constructor(private readonly provider: AgentProvider) {}
@@ -32,26 +33,30 @@ export class AgentRuntime {
     agentRunStore.updateRun(run.id, { status: 'running' });
 
     try {
-      const toolCatalog = filterToolCatalogForConfig(agentToolExecutor.list(), config);
-      let tools = filterToolsForConfig(toolCatalog, config);
-      const preflightExpansions = resolvePreflightToolPackExpansions(
-        config.task,
-        tools.map(tool => ({ name: tool.name })),
-        toolCatalog.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
-      );
+      const fullToolCatalog = filterToolCatalogForConfig(agentToolExecutor.list(), config);
+      let tools = filterToolsForConfig(fullToolCatalog, config);
+      const preflightExpansions = config.restrictToolCatalogToAllowedTools
+        ? []
+        : resolvePreflightToolPackExpansions(
+          config.task,
+          tools.map(tool => ({ name: tool.name })),
+          fullToolCatalog.map(tool => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          })),
+        );
       for (const expansion of preflightExpansions) {
-        const toolCatalogByName = new Map(toolCatalog.map(tool => [tool.name, tool]));
+        const toolCatalogByName = new Map(fullToolCatalog.map(tool => [tool.name, tool]));
         const currentToolNames = new Set(tools.map(tool => tool.name));
         const added = expansion.tools
           .map((name) => toolCatalogByName.get(name))
-          .filter((tool): tool is (typeof toolCatalog)[number] => Boolean(tool))
+          .filter((tool): tool is (typeof fullToolCatalog)[number] => Boolean(tool))
           .filter((tool) => !currentToolNames.has(tool.name));
         tools = [...tools, ...added];
       }
+      const toolCatalog = config.restrictToolCatalogToAllowedTools ? tools : fullToolCatalog;
+      assertInitialBrowserScope(config.task, tools.map(tool => tool.name));
       
       // OPTIMIZATION: Lazy-load skills.
       // If config.skillNames is provided, load them for the system prompt.
@@ -122,6 +127,21 @@ export class AgentRuntime {
       throw err;
     }
   }
+}
+
+export function assertInitialBrowserScope(
+  task: string,
+  toolNames: AgentProviderRequest['tools'][number]['name'][],
+): void {
+  const profile = buildTaskProfile(task);
+  if (profile.kind !== 'research' && profile.kind !== 'browser-automation') return;
+
+  const hasBrowserTool = toolNames.some((name) => name.startsWith('browser.'));
+  if (hasBrowserTool) return;
+
+  throw new Error(
+    `Browser task blocked: initial MCP tool scope for ${profile.kind} did not expose any browser.* tools.`,
+  );
 }
 
 function logPromptBudget(

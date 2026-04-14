@@ -114,3 +114,72 @@ describe('web_search config enforcement', () => {
     expect(threadResume.params.instructions).toBeUndefined();
   });
 });
+
+describe('turn text emission', () => {
+  it('does not stream interim assistant text for tool-calling turns', async () => {
+    const tokens: string[] = [];
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'turn/start') {
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            for (const handler of handlers) {
+              handler({ data: JSON.stringify({ method: 'item/agentMessage/delta', params: { delta: 'Checking the page before I click.' } }) });
+              handler({ data: JSON.stringify({
+                method: 'item/started',
+                params: {
+                  item: {
+                    id: 'tool-1',
+                    type: 'mcpToolCall',
+                    server: 'v2-tools',
+                    tool: 'browser__click',
+                    arguments: { selector: '#submit' },
+                  },
+                },
+              }) });
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    const result = await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: 'Click submit',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: 'Click submit',
+        tools: [],
+        onToken: (text: string) => tokens.push(text),
+      },
+      currentTools: [],
+      toolCatalog: [],
+    });
+
+    expect(result.kind).toBe('tool_calls');
+    expect(result.message).toContain('Checking the page');
+    expect(tokens).toEqual([]);
+  });
+});

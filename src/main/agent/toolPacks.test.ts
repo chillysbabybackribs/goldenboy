@@ -13,17 +13,19 @@ describe('tool packs', () => {
 
     expect(research).not.toBe('all');
     expect(orchestration).not.toBe('all');
-    expect(research).toHaveLength(5);
-    expect(orchestration).toHaveLength(5);
+    expect(research).toHaveLength(6);
+    expect(orchestration).toHaveLength(6);
     expect(research).toEqual(expect.arrayContaining([
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
       'browser.research_search',
       'browser.search_page_cache',
     ]));
     expect(orchestration).toEqual(expect.arrayContaining([
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
       'subagent.spawn',
       'subagent.wait',
     ]));
@@ -33,16 +35,20 @@ describe('tool packs', () => {
     const implementation = resolveAllowedToolsForTaskKind('implementation', 'mode-6');
     const review = resolveAllowedToolsForTaskKind('review', 'mode-6');
     const browserAutomation = resolveAllowedToolsForTaskKind('browser-automation', 'mode-6');
+    const general = resolveAllowedToolsForTaskKind('general', 'mode-6');
 
     expect(implementation).not.toBe('all');
     expect(review).not.toBe('all');
     expect(browserAutomation).not.toBe('all');
-    expect(implementation).toHaveLength(7);
-    expect(review).toHaveLength(7);
-    expect(browserAutomation).toHaveLength(8);
+    expect(general).not.toBe('all');
+    expect(implementation).toHaveLength(8);
+    expect(review).toHaveLength(8);
+    expect(browserAutomation).toHaveLength(9);
+    expect(general).toHaveLength(9);
     expect(implementation).toEqual(expect.arrayContaining([
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
       'filesystem.patch',
       'filesystem.write',
       'terminal.exec',
@@ -56,11 +62,19 @@ describe('tool packs', () => {
     expect(browserAutomation).toEqual(expect.arrayContaining([
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
       'browser.get_tabs',
       'browser.close_tab',
       'browser.navigate',
       'browser.click',
       'browser.type',
+    ]));
+    expect(general).toEqual(expect.arrayContaining([
+      'runtime.request_tool_pack',
+      'runtime.list_tool_packs',
+      'runtime.haiku_browser_session',
+      'chat.thread_summary',
+      'chat.read_last',
     ]));
   });
 
@@ -230,6 +244,44 @@ describe('tool packs', () => {
     ]);
   });
 
+  it('preflight-expands file-cache for repo analysis prompts even without explicit cache wording', () => {
+    const expansions = resolvePreflightToolPackExpansions(
+      'Inspect the codebase and review the Codex integration path for token-cost optimizations.',
+      [
+        { name: 'runtime.request_tool_pack' },
+        { name: 'runtime.list_tool_packs' },
+        { name: 'filesystem.search' },
+        { name: 'filesystem.read' },
+        { name: 'filesystem.patch' },
+        { name: 'terminal.exec' },
+      ],
+      [
+        { name: 'runtime.request_tool_pack', description: '', inputSchema: {} },
+        { name: 'runtime.list_tool_packs', description: '', inputSchema: {} },
+        { name: 'filesystem.search', description: '', inputSchema: {} },
+        { name: 'filesystem.read', description: '', inputSchema: {} },
+        { name: 'filesystem.patch', description: '', inputSchema: {} },
+        { name: 'terminal.exec', description: '', inputSchema: {} },
+        { name: 'filesystem.index_workspace', description: '', inputSchema: {} },
+        { name: 'filesystem.answer_from_cache', description: '', inputSchema: {} },
+        { name: 'filesystem.search_file_cache', description: '', inputSchema: {} },
+        { name: 'filesystem.read_file_chunk', description: '', inputSchema: {} },
+      ],
+    );
+
+    expect(expansions).toEqual([
+      expect.objectContaining({
+        pack: 'file-cache',
+        tools: expect.arrayContaining([
+          'filesystem.index_workspace',
+          'filesystem.answer_from_cache',
+          'filesystem.search_file_cache',
+          'filesystem.read_file_chunk',
+        ]),
+      }),
+    ]);
+  });
+
   it('preflight-expands terminal-heavy when the prompt asks to stop or interact with a running process', () => {
     const expansions = resolvePreflightToolPackExpansions(
       'Stop the dev server with Ctrl+C and answer any prompt it shows.',
@@ -260,6 +312,32 @@ describe('tool packs', () => {
       expect.objectContaining({
         pack: 'terminal-heavy',
         tools: expect.arrayContaining(['terminal.spawn', 'terminal.write', 'terminal.kill']),
+      }),
+    ]);
+  });
+
+  it('preflight-expands chat recall when only thread_summary is present', () => {
+    const expansions = resolvePreflightToolPackExpansions(
+      'Check the previous conversation and use the last message as context.',
+      [
+        { name: 'runtime.request_tool_pack' },
+        { name: 'runtime.list_tool_packs' },
+        { name: 'chat.thread_summary' },
+      ],
+      [
+        { name: 'runtime.request_tool_pack', description: '', inputSchema: {} },
+        { name: 'runtime.list_tool_packs', description: '', inputSchema: {} },
+        { name: 'chat.thread_summary', description: '', inputSchema: {} },
+        { name: 'chat.read_last', description: '', inputSchema: {} },
+        { name: 'chat.search', description: '', inputSchema: {} },
+        { name: 'chat.read_window', description: '', inputSchema: {} },
+      ],
+    );
+
+    expect(expansions).toEqual([
+      expect.objectContaining({
+        pack: 'chat-recall',
+        tools: expect.arrayContaining(['chat.read_last', 'chat.search', 'chat.read_window']),
       }),
     ]);
   });

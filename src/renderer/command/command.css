@@ -269,6 +269,14 @@
   line-height: 1.5;
 }
 
+.chat-live-divider {
+  border: none;
+  border-top: 1px solid #1e1e1e;
+  margin: 10px 0 14px;
+  position: relative;
+  top: -18px;
+}
+
 .chat-live-panel {
   height: min(280px, 38vh);
   max-height: min(280px, 38vh);
@@ -289,13 +297,31 @@
 }
 
 .chat-msg-live-has-output .chat-live-panel {
-  height: 0;
-  max-height: 0;
+  opacity: 0.72;
+}
+
+.chat-live-panel.chat-live-panel-retracted {
+  height: auto;
+  max-height: none;
+  overflow: visible;
   padding-top: 0;
-  padding-bottom: 0;
-  margin: 0;
-  overflow: hidden;
-  opacity: 0;
+  opacity: 1;
+}
+
+.chat-live-process-details {
+  margin-top: 0;
+}
+
+.chat-live-process-inner {
+  margin-top: 8px;
+  max-height: min(180px, 24vh);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.chat-live-process-inner::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .chat-live-panel::-webkit-scrollbar {
@@ -312,7 +338,7 @@
 }
 
 .chat-msg-live .chat-msg-text:not(:empty) {
-  margin-top: 6px;
+  margin-top: 12px;
   opacity: 1;
   transform: translateY(0);
 }
@@ -544,17 +570,17 @@
 .chat-tool-active .tool-text-shimmer {
   background: linear-gradient(
     90deg,
-    #888 0%,
-    #888 25%,
-    #ffffff 50%,
-    #888 75%,
-    #888 100%
+    #555 0%,
+    #555 35%,
+    #bbb 50%,
+    #555 65%,
+    #555 100%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: tool-text-shimmer-ltr 2s ease-in-out infinite;
+  animation: tool-text-shimmer-ltr 3s ease-in-out infinite;
 }
 
 @keyframes tool-text-shimmer-ltr {
@@ -574,6 +600,24 @@
 /* Error in tool result */
 .chat-tool-done .tool-text-error {
   color: #b0706e;
+}
+
+/* ─── Cancelling state ───────────────────────────────────────────────── */
+
+/* Dim the whole card once stopping is requested */
+.chat-msg-cancelling {
+  opacity: 0.6;
+  transition: opacity 150ms;
+}
+
+/* "Stopped" note in the stream */
+.chat-cancelling-note {
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--cc-chat-zoom));
+  color: #888;
+  letter-spacing: 0.4px;
+  padding: 2px 0 2px 2px;
+  margin-top: 2px;
 }
 
 /* ─── Codex Items ─────────────────────────────────────────────────────── */
@@ -713,16 +757,60 @@
   border-color: #2e2e2e;
 }
 
+.cc-compose-utility-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+.cc-new-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  justify-content: center;
+  border: none;
+  border-left: 1px solid #232323;
+  background: none;
+  color: #4d4d4d;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 0 6px 0 10px;
+  cursor: pointer;
+  transition: color 140ms;
+  -webkit-app-region: no-drag;
+  white-space: nowrap;
+}
+
+.cc-new-chat-btn:hover {
+  color: #8c8c8c;
+}
+
+.cc-new-chat-btn:active {
+  color: #d0d0d0;
+}
+
 /* ─── Compose Inner Bar — attach + send inside the box ──────────────── */
 
 .cc-compose-innerbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   padding: 5px 8px;
   border-top: 1px solid #181818;
   background: rgba(0, 0, 0, 0.15);
   flex-shrink: 0;
+}
+
+.cc-compose-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  justify-self: start;
 }
 
 /* ─── Model Selector (segmented toggle) ──────────────────────────────── */
@@ -782,36 +870,33 @@
   cursor: not-allowed;
 }
 
-/* ─── History Button — inside box, top-right ────────────────────────── */
+/* ─── History Button — inside compose top rail ──────────────────────── */
 
 .cc-history-btn {
-  position: absolute;
-  top: 8px;
-  right: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  color: #3a3a3a;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #474747;
   cursor: pointer;
-  transition: color 140ms, background 140ms;
+  transition: color 140ms, background 140ms, border-color 140ms, transform 100ms;
   -webkit-app-region: no-drag;
   padding: 0;
-  z-index: 1;
 }
 
 .cc-history-btn:hover {
-  color: #777;
-  background: rgba(255, 255, 255, 0.04);
+  color: #b7b7b7;
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .cc-history-btn:active {
-  color: #aaa;
-  transform: scale(0.92);
+  color: #e0e0e0;
+  transform: scale(0.94);
 }
 
 .cc-history-btn svg {
@@ -978,7 +1063,7 @@
   resize: none;
   background: transparent;
   border: none;
-  padding: 12px 90px 12px 14px;
+  padding: 12px 14px;
   color: #e8e8e8;
   font-family: var(--font-mono);
   font-size: 15px;
@@ -1005,18 +1090,17 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 10px;
-  background: #2a2a2a;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 6px;
-  color: #e0e0e0;
+  padding: 0 6px;
+  background: none;
+  border: none;
+  color: #4d4d4d;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   cursor: pointer;
-  transition: color 140ms, border-color 140ms, background 140ms, transform 100ms;
+  transition: color 140ms;
   -webkit-app-region: no-drag;
 }
 
@@ -1027,20 +1111,18 @@
 }
 
 .cc-attach-btn:hover {
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.14);
-  background: #333333;
+  color: #8c8c8c;
 }
 
 .cc-attach-btn:active {
-  transform: scale(0.96);
-  color: #ffffff;
+  color: #d0d0d0;
 }
 
 .cc-compose-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-self: end;
 }
 
 /* ─── Stop Button ────────────────────────────────────────────────────── */
@@ -1074,6 +1156,12 @@
 
 .cc-stop-btn[hidden] {
   display: none;
+}
+
+.cc-stop-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
 }
 
 
@@ -1206,7 +1294,7 @@
 
 .cc-history-item {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   padding: 10px 20px;
   cursor: pointer;
@@ -1244,6 +1332,42 @@
   color: #555;
 }
 
+.cc-history-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: #454545;
+  cursor: pointer;
+  transition: color 140ms, background 140ms;
+  flex-shrink: 0;
+}
+
+.cc-history-delete:hover:not(:disabled) {
+  color: #c9c9c9;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cc-history-delete:active:not(:disabled) {
+  color: #f0f0f0;
+}
+
+.cc-history-delete:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.cc-history-delete svg {
+  width: 12px;
+  height: 12px;
+}
+
 .cc-history-item-status {
   flex-shrink: 0;
   font-family: var(--font-mono);
@@ -1253,32 +1377,29 @@
   text-transform: uppercase;
 }
 
-/* ─── Logs Button — inside box, top-right (left of history btn) ──────── */
+/* ─── Logs Button — inside compose top rail ──────────────────────────── */
 
 .cc-logs-btn {
-  position: absolute;
-  top: 8px;
-  right: 44px;
-  height: 24px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-height: 24px;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.8px;
   text-transform: uppercase;
-  color: #3a3a3a;
+  color: #4d4d4d;
   background: none;
   border: none;
   padding: 0 6px;
   cursor: pointer;
   transition: color 140ms;
   -webkit-app-region: no-drag;
-  z-index: 1;
 }
 
-.cc-logs-btn:hover { color: #777; }
-.cc-logs-btn:active { color: #aaa; }
+.cc-logs-btn:hover { color: #8c8c8c; }
+.cc-logs-btn:active { color: #d0d0d0; }
 .cc-logs-btn.active { color: #666; }
 
 /* ─── Logs Popup Overlay ─────────────────────────────────────────────── */

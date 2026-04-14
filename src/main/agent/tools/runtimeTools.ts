@@ -1,5 +1,6 @@
 import { AgentToolDefinition } from '../AgentTypes';
 import { buildRuntimeRequestToolDescription, listToolPacks } from '../toolPacks';
+import { createHaikuBrowserSessionToolDefinition } from './haikuBrowserSessionTool';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -82,5 +83,6 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
         };
       },
     },
+    createHaikuBrowserSessionToolDefinition(),
   ];
 }

@@ -16,6 +16,7 @@ import { DiskCache } from '../context/diskCache';
 import { PageExtractor } from '../context/pageExtractor';
 import { agentModelService } from '../agent/AgentModelService';
 import { agentToolExecutor } from '../agent/AgentToolExecutor';
+import { taskMemoryStore } from '../models/taskMemoryStore';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -86,6 +87,17 @@ export function registerIpc(): void {
     };
     eventBus.emit(AppEventType.TASK_CREATED, { task });
     return { id: task.id, title: task.title };
+  });
+
+  safeHandle(IPC_CHANNELS.DELETE_TASK, (_event, taskId: string) => {
+    const state = appStateStore.getState();
+    const task = state.tasks.find((entry) => entry.id === taskId);
+    if (!task) return;
+    if (task.status === 'running') {
+      throw new Error('Cannot delete a running chat');
+    }
+    taskMemoryStore.clearTask(taskId);
+    appStateStore.dispatch({ type: ActionType.DELETE_TASK, taskId });
   });
 
   safeHandle(IPC_CHANNELS.UPDATE_TASK_STATUS, (_event, taskId: string, status: TaskStatus) => {

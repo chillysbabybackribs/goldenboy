@@ -46,9 +46,12 @@ describe('V2ToolBridge', () => {
   let contextPath: string;
 
   beforeEach(async () => {
+    (agentToolExecutor.list as ReturnType<typeof vi.fn>).mockReset();
+    (agentToolExecutor.execute as ReturnType<typeof vi.fn>).mockReset();
     contextPath = path.join(os.tmpdir(), `v2-ctx-test-${Date.now()}.json`);
     fs.writeFileSync(contextPath, JSON.stringify({
       runId: 'run-1', agentId: 'gpt-5.4', taskId: 'task-1', mode: 'unrestricted-dev',
+      toolNames: ['filesystem.list'],
     }));
     bridge = new V2ToolBridge(contextPath);
     await bridge.start();
@@ -67,6 +70,15 @@ describe('V2ToolBridge', () => {
     expect(result.tools[0].name).toBe('filesystem__list');
   });
 
+  it('tools/list filters tools to the runtime scope from context', async () => {
+    (agentToolExecutor.list as ReturnType<typeof vi.fn>).mockReturnValue([
+      { name: 'filesystem.list', description: 'List files', inputSchema: { type: 'object', properties: {} } },
+      { name: 'filesystem.read', description: 'Read files', inputSchema: { type: 'object', properties: {} } },
+    ]);
+    const result = await httpPost(bridge.getPort(), '/tools/list', {}) as { tools: Array<{ name: string }> };
+    expect(result.tools).toEqual([{ name: 'filesystem__list', description: 'List files', inputSchema: { type: 'object', properties: {} } }]);
+  });
+
   it('tools/call translates __ name back and executes', async () => {
     (agentToolExecutor.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
       summary: 'listed', data: { entries: [] },
@@ -79,6 +91,15 @@ describe('V2ToolBridge', () => {
       expect.objectContaining({ runId: 'run-1', taskId: 'task-1' }),
     );
     expect(result.content[0].type).toBe('text');
+  });
+
+  it('tools/call rejects tool names that are outside the runtime scope', async () => {
+    const result = await httpPost(bridge.getPort(), '/tools/call', {
+      name: 'filesystem__read', arguments: { path: '/tmp/demo.txt' }, contextPath,
+    }) as { content: Array<{ type: string; text: string }> };
+
+    expect(agentToolExecutor.execute).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain('Tool execution error: Tool is not available in this runtime scope: filesystem.read');
   });
 
   it('getPort() returns a non-zero port after start()', () => {

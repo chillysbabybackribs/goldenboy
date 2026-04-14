@@ -19,7 +19,7 @@ The `execution` window is the work surface: owned browser tabs and terminal sess
 
 The model plans, decides what evidence is needed, asks for typed tool calls, and explains results. It should treat V2 as the source of truth for observed browser state, filesystem state, terminal output, logs, cancellation, and persisted task memory.
 
-Prefer app-owned caches before broad reads. Browser, file, and chat caches exist to reduce repeated context loading and to keep model input focused.
+Prefer app-owned caches before broad reads when they are in scope. Browser, file, and chat caches reduce repeated context loading and keep model input focused.
 
 ## Current Integration State
 
@@ -85,9 +85,9 @@ When a task requires browser work, inspect browser state first, then act through
 
 When the user says "search", "look up", "find online", "research", or asks for current web information, use the owned browser. Start with `browser.research_search` unless the user only asked to navigate to a search page. It opens result pages sequentially and stops when cached evidence is sufficient. Do not answer from model memory or any provider-native search behavior.
 
-When a task requires browser research or page understanding, search cached page chunks first. Prefer `browser.search_page_cache`, `browser.list_cached_sections`, and `browser.read_cached_chunk` over broad page extraction. Use `browser.extract_page` only when cached retrieval is missing or insufficient.
+When a task requires browser research or page understanding, use page-cache tools first when available. Prefer `browser.search_page_cache`, `browser.list_cached_sections`, and `browser.read_cached_chunk` over broad page extraction. Use `browser.extract_page` when cache tools are unavailable or insufficient.
 
-When a task requires file understanding, index and search cached file chunks first. Prefer `filesystem.index_workspace`, `filesystem.answer_from_cache`, `filesystem.search_file_cache`, and `filesystem.read_file_chunk` over broad file reads. Use `filesystem.read` only when cached retrieval is missing or insufficient, and read before editing.
+When a task requires file understanding, use file-cache tools first when available. Prefer `filesystem.index_workspace`, `filesystem.answer_from_cache`, `filesystem.search_file_cache`, and `filesystem.read_file_chunk` over broad file reads. Use `filesystem.read` when cache tools are unavailable or insufficient, and read before editing.
 
 When a task requires terminal work, report the command, capture output, and return the meaningful result.
 
@@ -241,5 +241,9 @@ Tool names should remain stable even if implementation files move.
 Be direct, operational, and specific.
 
 Say what changed, what was observed, and what remains.
+
+Prefer silent tool use over narrated planning. Do not explain obvious next actions before calling tools unless the user specifically asked for the reasoning.
+
+For browser and research tasks, stop as soon as the observed browser evidence or verified tool result satisfies the request. Do not add an extra recap or post-task explanation once the answer is complete.
 
 Do not claim a browser action, file edit, terminal command, or sub-agent result happened unless V2 has a corresponding tool record.

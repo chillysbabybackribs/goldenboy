@@ -9,6 +9,9 @@ import { geminiSidecar } from '../GeminiSidecar';
 import { WebIntentInstruction, WebIntentVM } from '../../browser/WebIntentVM';
 import { agentCache } from '../AgentCache';
 
+const SIDECAR_RANK_TIMEOUT_MS = 1200;
+const SIDECAR_JUDGE_TIMEOUT_MS = 1200;
+
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
 }
@@ -65,9 +68,60 @@ function includesText(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.toLowerCase());
 }
 
+export function buildWaitForTextExpression(): string {
+  return `(() => {
+    const parts = [];
+    if (document.body?.innerText) parts.push(document.body.innerText);
+    for (const element of document.querySelectorAll('input, textarea, select')) {
+      if (element instanceof HTMLSelectElement) {
+        const selectedText = Array.from(element.selectedOptions || [])
+          .map(option => option.textContent || '')
+          .join('\\n')
+          .trim();
+        if (selectedText) parts.push(selectedText);
+        if (element.value) parts.push(element.value);
+        continue;
+      }
+      if ('value' in element && typeof element.value === 'string' && element.value.trim()) {
+        parts.push(element.value);
+      }
+    }
+    return parts.join('\\n');
+  })()`;
+}
+
 function compactText(text: string | undefined, maxChars: number): string {
   const cleaned = (text || '').replace(/\s+/g, ' ').trim();
   return cleaned.length > maxChars ? `${cleaned.slice(0, maxChars)}...` : cleaned;
+}
+
+async function resolveWithSoftTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<{ value: T; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ value: fallback, timedOut: true });
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ value, timedOut: false });
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ value: fallback, timedOut: false });
+      });
+  });
 }
 
 function queryTerms(query: string): string[] {
@@ -176,7 +230,7 @@ async function waitForCondition(input: {
     }
     if (input.text) {
       const result = await browserService.executeInPage(
-        `document.body ? document.body.innerText : ''`,
+        buildWaitForTextExpression(),
         input.tabId,
       );
       matched = matched || (typeof result.result === 'string' && includesText(result.result, input.text));
@@ -334,7 +388,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           minEvidenceScore: { type: 'number' },
         },
       },
-      async execute(input) {
+      async execute(input, context) {
         requireBrowserCreated();
         const obj = objectInput(input);
         const query = requireString(obj, 'query');
@@ -345,7 +399,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         );
         const stopWhenAnswerFound = obj.stopWhenAnswerFound === false ? false : true;
         const minEvidenceScore = optionalNumber(obj, 'minEvidenceScore', 9);
+        const progress = (message: string): void => {
+          context.onProgress?.(`tool-progress:Browser: research "${query}" -> ${message}`);
+        };
 
+        progress('opening search results');
         browserService.navigate(query);
         await waitForBrowserSettled(10_000);
 
@@ -353,14 +411,27 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const searchTabId = searchState.activeTabId;
         if (!searchTabId) throw new Error('No active browser tab after web search');
 
-        const searchPage = await cachePageForTab(pageExtractor, searchTabId);
-        const searchResults = await browserService.extractSearchResults(searchTabId, resultLimit);
-        const ranked = await geminiSidecar.rankSearchResults(query, searchResults.map(result => ({
-          index: result.index,
-          title: result.title,
-          url: result.url,
-          snippet: result.snippet,
-        })));
+        progress('caching the search page');
+        const [searchPage, searchResults] = await Promise.all([
+          cachePageForTab(pageExtractor, searchTabId),
+          browserService.extractSearchResults(searchTabId, resultLimit),
+        ]);
+        const defaultRankedResults = {
+          results: searchResults,
+          modelId: null,
+          reason: null,
+        };
+        const rankedResult = await resolveWithSoftTimeout(
+          geminiSidecar.rankSearchResults(query, searchResults.map(result => ({
+            index: result.index,
+            title: result.title,
+            url: result.url,
+            snippet: result.snippet,
+          }))),
+          SIDECAR_RANK_TIMEOUT_MS,
+          defaultRankedResults,
+        );
+        const ranked = rankedResult.value;
         const rankedSearchResults = ranked.results.map(result => {
           const original = searchResults.find(item => item.index === result.index);
           return original || result;
@@ -376,10 +447,13 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         let stopReason = '';
         const targets = rankedSearchResults.slice(0, maxPages);
         for (const target of targets) {
+          progress(`opening result ${target.index}: ${compactText(target.title, 80)}`);
           const tab = browserService.createTab(target.url);
           await waitForBrowserSettled(10_000);
-          const page = await cachePageForTab(pageExtractor, tab.id);
-          const evidence = await browserService.extractPageEvidence(tab.id);
+          const [page, evidence] = await Promise.all([
+            cachePageForTab(pageExtractor, tab.id),
+            browserService.extractPageEvidence(tab.id),
+          ]);
           const relevantChunks = pageKnowledgeStore.answerFromCache(query, {
             tabId: tab.id,
             limit: 4,
@@ -393,16 +467,26 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             keyFacts: evidence?.keyFacts,
             matchSnippets,
           });
-          const geminiJudge = await geminiSidecar.judgeEvidence({
-            query,
-            title: evidence?.title || page.title || target.title,
-            url: evidence?.url || page.url || target.url,
-            summary: evidence?.summary || '',
-            keyFacts: evidence?.keyFacts || [],
-            snippets: matchSnippets,
-          });
+          const judgeResult = await resolveWithSoftTimeout(
+            geminiSidecar.judgeEvidence({
+              query,
+              title: evidence?.title || page.title || target.title,
+              url: evidence?.url || page.url || target.url,
+              summary: evidence?.summary || '',
+              keyFacts: evidence?.keyFacts || [],
+              snippets: matchSnippets,
+            }),
+            SIDECAR_JUDGE_TIMEOUT_MS,
+            null,
+          );
+          const geminiJudge = judgeResult.value;
           const geminiScore = geminiJudge ? Math.round(geminiJudge.score * 1.2) : null;
           const sufficient = geminiJudge?.sufficient === true || score.score >= minEvidenceScore || score.sufficient;
+          progress(
+            sufficient
+              ? `result ${target.index} appears sufficient`
+              : `result ${target.index} reviewed; continuing`,
+          );
           openedPages.push({
             tabId: tab.id,
             resultIndex: target.index,
@@ -421,6 +505,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             answerLikely: sufficient,
             scoreReasons: geminiJudge?.reasons.length ? geminiJudge.reasons : score.reasons,
             judgeModel: geminiJudge?.modelId || null,
+            judgeTimedOut: judgeResult.timedOut,
             answerEvidence: geminiJudge?.compactEvidence.length ? geminiJudge.compactEvidence : relevantChunks.matches.slice(0, 2).map(match => compactText(match.snippet, 320)),
             topMatches: relevantChunks.matches.slice(0, 3).map(match => ({
               chunkId: match.chunkId,
@@ -443,6 +528,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           }
         }
 
+        progress(stoppedEarly ? 'stopping after sufficient evidence' : 'research pass complete');
         browserService.activateTab(searchTabId);
         invalidateBrowserCaches();
         logBrowserCache(`Research search "${query}" parsed ${searchResults.length} results, opened ${openedPages.length} page(s), stoppedEarly=${stoppedEarly}`);
@@ -456,7 +542,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             sidecar: {
               configured: geminiSidecar.isConfigured(),
               rankModel: ranked.modelId,
-              rankReason: ranked.reason,
+              rankReason: rankedResult.timedOut
+                ? 'timed out; used browser result order'
+                : ranked.reason,
+              rankTimedOut: rankedResult.timedOut,
             },
             maxPages,
             stopWhenAnswerFound,

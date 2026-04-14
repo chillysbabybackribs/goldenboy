@@ -18,11 +18,7 @@ import { AgentProvider } from './AgentTypes';
 import { AgentRuntime } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
 import { HaikuProvider } from './HaikuProvider';
-import { V2ToolBridge } from './V2ToolBridge';
-import { AppServerProcess } from './AppServerProcess';
-import { AppServerProvider } from './AppServerProvider';
-import * as path from 'path';
-import * as os from 'os';
+import { AppServerBackedProvider } from './AppServerBackedProvider';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
@@ -53,7 +49,12 @@ type ProviderEntry = {
   label: string;
   modelId?: string;
   supportsAppToolExecutor: boolean;
+};
+
+type ActiveTaskInvocation = {
+  providerId: ProviderId;
   runtime: AgentRuntime;
+  dispose?: () => Promise<void>;
 };
 
 const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }> = [
@@ -63,7 +64,7 @@ const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }
 
 class AgentModelService {
   private providers = new Map<ProviderId, ProviderEntry>();
-  private activeTaskProviders = new Map<string, ProviderId>();
+  private activeTaskProviders = new Map<string, ActiveTaskInvocation>();
 
   init(): void {
     agentToolExecutor.registerMany([
@@ -101,13 +102,11 @@ class AgentModelService {
   }
 
   cancel(taskId: string): boolean {
-    const providerId = this.activeTaskProviders.get(taskId);
-    if (!providerId) return false;
-    const provider = this.providers.get(providerId);
-    if (!provider) return false;
+    const activeTask = this.activeTaskProviders.get(taskId);
+    if (!activeTask) return false;
     try {
-      provider.runtime.abort();
-      this.log(providerId, 'info', 'Task cancelled by user', taskId);
+      activeTask.runtime.abort();
+      this.log(activeTask.providerId, 'info', 'Task cancelled by user', taskId);
       return true;
     } catch {
       return false;
@@ -124,11 +123,12 @@ class AgentModelService {
     if (!provider) {
       throw new Error(this.buildUnavailableProviderMessage(providerId));
     }
+    const activeTask = this.createTaskInvocation(providerId);
 
     const chatUserMessage = chatKnowledgeStore.recordUserMessage(taskId, prompt);
-    const taskMemoryContext = taskMemoryStore.buildContext(taskId);
     taskMemoryStore.recordUserPrompt(taskId, prompt);
-    this.activeTaskProviders.set(taskId, providerId);
+    const taskMemoryContext = taskMemoryStore.buildContext(taskId);
+    this.activeTaskProviders.set(taskId, activeTask);
 
     appStateStore.dispatch({
       type: ActionType.UPDATE_TASK,
@@ -155,7 +155,7 @@ class AgentModelService {
         chatKnowledgeStore.buildInvocationContext(taskId, chatUserMessage.id),
         taskMemoryContext,
       ]);
-      const response = await provider.runtime.run({
+      const response = await activeTask.runtime.run({
         ...scopeForPrompt(prompt, options?.taskProfile),
         mode: 'unrestricted-dev',
         agentId: providerId,
@@ -263,6 +263,7 @@ class AgentModelService {
       return result;
     } finally {
       this.activeTaskProviders.delete(taskId);
+      await this.disposeTaskInvocation(activeTask, providerId, taskId);
     }
   }
 
@@ -287,7 +288,6 @@ class AgentModelService {
       label: config.label,
       modelId: provider.modelId,
       supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
-      runtime: new AgentRuntime(provider),
     });
     this.setRuntime(config.id, {
       status: 'available',
@@ -309,45 +309,14 @@ class AgentModelService {
       return;
     }
 
-    this.setRuntime(config.id, { status: 'unavailable', activeTaskId: null, errorDetail: 'Starting...' }, config.modelId);
-
-    let bridge: V2ToolBridge | null = null;
-    try {
-      const contextPath = path.join(os.tmpdir(), 'v2-tool-context.json');
-
-      bridge = new V2ToolBridge(contextPath);
-      await bridge.start();
-      const bridgePort = bridge.getPort();
-      this.log(config.id, 'info', `V2ToolBridge started on port ${bridgePort}`);
-
-      const shimPath = path.join(__dirname, 'v2-mcp-shim.js');
-      const appServerProcess = new AppServerProcess(bridgePort, shimPath, contextPath);
-      await appServerProcess.start();
-      const { wsPort } = await appServerProcess.waitUntilReady();
-      this.log(config.id, 'info', `codex app-server ready on ws port ${wsPort}`);
-
-      const provider = new AppServerProvider({
-        providerId: config.id,
-        modelId: config.modelId,
-        process: appServerProcess,
-      });
-      await provider.connect(wsPort);
-
-      this.providers.set(config.id, {
-        id: config.id,
-        label: config.label,
-        modelId: provider.modelId,
-        supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
-        runtime: new AgentRuntime(provider),
-      });
-      this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, provider.modelId);
-      this.log(config.id, 'info', `${config.label} ready (app-server mode)`);
-    } catch (err) {
-      await bridge?.stop();  // cleanup on partial startup
-      const message = err instanceof Error ? err.message : String(err);
-      this.setRuntime(config.id, { status: 'error', activeTaskId: null, errorDetail: message }, config.modelId);
-      this.log(config.id, 'error', `${config.label} startup failed: ${message}`);
-    }
+    this.providers.set(config.id, {
+      id: config.id,
+      label: config.label,
+      modelId: config.modelId,
+      supportsAppToolExecutor: true,
+    });
+    this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, config.modelId);
+    this.log(config.id, 'info', `${config.label} ready (isolated app-server mode)`);
   }
 
   private initializeHaikuProvider(config: { id: ProviderId; label: string; modelId: string }): void {
@@ -358,7 +327,6 @@ class AgentModelService {
         label: config.label,
         modelId: provider.modelId,
         supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
-        runtime: new AgentRuntime(provider),
       });
       this.setRuntime(config.id, {
         status: 'available',
@@ -433,7 +401,40 @@ class AgentModelService {
     if (providerId === HAIKU_PROVIDER_ID) {
       return new HaikuProvider();
     }
+    if (providerId === PRIMARY_PROVIDER_ID && process.env.CODEX_PROVIDER !== 'exec') {
+      return new AppServerBackedProvider({
+        providerId: config.id,
+        modelId: config.modelId,
+      });
+    }
     return new CodexProvider({ providerId: config.id, modelId: config.modelId });
+  }
+
+  private createTaskInvocation(providerId: ProviderId): ActiveTaskInvocation {
+    const provider = this.createProviderInstance(providerId);
+    return {
+      providerId,
+      runtime: new AgentRuntime(provider),
+      dispose: hasDisposableProvider(provider)
+        ? async () => {
+            await provider.dispose();
+          }
+        : undefined,
+    };
+  }
+
+  private async disposeTaskInvocation(
+    activeTask: ActiveTaskInvocation,
+    providerId: ProviderId,
+    taskId: string,
+  ): Promise<void> {
+    if (!activeTask.dispose) return;
+    try {
+      await activeTask.dispose();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(providerId, 'warn', `Task runtime cleanup failed: ${message}`, taskId);
+    }
   }
 
   private buildUnavailableProviderMessage(providerId: ProviderId): string {
@@ -553,7 +554,7 @@ class AgentModelService {
   }): void {
     const synthesisProviderId = backgroundResearchSynthesisProviderId();
     const synthesisProviderAvailable = this.providers.has(synthesisProviderId)
-      && !Array.from(this.activeTaskProviders.values()).includes(synthesisProviderId);
+      && !Array.from(this.activeTaskProviders.values()).some((activeTask) => activeTask.providerId === synthesisProviderId);
 
     if (!shouldRunBackgroundResearchSynthesis({
       prompt: input.prompt,
@@ -596,15 +597,15 @@ class AgentModelService {
       return;
     }
 
+    const synthesisTask = this.createTaskInvocation(input.synthesisProviderId);
     try {
-      const synthesisRuntime = new AgentRuntime(this.createProviderInstance(input.synthesisProviderId));
       const synthesisContext = buildBackgroundResearchSynthesisContext({
         prompt: input.prompt,
         fastAnswer: input.fastAnswer,
         threadSummary: chatKnowledgeStore.threadSummary(input.taskId),
         evidenceTranscript: toolTranscript.text,
       });
-      const response = await synthesisRuntime.run({
+      const response = await synthesisTask.runtime.run({
         mode: 'unrestricted-dev',
         agentId: input.synthesisProviderId,
         role: 'secondary',
@@ -652,12 +653,18 @@ class AgentModelService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log(input.synthesisProviderId, 'warn', `Background research synthesis failed: ${message}`, input.taskId);
+    } finally {
+      await this.disposeTaskInvocation(synthesisTask, input.synthesisProviderId, input.taskId);
     }
   }
 }
 
 function isSupportedProvider(value: string): value is ProviderId {
   return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
+}
+
+function hasDisposableProvider(provider: AgentProvider): provider is AgentProvider & { dispose(): Promise<void> | void } {
+  return typeof (provider as { dispose?: unknown }).dispose === 'function';
 }
 
 function buildContextPrompt(parts: Array<string | null | undefined>): string | null {

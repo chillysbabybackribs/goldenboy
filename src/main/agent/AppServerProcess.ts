@@ -34,11 +34,31 @@ export function mergeTomlMcpEntry(
 
   // Remove all v2-tools sections (both [mcp_servers.v2-tools] and any
   // [mcp_servers.v2-tools.*] subsections like .env that may appear anywhere).
-  // Also remove any stray quoted-path sections left by previous bad runs.
-  const cleaned = existing
-    .replace(/\[mcp_servers\.v2-tools[^\]]*\][^\[]*/g, '')
-    .replace(/\["[^"]*v2-mcp-shim[^"]*"\][^\[]*/g, '')
-    .trimEnd();
+  // Also remove the legacy local-agent server and any stray quoted-path sections
+  // left by previous bad runs so Codex does not pick a Claude-Browser bridge.
+  const stripManagedSections = (source: string): string => {
+    const lines = source.split('\n');
+    const kept: string[] = [];
+    let skip = false;
+
+    for (const line of lines) {
+      const sectionMatch = /^\[(.+)\]\s*$/.exec(line.trim());
+      if (sectionMatch) {
+        const sectionName = sectionMatch[1];
+        skip = sectionName === 'mcp_servers.v2-tools'
+          || sectionName.startsWith('mcp_servers.v2-tools.')
+          || sectionName === 'mcp_servers.local-agent'
+          || sectionName.startsWith('mcp_servers.local-agent.')
+          || /v2-mcp-shim/.test(sectionName);
+      }
+
+      if (!skip) kept.push(line);
+    }
+
+    return kept.join('\n').trimEnd();
+  };
+
+  const cleaned = stripManagedSections(existing);
 
   return cleaned ? `${cleaned}\n\n${newBlock}\n` : `${newBlock}\n`;
 }
@@ -98,6 +118,34 @@ export class AppServerProcess extends EventEmitter {
     this.child?.kill();
     this.child = null;
     this.state = { status: 'stopped' };
+    this.clearConfig();
+  }
+
+  private clearConfig(): void {
+    try {
+      if (!fs.existsSync(CODEX_CONFIG_PATH)) return;
+      const existing = fs.readFileSync(CODEX_CONFIG_PATH, 'utf-8');
+      // Re-use the same strip logic from mergeTomlMcpEntry but write without appending a new block.
+      const lines = existing.split('\n');
+      const kept: string[] = [];
+      let skip = false;
+      for (const line of lines) {
+        const sectionMatch = /^\[(.+)\]\s*$/.exec(line.trim());
+        if (sectionMatch) {
+          const sectionName = sectionMatch[1];
+          skip = sectionName === 'mcp_servers.v2-tools'
+            || sectionName.startsWith('mcp_servers.v2-tools.')
+            || sectionName === 'mcp_servers.local-agent'
+            || sectionName.startsWith('mcp_servers.local-agent.')
+            || /v2-mcp-shim/.test(sectionName);
+        }
+        if (!skip) kept.push(line);
+      }
+      fs.writeFileSync(CODEX_CONFIG_PATH, kept.join('\n').trimEnd() + '\n', 'utf-8');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`AppServerProcess: failed to clear config.toml: ${message}`);
+    }
   }
 
   private writeConfig(): void {

@@ -188,18 +188,22 @@ export class ChatKnowledgeStore {
   }
 
   buildInvocationContext(taskId: string, currentMessageId?: string): string | null {
+    const current = currentMessageId
+      ? this.readMessage(taskId, currentMessageId, 1200)
+      : null;
     const summary = this.threadSummary(taskId);
     const recent = this.readLast(taskId, {
       count: 2,
       maxChars: 1000,
       excludeMessageIds: currentMessageId ? [currentMessageId] : [],
     });
-    if (!summary && !recent.text) return null;
+    if (!current?.text && !summary && !recent.text) return null;
 
     const sections = [
       '## Conversation Memory',
       'Full chat history is cached on disk. Use chat.read_last for immediate follow-ups, chat.search for older context, and chat.read_window/read_message only when needed. Do not ask the user to repeat prior context until chat recall has failed.',
     ];
+    if (current?.text) sections.push('', '### Current User Message', current.text);
     if (summary) sections.push('', '### Thread Summary', summary);
     if (recent.text) sections.push('', '### Recent Prior Messages', recent.text);
     return sections.join('\n');

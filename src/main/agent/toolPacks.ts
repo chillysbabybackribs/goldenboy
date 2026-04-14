@@ -43,6 +43,7 @@ export type PreflightToolPackExpansion = ToolPackExpansion & {
 export const DEFAULT_TOOL_PACK_PRESET: AgentToolPackPreset = 'mode-6';
 export const RUNTIME_REQUEST_TOOL_NAME = 'runtime.request_tool_pack' as const;
 export const RUNTIME_LIST_TOOL_PACKS_TOOL_NAME = 'runtime.list_tool_packs' as const;
+export const RUNTIME_HAIKU_BROWSER_TOOL_NAME = 'runtime.haiku_browser_session' as const;
 
 const TASK_PACK_BY_KIND: Record<NormalizedTaskKind, ToolPackManifest> = {
   orchestration: orchestrationToolPack,
@@ -88,7 +89,7 @@ function normalizeTaskKind(kind: AgentTaskKind): NormalizedTaskKind {
 }
 
 function withRuntimeScopeTools(tools: AgentToolName[]): AgentToolName[] {
-  return [RUNTIME_REQUEST_TOOL_NAME, RUNTIME_LIST_TOOL_PACKS_TOOL_NAME, ...tools];
+  return [RUNTIME_REQUEST_TOOL_NAME, RUNTIME_LIST_TOOL_PACKS_TOOL_NAME, RUNTIME_HAIKU_BROWSER_TOOL_NAME, ...tools];
 }
 
 function uniqueToolNames(tools: AgentToolName[]): AgentToolName[] {
@@ -110,15 +111,11 @@ export function getToolPack(packId: string): ToolPackManifest | null {
 }
 
 export function buildRuntimeRequestToolDescription(): string {
-  const packs = ALL_TOOL_PACKS
-    .map((pack) => `- ${pack.id}: ${pack.description}`)
-    .join('\n');
   return [
     'Request an additional host-managed tool pack when the current scope is insufficient.',
-    'Use runtime.list_tool_packs first when you are unsure which pack contains the needed tool.',
+    'If you are unsure which pack contains the needed capability, call runtime.list_tool_packs first.',
     'Use this immediately when you are blocked by missing tools instead of guessing or continuing with degraded output.',
-    'Available packs:',
-    packs,
+    'Pass the pack id in `pack`. The input schema already validates the available pack ids.',
   ].join('\n');
 }
 
@@ -441,13 +438,14 @@ function needsFileEditPack(message: string, currentToolNames: Set<AgentToolName>
 
 function needsFileCachePack(message: string, currentToolNames: Set<AgentToolName>): boolean {
   const fileCacheIntent = /\b(index workspace|index the workspace|file cache|cached files|cached chunks|chunk id|read chunk|search cache|search indexed|index codebase)\b/.test(message);
+  const codeAnalysisIntent = /\b(codebase|repo|repository|workspace|pull request|pr diff|diff|review|regression|debug|diagnose|investigate|root cause|inspect|look into|analy[sz]e|understand|trace|refactor|migration|architecture)\b/.test(message);
   const hasFileCacheTools = hasAnyTool(currentToolNames, [
     'filesystem.index_workspace',
     'filesystem.answer_from_cache',
     'filesystem.search_file_cache',
     'filesystem.read_file_chunk',
   ]);
-  return fileCacheIntent && !hasFileCacheTools;
+  return !hasFileCacheTools && (fileCacheIntent || codeAnalysisIntent);
 }
 
 function needsTerminalHeavyPack(message: string, currentToolNames: Set<AgentToolName>): boolean {
@@ -472,10 +470,11 @@ function needsTerminalProcessControlPack(message: string, currentToolNames: Set<
 function needsChatRecallPack(message: string, currentToolNames: Set<AgentToolName>): boolean {
   const recallIntent = /\b(history|prior|previous|earlier|conversation|thread|recall|chat history|last message)\b/.test(message);
   const hasRecallTools = hasAnyTool(currentToolNames, [
-    'chat.thread_summary',
-    'chat.search',
     'chat.read_last',
+    'chat.search',
     'chat.read_window',
+    'chat.read_message',
+    'chat.recall',
   ]);
   return recallIntent && !hasRecallTools;
 }

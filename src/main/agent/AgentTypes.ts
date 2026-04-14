@@ -9,6 +9,7 @@ export type AgentToolStatus = 'running' | 'completed' | 'failed';
 export type AgentToolName =
   | 'runtime.request_tool_pack'
   | 'runtime.list_tool_packs'
+  | 'runtime.haiku_browser_session'
   | 'browser.get_state'
   | 'browser.get_tabs'
   | 'browser.navigate'
@@ -122,6 +123,7 @@ export type AgentToolContext = {
   mode: AgentMode;
   taskId?: string;
   toolNames?: string[];
+  onProgress?: (status: string) => void;
 };
 
 export type ConstraintStatus = 'PASS' | 'FAIL' | 'UNKNOWN' | 'ESTIMATED' | 'CONDITIONAL';
@@ -167,6 +169,7 @@ export type AgentRuntimeConfig = {
   depth?: number;
   skillNames?: string[];
   allowedTools?: 'all' | AgentToolName[];
+  restrictToolCatalogToAllowedTools?: boolean;
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
   attachments?: InvocationAttachment[];

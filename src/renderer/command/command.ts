@@ -8,6 +8,7 @@ import {
   appendToken as appendTokenInternal,
   createLiveRunCard as createLiveRunCardInternal,
   getLiveRunCard,
+  markCancelling as markCancellingInternal,
   replaceWithError as replaceWithErrorInternal,
   replaceWithResult as replaceWithResultInternal,
 } from './live-run.js';
@@ -35,6 +36,7 @@ const chatEmptyState = document.getElementById('chatEmptyState')!;
 const chatScrollTopBtn = document.getElementById('chatScrollTopBtn') as HTMLButtonElement;
 const chatScrollBottomBtn = document.getElementById('chatScrollBottomBtn') as HTMLButtonElement;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
+const chatNewBtn = document.getElementById('chatNewBtn') as HTMLButtonElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
 const modelBtnPrimary = document.getElementById('modelBtnPrimary') as HTMLButtonElement;
 const modelBtnHaiku = document.getElementById('modelBtnHaiku') as HTMLButtonElement;
@@ -95,7 +97,6 @@ let chatScrollRaf: number | null = null;
 let chatScrollFramesRemaining = 0;
 let suppressChatScrollEvent = false;
 let suppressNextChatScrollActivation = false;
-let suppressNextChatAutoScrollPasses = 0;
 let chatScrollControlsActivated = false;
 let chatScrollControlsDimmed = false;
 let chatScrollControlsIdleTimer: number | null = null;
@@ -397,10 +398,6 @@ function performChatScrollToBottom(): void {
   });
 }
 
-function suppressUpcomingChatAutoScroll(passes = 2): void {
-  suppressNextChatAutoScrollPasses = Math.max(suppressNextChatAutoScrollPasses, passes);
-}
-
 function scheduleChatScrollToBottom(force = false, frames = 3): void {
   if (!force && !chatAutoPinned) return;
   if (force) chatAutoPinned = true;
@@ -454,21 +451,11 @@ chatThread.addEventListener('toggle', (event: Event) => {
 }, true);
 
 const chatResizeObserver = new ResizeObserver(() => {
-  if (suppressNextChatAutoScrollPasses > 0) {
-    suppressNextChatAutoScrollPasses -= 1;
-    updateChatScrollControls();
-    return;
-  }
   scheduleChatScrollToBottom(false, 4);
 });
 chatResizeObserver.observe(chatThread);
 
 const chatMutationObserver = new MutationObserver(() => {
-  if (suppressNextChatAutoScrollPasses > 0) {
-    suppressNextChatAutoScrollPasses -= 1;
-    updateChatScrollControls();
-    return;
-  }
   scheduleChatScrollToBottom(false, 1);
   updateChatScrollControls();
 });
@@ -683,7 +670,6 @@ async function copyLastAgentResponse(): Promise<void> {
 }
 
 function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
-  suppressUpcomingChatAutoScroll(4);
   createLiveRunCardInternal(taskId, _provider, chatInner, {
     renderMarkdown,
     updateLastAgentResponseText,
@@ -876,12 +862,18 @@ async function submitChat(): Promise<void> {
   } finally {
     runningTaskId = null;
     chatStopBtn.hidden = true;
+    chatStopBtn.disabled = false;
+    chatStopBtn.textContent = 'STOP';
     chatInput.focus();
   }
 }
 chatStopBtn.addEventListener('click', () => {
   const modelApi = getModelAPI();
   if (runningTaskId && modelApi?.cancel) {
+    // Immediately mark the card as cancelling and disable the button
+    markCancellingInternal(runningTaskId);
+    chatStopBtn.textContent = 'Stopping…';
+    chatStopBtn.disabled = true;
     void modelApi.cancel(runningTaskId);
   }
 });
@@ -976,9 +968,30 @@ function openHistoryPopup(): void {
   for (const task of sorted) {
     const item = document.createElement('div');
     item.className = 'cc-history-item' + (task.id === activeId ? ' active' : '');
-    item.innerHTML =
-      `<span class="cc-history-item-title">${escapeHtml(task.title)}</span>` +
-      `<span class="cc-history-item-date">${formatHistoryDate(task.updatedAt)}</span>`;
+    const title = document.createElement('span');
+    title.className = 'cc-history-item-title';
+    title.textContent = task.title;
+
+    const date = document.createElement('span');
+    date.className = 'cc-history-item-date';
+    date.textContent = formatHistoryDate(task.updatedAt);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'cc-history-delete';
+    deleteBtn.type = 'button';
+    deleteBtn.title = task.status === 'running' ? 'Cannot delete a running chat' : 'Delete chat';
+    deleteBtn.setAttribute('aria-label', task.status === 'running' ? 'Cannot delete a running chat' : `Delete ${task.title}`);
+    deleteBtn.disabled = task.status === 'running';
+    deleteBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M3.5 4.5h9"/><path d="M6 4.5V3h4v1.5"/><path d="M5.5 6.5v5"/><path d="M8 6.5v5"/><path d="M10.5 6.5v5"/><path d="M4.5 4.5l.5 8h6l.5-8"/>' +
+      '</svg>';
+    deleteBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void deleteHistoryTask(task.id);
+    });
+
+    item.append(title, date, deleteBtn);
     item.addEventListener('click', () => {
       switchToTask(task.id);
       historyOverlay.hidden = true;
@@ -992,6 +1005,21 @@ function openHistoryPopup(): void {
 function closeHistoryPopup(): void {
   historyOverlay.hidden = true;
   chatInput.focus();
+}
+
+async function deleteHistoryTask(taskId: string): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+
+  try {
+    await workspaceAPI.deleteTask(taskId);
+    const nextState = await workspaceAPI.getState();
+    renderState(nextState);
+    if (!historyOverlay.hidden) openHistoryPopup();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void workspaceAPI.addLog('error', 'system', `Failed to delete chat: ${message}`);
+  }
 }
 
 async function startNewChat(): Promise<void> {
@@ -1026,6 +1054,7 @@ chatHistoryBtn.addEventListener('click', (e: MouseEvent) => {
 });
 historyCloseBtn.addEventListener('click', closeHistoryPopup);
 historyNewBtn.addEventListener('click', () => { void startNewChat(); });
+chatNewBtn.addEventListener('click', () => { void startNewChat(); });
 
 // Close on outside click
 document.addEventListener('click', (e: MouseEvent) => {
@@ -1114,7 +1143,7 @@ if (commandWindowAPI && modelApi?.onProgress) {
     }
     if (progress.type === 'status') {
       const text = String(progress.data || '');
-      if (text.startsWith('tool-start:') || text.startsWith('tool-done:')) {
+      if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
         appendToolStatusInternal(progress.taskId, text);
       } else if (text.startsWith('Calling ')) {
         appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));

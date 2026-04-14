@@ -5,6 +5,7 @@ export interface LiveRunRenderCallbacks {
   renderMarkdown: (text: string) => string;
   updateLastAgentResponseText: (text: string) => void;
   scheduleChatScrollToBottom: (force?: boolean, frames?: number) => void;
+  disableChatAutoPin: () => void;
 }
 
 export type LiveRunCard = {
@@ -13,6 +14,9 @@ export type LiveRunCard = {
   panel: HTMLElement;
   stream: HTMLElement;
   output: HTMLElement;
+  layoutLocked: boolean;
+  /** True once the user has clicked Stop — gates further streaming */
+  cancelling: boolean;
   /** Active tool line element (shimmer state) */
   activeToolEl: HTMLElement | null;
   /** Last completed thought element (gets waiting shimmer) */
@@ -67,17 +71,16 @@ export function createLiveRunCard(
   root.dataset.taskId = taskId;
 
   const promptHtml = prompt
-    ? `<div class="chat-live-prompt">${escapeHtml(prompt.trim())}</div>`
+    ? `<div class="chat-live-prompt">${escapeHtml(prompt.trim())}</div><hr class="chat-live-divider" />`
     : '';
 
   root.innerHTML =
     promptHtml +
     `<div class="chat-live-panel">` +
       `<div class="chat-stream"></div>` +
-      `<div class="chat-msg-text chat-markdown"></div>` +
-    `</div>`;
+    `</div>` +
+    `<div class="chat-msg-text chat-markdown"></div>`;
   container.appendChild(root);
-  callbacks.scheduleChatScrollToBottom(true, 5);
 
   const card: LiveRunCard = {
     root,
@@ -85,6 +88,8 @@ export function createLiveRunCard(
     panel: root.querySelector('.chat-live-panel') as HTMLElement,
     stream: root.querySelector('.chat-stream') as HTMLElement,
     output: root.querySelector('.chat-msg-text') as HTMLElement,
+    layoutLocked: false,
+    cancelling: false,
     activeToolEl: null,
     lastThoughtEl: null,
     typingQueue: [],
@@ -101,20 +106,63 @@ export function createLiveRunCard(
   };
   liveRunCards.set(taskId, card);
   syncLivePanelScroll(card);
-  callbacks.scheduleChatScrollToBottom(true, 5);
   return card;
+}
+
+// ─── Cancel / Stopping ──────────────────────────────────────────────────────
+
+export function markCancelling(taskId: string): void {
+  const card = liveRunCards.get(taskId);
+  if (!card || card.cancelling) return;
+  card.cancelling = true;
+
+  // Stop the typewriter — freeze visible output where it is
+  if (card.tokenTypingTimer !== null) {
+    window.cancelAnimationFrame(card.tokenTypingTimer);
+    card.tokenTypingTimer = null;
+  }
+  // Clear the streaming cursor class
+  card.output.classList.remove('chat-msg-streaming');
+
+  // Stop any active shimmer tool line
+  if (card.activeToolEl) {
+    card.activeToolEl.className = 'chat-tool-line chat-tool-done';
+    const textEl = card.activeToolEl.querySelector('.tool-text');
+    if (textEl) textEl.className = 'tool-text';
+    card.activeToolEl = null;
+  }
+  clearWaitingShimmer(card);
+
+  // Add a "stopped" indicator line in the stream
+  const stoppedEl = document.createElement('div');
+  stoppedEl.className = 'chat-tool-line chat-cancelling-note';
+  stoppedEl.textContent = 'Stopped';
+  card.stream.appendChild(stoppedEl);
+  syncLiveProcessDisclosure(card);
+  syncLivePanelScroll(card);
+
+  // Mark root so CSS can dim/settle the card
+  card.root.classList.add('chat-msg-cancelling');
 }
 
 // ─── Token Streaming (typewriter) ───────────────────────────────────────────
 
 export function appendToken(taskId: string, text: string): void {
   const card = liveRunCards.get(taskId);
-  if (!card) return;
+  if (!card || card.cancelling) return;
   if (!text) return;
+  const hadOutput = card.tokenBuffer.trim().length > 0;
 
   card.tokenBuffer += text;
   card.output.className = 'chat-msg-text chat-markdown chat-msg-streaming';
   card.root.classList.toggle('chat-msg-live-has-output', card.tokenBuffer.trim().length > 0);
+  if (!hadOutput && card.tokenBuffer.trim().length > 0) {
+    if (hasVisibleProcessContent(card)) {
+      lockLiveCardLayout(card);
+      retractLiveProcessPanel(card);
+    }
+    card.callbacks.disableChatAutoPin();
+  }
 
   // Kick off the typewriter loop if not already running
   if (card.tokenTypingTimer === null) {
@@ -148,7 +196,6 @@ function scheduleTypewriterTick(taskId: string, card: LiveRunCard): void {
     card.output.innerHTML = card.callbacks.renderMarkdown(visible);
     card.callbacks.updateLastAgentResponseText(visible);
     syncLivePanelScroll(card);
-    card.callbacks.scheduleChatScrollToBottom(false, 1);
 
     // Keep ticking if there's more to show
     if (card.tokenVisibleLength < card.tokenBuffer.length) {
@@ -221,9 +268,73 @@ function syncLivePanelScroll(card: LiveRunCard): void {
   card.panel.scrollTop = card.panel.scrollHeight;
 }
 
+function hasVisibleProcessContent(card: LiveRunCard): boolean {
+  return card.stream.childElementCount > 0;
+}
+
+function getProcessSummaryLabel(card: LiveRunCard): string {
+  const toolCount = card.stream.querySelectorAll('.chat-tool-line').length;
+  return toolCount > 0 ? `${toolCount} tool${toolCount === 1 ? '' : 's'} used` : 'Show process';
+}
+
+function syncLiveProcessDisclosure(card: LiveRunCard): void {
+  const summary = card.panel.querySelector('.chat-live-process-summary') as HTMLElement | null;
+  if (!summary) return;
+  summary.textContent = getProcessSummaryLabel(card);
+}
+
+function retractLiveProcessPanel(card: LiveRunCard): void {
+  if (card.panel.classList.contains('chat-live-panel-retracted')) {
+    syncLiveProcessDisclosure(card);
+    return;
+  }
+
+  const details = document.createElement('details');
+  details.className = 'chat-process-details chat-live-process-details';
+
+  const summary = document.createElement('summary');
+  summary.className = 'chat-process-summary chat-live-process-summary';
+  summary.textContent = getProcessSummaryLabel(card);
+  details.appendChild(summary);
+
+  const inner = document.createElement('div');
+  inner.className = 'chat-process-inner chat-live-process-inner';
+  inner.appendChild(card.stream);
+  details.appendChild(inner);
+
+  card.panel.appendChild(details);
+  card.panel.classList.add('chat-live-panel-retracted');
+}
+
+function lockLiveCardLayout(card: LiveRunCard): void {
+  if (card.layoutLocked) return;
+  const parent = card.root.parentElement;
+  if (!parent) return;
+  const parentRect = parent.getBoundingClientRect();
+  const parentStyle = window.getComputedStyle(parent);
+  const parentPaddingTop = Number.parseFloat(parentStyle.paddingTop || '0') || 0;
+  const rootRect = card.root.getBoundingClientRect();
+  const topOffset = Math.max(0, rootRect.top - parentRect.top - parentPaddingTop);
+  parent.style.justifyContent = 'flex-start';
+  card.root.style.marginTop = `${topOffset}px`;
+  card.root.style.marginBottom = '0px';
+  card.layoutLocked = true;
+}
+
+function unlockLiveCardLayout(card: LiveRunCard): void {
+  if (!card.layoutLocked) return;
+  const parent = card.root.parentElement;
+  if (parent) {
+    parent.style.removeProperty('justify-content');
+  }
+  card.root.style.removeProperty('margin-top');
+  card.root.style.removeProperty('margin-bottom');
+  card.layoutLocked = false;
+}
+
 export function appendThought(taskId: string, text: string): void {
   const card = liveRunCards.get(taskId);
-  if (!card) return;
+  if (!card || card.cancelling) return;
   const trimmed = text.trim();
   if (!trimmed) return;
   // Skip raw tool transcripts
@@ -254,6 +365,7 @@ function typeNextChunk(card: LiveRunCard, taskId: string): void {
       .replace(/`([^`]+)`/g, '<span class="key">$1</span>');
     card.stream.appendChild(el);
     card.lastThoughtEl = el;
+    syncLiveProcessDisclosure(card);
   }
 
   card.typingTimer = null;
@@ -283,6 +395,7 @@ function renderToolLine(card: LiveRunCard, taskId: string, kind: 'start' | 'done
       `<span class="tool-text tool-text-shimmer">${escapeHtml(text)}</span>`;
     card.stream.appendChild(el);
     card.activeToolEl = el;
+    syncLiveProcessDisclosure(card);
     syncLivePanelScroll(card);
     card.callbacks.scheduleChatScrollToBottom(false, 1);
     return;
@@ -305,6 +418,7 @@ function renderToolLine(card: LiveRunCard, taskId: string, kind: 'start' | 'done
       `<span class="tool-dot"></span>` +
       `<span class="tool-text">${escapeHtml(text)}</span>`;
     card.stream.appendChild(el);
+    syncLiveProcessDisclosure(card);
   }
   syncLivePanelScroll(card);
   card.callbacks.scheduleChatScrollToBottom(false, 1);
@@ -328,7 +442,7 @@ export function appendToolActivity(taskId: string, kind: 'call' | 'result', text
 
 export function appendToolStatus(taskId: string, status: string): void {
   const card = liveRunCards.get(taskId);
-  if (!card) return;
+  if (!card || card.cancelling) return;
 
   if (status.startsWith('tool-start:')) {
     const text = status.slice('tool-start:'.length);
@@ -344,6 +458,27 @@ export function appendToolStatus(taskId: string, status: string): void {
   if (status.startsWith('tool-done:')) {
     const text = status.slice('tool-done:'.length);
     const kind = 'done' as const;
+    if (card.typingTimer !== null || card.activeThoughtEl) {
+      card.deferredToolEvents.push({ kind, text });
+      return;
+    }
+    renderToolLine(card, taskId, kind, text);
+    return;
+  }
+
+  if (status.startsWith('tool-progress:')) {
+    const text = status.slice('tool-progress:'.length);
+    if (card.activeToolEl) {
+      const textEl = card.activeToolEl.querySelector('.tool-text');
+      if (textEl) {
+        textEl.className = 'tool-text tool-text-shimmer';
+        textEl.textContent = text;
+      }
+      syncLivePanelScroll(card);
+      card.callbacks.scheduleChatScrollToBottom(false, 1);
+      return;
+    }
+    const kind = 'start' as const;
     if (card.typingTimer !== null || card.activeThoughtEl) {
       card.deferredToolEvents.push({ kind, text });
       return;
@@ -410,6 +545,23 @@ export function appendCodexItemProgress(taskId: string, progressData: string, it
 // ─── Final Result / Error ───────────────────────────────────────────────────
 
 function collapseStreamIntoDisclosure(card: LiveRunCard): void {
+  const liveDetails = card.panel.querySelector('.chat-live-process-details') as HTMLElement | null;
+  if (liveDetails) {
+    liveDetails.classList.remove('chat-live-process-details');
+    const summary = liveDetails.querySelector('.chat-live-process-summary');
+    summary?.classList.remove('chat-live-process-summary');
+    const inner = liveDetails.querySelector('.chat-live-process-inner');
+    inner?.classList.remove('chat-live-process-inner');
+
+    const outputParent = card.output.parentNode;
+    if (outputParent) {
+      outputParent.insertBefore(liveDetails, card.output.nextSibling);
+    } else {
+      card.panel.parentNode?.appendChild(liveDetails);
+    }
+    return;
+  }
+
   const streamEl = card.stream;
   if (!streamEl.parentNode) return;
   const children = Array.from(streamEl.children);
@@ -437,7 +589,12 @@ function collapseStreamIntoDisclosure(card: LiveRunCard): void {
   }
   details.appendChild(inner);
 
-  streamEl.parentNode.insertBefore(details, streamEl);
+  const outputParent = card.output.parentNode;
+  if (outputParent) {
+    outputParent.insertBefore(details, card.output.nextSibling);
+  } else {
+    streamEl.parentNode.appendChild(details);
+  }
   streamEl.remove();
 }
 
@@ -480,6 +637,7 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
   card.root.querySelector('.chat-live-prompt')?.remove();
   collapseStreamIntoDisclosure(card);
   releaseLivePanel(card);
+  unlockLiveCardLayout(card);
   card.meta.closest('.chat-msg-header')?.remove();
   card.root.classList.remove('chat-msg-live');
   card.root.classList.remove('chat-msg-live-has-output');
@@ -515,6 +673,7 @@ function flushError(taskId: string, error: string): void {
   card.output.textContent = error;
   card.callbacks.updateLastAgentResponseText(String(error));
   releaseLivePanel(card);
+  unlockLiveCardLayout(card);
   card.root.classList.remove('chat-msg-live');
   card.root.classList.remove('chat-msg-live-has-output');
   card.root.classList.add('chat-msg-done');

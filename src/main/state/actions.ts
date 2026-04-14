@@ -11,6 +11,7 @@ export enum ActionType {
   SET_WINDOW_VISIBLE = 'SET_WINDOW_VISIBLE',
   SET_EXECUTION_SPLIT = 'SET_EXECUTION_SPLIT',
   ADD_TASK = 'ADD_TASK',
+  DELETE_TASK = 'DELETE_TASK',
   UPDATE_TASK = 'UPDATE_TASK',
   SET_ACTIVE_TASK = 'SET_ACTIVE_TASK',
   ADD_LOG = 'ADD_LOG',
@@ -32,6 +33,7 @@ export type Action =
   | { type: ActionType.SET_WINDOW_VISIBLE; role: PhysicalWindowRole; isVisible: boolean }
   | { type: ActionType.SET_EXECUTION_SPLIT; split: ExecutionSplitState }
   | { type: ActionType.ADD_TASK; task: TaskRecord }
+  | { type: ActionType.DELETE_TASK; taskId: string }
   | { type: ActionType.UPDATE_TASK; taskId: string; updates: Partial<Pick<TaskRecord, 'owner' | 'status' | 'updatedAt'>> }
   | { type: ActionType.SET_ACTIVE_TASK; taskId: string | null }
   | { type: ActionType.ADD_LOG; log: LogRecord }

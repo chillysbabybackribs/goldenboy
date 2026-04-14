@@ -15,12 +15,14 @@ import {
   encodeToolInput,
   executeProviderToolCallWithEvents,
   normalizeProviderMaxToolTurns,
+  normalizeProviderFinalOutput,
   publishProviderFinalOutput,
   resolveToolPackExpansion,
 } from './providerToolRuntime';
 import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
 
 const CODEX_INACTIVITY_TIMEOUT_MS = 180_000;
+const CODEX_WEB_SEARCH_DISABLED_CONFIG = 'web_search="disabled"';
 
 type CodexProviderOptions = {
   providerId?: ProviderId;
@@ -270,12 +272,15 @@ export class CodexProvider implements AgentProvider {
       );
       inputTokens += finalResult.usage.inputTokens;
       outputTokens += finalResult.usage.outputTokens;
+      const finalText = normalizeProviderFinalOutput(finalResult.response.message);
+      request.onToken?.(finalText);
 
-        const finalItem = publishProviderFinalOutput({
-          request,
-          itemId: `${this.itemPrefix('final')}-${Date.now()}`,
-          text: finalResult.response.message,
-        });
+      const finalItem = publishProviderFinalOutput({
+        request,
+        itemId: `${this.itemPrefix('final')}-${Date.now()}`,
+        text: finalText,
+        emitToken: false,
+      });
       completedItems.set(finalItem.id, finalItem);
 
       return {
@@ -328,10 +333,13 @@ export class CodexProvider implements AgentProvider {
           continue;
         }
 
+        const finalText = normalizeProviderFinalOutput(response.message);
+        request.onToken?.(finalText);
         const finalItem = publishProviderFinalOutput({
           request,
           itemId: `${this.itemPrefix('final')}-${Date.now()}`,
-          text: response.message,
+          text: finalText,
+          emitToken: false,
         });
         completedItems.set(finalItem.id, finalItem);
         return {
@@ -440,11 +448,14 @@ export class CodexProvider implements AgentProvider {
     );
     inputTokens += finalResult.usage.inputTokens;
     outputTokens += finalResult.usage.outputTokens;
+    const finalText = normalizeProviderFinalOutput(finalResult.response.message);
+    request.onToken?.(finalText);
 
     const finalItem = publishProviderFinalOutput({
       request,
       itemId: `${this.itemPrefix('final')}-${Date.now()}`,
-      text: finalResult.response.message,
+      text: finalText,
+      emitToken: false,
     });
     completedItems.set(finalItem.id, finalItem);
 
@@ -477,6 +488,8 @@ export class CodexProvider implements AgentProvider {
             '--json',
             '--model',
             this.modelId,
+            '-c',
+            CODEX_WEB_SEARCH_DISABLED_CONFIG,
             '--dangerously-bypass-approvals-and-sandbox',
             '--output-schema',
             schemaPath,

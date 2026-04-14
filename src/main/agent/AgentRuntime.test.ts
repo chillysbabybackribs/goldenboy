@@ -19,7 +19,7 @@ vi.mock('../chatKnowledge/ChatKnowledgeStore', () => ({
   },
 }));
 
-import { AgentRuntime } from './AgentRuntime';
+import { AgentRuntime, assertInitialBrowserScope } from './AgentRuntime';
 import { agentCache } from './AgentCache';
 import { agentRunStore } from './AgentRunStore';
 import { agentToolExecutor } from './AgentToolExecutor';
@@ -372,5 +372,12 @@ describe('AgentRuntime', () => {
     expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
       'browser.create_tab',
     ]));
+  });
+
+  it('hard-fails browser tasks when the initial tool scope exposes no browser tools', () => {
+    expect(() => assertInitialBrowserScope(
+      'Search the web for the latest browser tool issue and summarize it.',
+      ['runtime.request_tool_pack', 'runtime.list_tool_packs', 'filesystem.read'],
+    )).toThrow('Browser task blocked: initial MCP tool scope for research did not expose any browser.* tools.');
   });
 });

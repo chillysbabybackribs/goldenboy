@@ -43,6 +43,24 @@ export function appReducer(state: AppState, action: Action): AppState {
         activeTaskId: action.task.id,
       };
 
+    case ActionType.DELETE_TASK: {
+      const tasks = state.tasks.filter((t) => t.id !== action.taskId);
+      const activeTaskId = state.activeTaskId === action.taskId
+        ? tasks.reduce<string | null>((latestId, task) => {
+            if (!latestId) return task.id;
+            const latestTask = tasks.find((entry) => entry.id === latestId);
+            return (latestTask?.updatedAt ?? 0) >= task.updatedAt ? latestId : task.id;
+          }, null)
+        : state.activeTaskId;
+      return {
+        ...state,
+        tasks,
+        activeTaskId,
+        logs: state.logs.filter((log) => log.taskId !== action.taskId),
+        surfaceActions: state.surfaceActions.filter((actionRecord) => actionRecord.taskId !== action.taskId),
+      };
+    }
+
     case ActionType.UPDATE_TASK:
       return {
         ...state,

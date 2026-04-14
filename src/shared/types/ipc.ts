@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
   STATE_UPDATE: 'workspace:state-update',
   EVENT_BROADCAST: 'workspace:event-broadcast',
   CREATE_TASK: 'workspace:create-task',
+  DELETE_TASK: 'workspace:delete-task',
   UPDATE_TASK_STATUS: 'workspace:update-task-status',
   SET_ACTIVE_TASK: 'workspace:set-active-task',
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
@@ -122,6 +123,7 @@ export interface WorkspaceAPI {
   getRole(): Promise<PhysicalWindowRole>;
 
   createTask(title: string): Promise<{ id: string; title: string }>;
+  deleteTask(taskId: string): Promise<void>;
   updateTaskStatus(taskId: string, status: TaskStatus): Promise<void>;
   setActiveTask(taskId: string | null): Promise<void>;
   resetTokenUsage(): Promise<void>;

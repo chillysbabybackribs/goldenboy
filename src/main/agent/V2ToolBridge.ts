@@ -33,6 +33,15 @@ function compactResult(value: unknown): string {
     : text;
 }
 
+function resolveAllowedToolNames(ctx: AgentToolContext): Set<string> | null {
+  return ctx.toolNames?.length ? new Set(ctx.toolNames) : null;
+}
+
+function assertToolAllowed(toolName: string, allowedToolNames: Set<string> | null): void {
+  if (!allowedToolNames || allowedToolNames.has(toolName)) return;
+  throw new Error(`Tool is not available in this runtime scope: ${toolName}`);
+}
+
 export class V2ToolBridge {
   private server: http.Server | null = null;
   private port = 0;
@@ -81,7 +90,7 @@ export class V2ToolBridge {
     try {
       if (req.url === '/tools/list') {
         const ctx = readContext(this.contextPath);
-        const allowed = ctx.toolNames?.length ? new Set(ctx.toolNames) : null;
+        const allowed = resolveAllowedToolNames(ctx);
         const tools = agentToolExecutor.list()
           .filter((t) => !allowed || allowed.has(t.name))
           .map((t) => ({
@@ -98,6 +107,8 @@ export class V2ToolBridge {
         const toolName = fromMcpName(payload.name);
         const ctxPath = payload.contextPath || this.contextPath;
         const ctx = readContext(ctxPath);
+        const allowed = resolveAllowedToolNames(ctx);
+        assertToolAllowed(toolName, allowed);
 
         const result = await agentToolExecutor.execute(
           toolName as Parameters<typeof agentToolExecutor.execute>[0],

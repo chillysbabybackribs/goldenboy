@@ -14,6 +14,7 @@ export const generalToolPack: ToolPackManifest = {
     'filesystem.patch',
     'terminal.exec',
     'chat.thread_summary',
+    'chat.read_last',
   ],
   tools: [
     'filesystem.search',
@@ -21,6 +22,7 @@ export const generalToolPack: ToolPackManifest = {
     'filesystem.patch',
     'terminal.exec',
     'chat.thread_summary',
+    'chat.read_last',
     'browser.research_search',
   ],
   relatedPackIds: ['implementation', 'research'],
