@@ -113,13 +113,14 @@ export class TaskMemoryStore {
     return Array.from(issues);
   }
 
-  recordUserPrompt(taskId: string, text: string): TaskMemoryRecord {
+  recordUserPrompt(taskId: string, text: string, metadata?: Record<string, unknown>): TaskMemoryRecord {
     return this.append(taskId, {
       id: generateId('mem'),
       taskId,
       kind: 'user_prompt',
       text,
       createdAt: Date.now(),
+      metadata,
     });
   }
 
@@ -252,7 +253,7 @@ export class TaskMemoryStore {
             default: return 'System';
           }
         })();
-        chronological.push(`${prefix}: ${entry.text}`);
+        chronological.push(`${prefix}: ${this.formatEntryText(entry)}`);
       }
     }
 
@@ -288,6 +289,17 @@ export class TaskMemoryStore {
     this.memoryByTask.set(taskId, next);
     saveMemory(Array.from(this.memoryByTask.values()));
     return next;
+  }
+
+  private formatEntryText(entry: TaskMemoryEntry): string {
+    const attachmentSummary = typeof entry.metadata?.attachmentSummary === 'string'
+      ? entry.metadata.attachmentSummary.trim()
+      : '';
+    const text = entry.text.trim();
+    if (text && attachmentSummary) return `${text} ${attachmentSummary}`;
+    if (text) return text;
+    if (attachmentSummary) return attachmentSummary;
+    return entry.text;
   }
 }
 

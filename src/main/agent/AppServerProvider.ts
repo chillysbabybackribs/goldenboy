@@ -107,6 +107,11 @@ type AppServerProviderOptions = {
   contextPath?: string;
 };
 
+type TurnStartInputItem =
+  | { type: 'text'; text: string }
+  | { type: 'local_image'; path: string }
+  | { type: 'input_image'; image_url: string };
+
 // ─── Provider Implementation ─────────────────────────────────────────────
 
 export class AppServerProvider implements AgentProvider {
@@ -674,6 +679,7 @@ export class AppServerProvider implements AgentProvider {
       };
 
       const turnReqId = this.nextId++;
+      const input = this.buildTurnStartInput(task, request.attachments);
       ws.addEventListener('message', handler);
       resetTimer();
       ws.send(JSON.stringify({
@@ -682,7 +688,7 @@ export class AppServerProvider implements AgentProvider {
         method: 'turn/start',
         params: {
           threadId,
-          input: [{ type: 'text', text: task }],
+          input,
           approvalPolicy: 'never',
           sandboxPolicy: { type: 'dangerFullAccess' },
         },
@@ -716,5 +722,34 @@ export class AppServerProvider implements AgentProvider {
 
   private itemPrefix(kind: 'tool' | 'final'): string {
     return `${this.providerId.replace(/[^a-zA-Z0-9]+/g, '-')}-${kind}`;
+  }
+
+  private buildTurnStartInput(
+    task: string,
+    attachments?: AgentProviderRequest['attachments'],
+  ): TurnStartInputItem[] {
+    const input: TurnStartInputItem[] = [];
+    const text = task.trim();
+    if (text) {
+      input.push({ type: 'text', text });
+    }
+
+    for (const attachment of attachments || []) {
+      if (attachment.type !== 'image') continue;
+      const filePath = attachment.path?.trim();
+      if (filePath) {
+        input.push({ type: 'local_image', path: filePath });
+        continue;
+      }
+      input.push({
+        type: 'input_image',
+        image_url: `data:${attachment.mediaType};base64,${attachment.data}`,
+      });
+    }
+
+    if (input.length === 0) {
+      input.push({ type: 'text', text: task });
+    }
+    return input;
   }
 }

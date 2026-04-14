@@ -36,6 +36,7 @@ export const IPC_CHANNELS = {
   BROWSER_GET_FORM_MODEL: 'browser:get-form-model',
   BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
   BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
+  BROWSER_GET_OPERATION_LEDGER: 'browser:get-operation-ledger',
   BROWSER_RECORD_FINDING: 'browser:record-finding',
   BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
   BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',

@@ -53,6 +53,12 @@ import type { DiskCache } from '../context/diskCache';
 import { pageKnowledgeStore } from '../browserKnowledge/PageKnowledgeStore';
 import { normalizeNavigationTarget } from './navigationTarget';
 import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
+import { DEFAULT_BROWSER_CONTEXT_ID } from './browserContext';
+import type {
+  BrowserNetworkInterceptionPolicy,
+  BrowserOperationNetworkCapture,
+  BrowserOperationNetworkScope,
+} from './browserNetworkSupport';
 
 const PROFILE_ID = 'workspace-browser';
 const PARTITION = 'persist:workspace-browser';
@@ -86,6 +92,8 @@ const GOOGLE_OAUTH_PATH_PATTERNS = [
 const OAUTH_RELAY_TIMEOUT_MS = 5 * 60 * 1000;
 const ALLOWED_POPUP_PROTOCOLS = new Set(['http:', 'https:']);
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
+const BROWSER_SURFACE_BACKGROUND = '#000000';
+type ViewBounds = { x: number; y: number; width: number; height: number };
 
 function isSafeExternalUrl(rawUrl: string): boolean {
   try {
@@ -131,9 +139,26 @@ function sanitizeBrowserUserAgent(userAgent: string): string {
     .trim();
 }
 
+function isGoogleOrYouTubeRequest(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    return hostname === 'google.com'
+      || hostname.endsWith('.google.com')
+      || hostname === 'youtube.com'
+      || hostname.endsWith('.youtube.com');
+  } catch {
+    return false;
+  }
+}
+
 function isGoogleCookieDomain(domain: string): boolean {
   const normalized = domain.replace(/^\./, '').toLowerCase();
   return GOOGLE_COOKIE_DOMAIN_SUFFIXES.some(suffix => normalized === suffix || normalized.endsWith(`.${suffix}`));
+}
+
+function areViewBoundsEqual(a: ViewBounds, b: ViewBounds): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
 export class BrowserService {
@@ -153,11 +178,13 @@ export class BrowserService {
   private createdAt: number | null = null;
   private disposed = false;
   private historyPersistTimer: ReturnType<typeof setTimeout> | null = null;
-  private currentBounds = { x: 0, y: 0, width: 0, height: 0 };
+  private currentBounds: ViewBounds = { x: 0, y: 0, width: 0, height: 0 };
+  private attachedTabIds = new Set<string>();
+  private appliedBoundsByTabId = new Map<string, ViewBounds>();
   private sessionInstance: Electron.Session | null = null;
   private lastGoogleCookieMismatchAt: number | null = null;
   private oauthRelayTimer: ReturnType<typeof setTimeout> | null = null;
-  private instrumentation = new BrowserInstrumentation();
+  private instrumentation: BrowserInstrumentation;
   private downloadManager = new BrowserDownloadManager({
     resolveTabIdByWebContentsId: (webContentsId) => this.resolveTabIdByWebContentsId(webContentsId),
     emitLog: (level, message) => this.emitLog(level, message),
@@ -195,9 +222,24 @@ export class BrowserService {
   private activeTaskId: string | null = null;
   private stateSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor() {
+  constructor(private readonly contextId: string = DEFAULT_BROWSER_CONTEXT_ID) {
     this.profile = { id: PROFILE_ID, partition: PARTITION, persistent: true, userAgent: null };
     this.settings = createDefaultSettings();
+    this.instrumentation = new BrowserInstrumentation(contextId);
+    this.instrumentation.registerNetworkInterceptionPolicy({
+      id: 'sanitize-google-user-agent',
+      matches: ({ url }) => isGoogleOrYouTubeRequest(url),
+      onBeforeSendHeaders: ({ requestHeaders }) => {
+        if (!requestHeaders) return;
+        const userAgent = requestHeaders['User-Agent'] || requestHeaders['user-agent'];
+        if (!userAgent || !userAgent.includes('Electron')) return;
+        return {
+          requestHeaders: {
+            'User-Agent': sanitizeBrowserUserAgent(userAgent),
+          },
+        };
+      },
+    });
   }
 
   // ─── Disk Cache Integration ─────────────────────────────────────────────
@@ -335,14 +377,6 @@ export class BrowserService {
       return decision === 'granted';
     });
 
-    ses.webRequest.onBeforeSendHeaders({ urls: ['*://*.google.com/*', '*://*.youtube.com/*'] }, (details, callback) => {
-      const ua = details.requestHeaders['User-Agent'];
-      if (ua && ua.includes('Electron')) {
-        details.requestHeaders['User-Agent'] = sanitizeBrowserUserAgent(ua);
-      }
-      callback({ requestHeaders: details.requestHeaders });
-    });
-
     ses.setPermissionRequestHandler((webContents, permission, callback) => {
       const permType = classifyPermission(permission);
       const decision = resolvePermission(permType);
@@ -402,6 +436,7 @@ export class BrowserService {
             images: this.settings.images,
           },
         });
+    view.setBackgroundColor(BROWSER_SURFACE_BACKGROUND);
 
     const currentUserAgent = view.webContents.getUserAgent();
     const effectiveUserAgent = sanitizeBrowserUserAgent(currentUserAgent);
@@ -585,6 +620,8 @@ export class BrowserService {
     if (this.hostWindow && !this.hostWindow.isDestroyed()) {
       try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
     }
+    this.attachedTabIds.delete(entry.id);
+    this.appliedBoundsByTabId.delete(entry.id);
     this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
     pageKnowledgeStore.removePagesForTab(entry.id);
     this.dialogManager.detachTab(entry.id);
@@ -597,14 +634,11 @@ export class BrowserService {
 
     this.normalizeSplitState();
 
-    for (const [, entry] of this.tabs.entries()) {
-      try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
-    }
-
     const x = Math.round(this.currentBounds.x);
     const y = Math.round(this.currentBounds.y);
     const width = Math.max(1, Math.round(this.currentBounds.width));
     const height = Math.max(1, Math.round(this.currentBounds.height));
+    const nextVisibleEntries: Array<{ entry: TabEntry; bounds: ViewBounds }> = [];
 
     if (this.splitLeftTabId && this.splitRightTabId) {
       const leftEntry = this.tabs.get(this.splitLeftTabId);
@@ -614,20 +648,41 @@ export class BrowserService {
         const availableWidth = Math.max(1, width - dividerWidth);
         const leftWidth = Math.max(1, Math.floor(availableWidth / 2));
         const rightWidth = Math.max(1, availableWidth - leftWidth);
-        leftEntry.view.setBounds({ x, y, width: leftWidth, height });
-        rightEntry.view.setBounds({ x: x + leftWidth + dividerWidth, y, width: rightWidth, height });
-        this.hostWindow.contentView.addChildView(leftEntry.view);
-        if (rightEntry.id !== leftEntry.id) {
-          this.hostWindow.contentView.addChildView(rightEntry.view);
-        }
-        return;
+        nextVisibleEntries.push(
+          { entry: leftEntry, bounds: { x, y, width: leftWidth, height } },
+          { entry: rightEntry, bounds: { x: x + leftWidth + dividerWidth, y, width: rightWidth, height } },
+        );
+      }
+    } else {
+      const entry = this.getActiveEntry();
+      if (!entry) return;
+      nextVisibleEntries.push({ entry, bounds: { x, y, width, height } });
+    }
+
+    if (nextVisibleEntries.length === 0) return;
+
+    const nextAttachedIds = new Set(nextVisibleEntries.map(({ entry }) => entry.id));
+    for (const tabId of this.attachedTabIds) {
+      if (nextAttachedIds.has(tabId)) continue;
+      const staleEntry = this.tabs.get(tabId);
+      if (staleEntry) {
+        try { this.hostWindow.contentView.removeChildView(staleEntry.view); } catch {}
+      }
+      this.appliedBoundsByTabId.delete(tabId);
+    }
+
+    for (const { entry, bounds } of nextVisibleEntries) {
+      if (!this.attachedTabIds.has(entry.id)) {
+        this.hostWindow.contentView.addChildView(entry.view);
+      }
+      const previousBounds = this.appliedBoundsByTabId.get(entry.id);
+      if (!previousBounds || !areViewBoundsEqual(previousBounds, bounds)) {
+        entry.view.setBounds(bounds);
+        this.appliedBoundsByTabId.set(entry.id, bounds);
       }
     }
 
-    const entry = this.getActiveEntry();
-    if (!entry) return;
-    this.hostWindow.contentView.addChildView(entry.view);
-    entry.view.setBounds({ x, y, width, height });
+    this.attachedTabIds = nextAttachedIds;
   }
 
   private getActiveEntry(): TabEntry | undefined {
@@ -1644,6 +1699,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
   // ─── Bounds ──────────────────────────────────────────────────────────────
 
   setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+    if (areViewBoundsEqual(this.currentBounds, bounds)) return;
     this.currentBounds = bounds;
     this.applyTabLayout();
   }
@@ -1684,7 +1740,6 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     this.stateSyncTimer = setTimeout(() => {
       this.stateSyncTimer = null;
       const state = this.getState();
-      appStateStore.dispatch({ type: ActionType.SET_BROWSER_RUNTIME, browserRuntime: state });
       eventBus.emit(AppEventType.BROWSER_STATE_CHANGED, { state });
       eventBus.emit(AppEventType.BROWSER_STATUS_UPDATED, {
         status: state.surfaceStatus,
@@ -2030,6 +2085,18 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
 
   getNetworkEvents(tabId?: string, since?: number): BrowserNetworkEvent[] {
     return this.instrumentation.getNetworkEvents(tabId, since);
+  }
+
+  beginOperationNetworkScope(scope: BrowserOperationNetworkScope): void {
+    this.instrumentation.beginOperationNetworkScope(scope);
+  }
+
+  completeOperationNetworkScope(operationId: string): BrowserOperationNetworkCapture | null {
+    return this.instrumentation.completeOperationNetworkScope(operationId);
+  }
+
+  registerNetworkInterceptionPolicy(policy: BrowserNetworkInterceptionPolicy): void {
+    this.instrumentation.registerNetworkInterceptionPolicy(policy);
   }
 
   async recordTabFinding(input: {

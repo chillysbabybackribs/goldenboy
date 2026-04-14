@@ -87,7 +87,7 @@ function buildInitialUserContent(request: AgentProviderRequest): string | Anthro
     textParts.push(request.contextPrompt.trim(), '', '## Current User Request');
   }
   textParts.push(request.task);
-  const text = textParts.join('\n');
+  const text = textParts.join('\n').trim();
 
   const attachments = request.attachments;
   if (!attachments?.length) return text;
@@ -107,7 +107,9 @@ function buildInitialUserContent(request: AgentProviderRequest): string | Anthro
     }
   }
 
-  content.push({ type: 'text', text });
+  if (text) {
+    content.push({ type: 'text', text });
+  }
   return content;
 }
 

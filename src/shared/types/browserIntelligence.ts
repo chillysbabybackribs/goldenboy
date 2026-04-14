@@ -169,6 +169,9 @@ export type BrowserConsoleEvent = {
 
 export type BrowserNetworkEvent = {
   id: string;
+  requestId: string;
+  contextId: string;
+  operationId: string | null;
   tabId: string;
   method: string;
   url: string;
@@ -177,12 +180,23 @@ export type BrowserNetworkEvent = {
   status: 'completed' | 'failed';
   timestamp: number;
   startTimestamp?: number;
+  responseTimestamp?: number;
   endTimestamp?: number;
   durationMs?: number;
   fromCache?: boolean;
   responseSize?: number;
   encodedDataLength?: number;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+  requestBodySize?: number;
   error?: string;
+};
+
+export type BrowserNetworkActivitySummary = {
+  requestCount: number;
+  failedRequestCount: number;
+  urls: string[];
+  statusCodes: number[];
 };
 
 export type BrowserBranchId = string;

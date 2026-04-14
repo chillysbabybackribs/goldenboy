@@ -1,20 +1,68 @@
 import type {
+  BeforeSendResponse,
   CallbackResponse,
+  HeadersReceivedResponse,
+  OnBeforeRedirectListenerDetails,
   OnBeforeRequestListenerDetails,
+  OnBeforeSendHeadersListenerDetails,
   OnCompletedListenerDetails,
   OnErrorOccurredListenerDetails,
-  WebContents,
+  OnHeadersReceivedListenerDetails,
   Session,
+  WebContents,
 } from 'electron';
 import {
   BrowserConsoleEvent,
   BrowserConsoleLevel,
+  BrowserNetworkActivitySummary,
   BrowserNetworkEvent,
 } from '../../shared/types/browserIntelligence';
 import { generateId } from '../../shared/utils/ids';
+import type {
+  BrowserNetworkInterceptionContext,
+  BrowserNetworkInterceptionPolicy,
+  BrowserOperationNetworkCapture,
+  BrowserOperationNetworkScope,
+} from './browserNetworkSupport';
 
 const MAX_CONSOLE_EVENTS = 250;
 const MAX_NETWORK_EVENTS = 500;
+const MAX_OPERATION_EVENT_IDS = 8;
+const MAX_OPERATION_URLS = 5;
+const MAX_OPERATION_STATUS_CODES = 6;
+const MAX_CAPTURED_HEADERS = 12;
+const MAX_HEADER_VALUE_LENGTH = 160;
+const SENSITIVE_HEADER_NAMES = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+  'x-auth-token',
+]);
+
+type RequestMetadata = {
+  tabId: string;
+  contextId: string;
+  operationId: string | null;
+  method: string;
+  url: string;
+  resourceType: string;
+  startedAt: number;
+  responseStartedAt?: number;
+  uploadSize?: number;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+};
+
+type OperationScopeState = BrowserOperationNetworkScope & {
+  startedAt: number;
+  eventIds: string[];
+  urls: string[];
+  statusCodes: number[];
+  requestCount: number;
+  failedRequestCount: number;
+};
 
 function toConsoleLevel(level: number | 'info' | 'warning' | 'error' | 'debug'): BrowserConsoleLevel {
   if (typeof level === 'string') {
@@ -43,21 +91,103 @@ function trimRecent<T>(items: T[], max: number): T[] {
   return items.length > max ? items.slice(items.length - max) : items;
 }
 
+function normalizeHeaderValue(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= MAX_HEADER_VALUE_LENGTH) return compact;
+  return `${compact.slice(0, Math.max(0, MAX_HEADER_VALUE_LENGTH - 3))}...`;
+}
+
+function normalizeRequestHeaders(headers?: Record<string, string | string[]>): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const entries = Object.entries(headers)
+    .slice(0, MAX_CAPTURED_HEADERS)
+    .map(([key, value]) => {
+      const normalizedValue = Array.isArray(value) ? value.join(', ') : value;
+      const safeValue = SENSITIVE_HEADER_NAMES.has(key.toLowerCase())
+        ? '[redacted]'
+        : normalizeHeaderValue(String(normalizedValue ?? ''));
+      return [key, safeValue] as const;
+    })
+    .filter(([, value]) => value.length > 0);
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeResponseHeaders(headers?: Record<string, string[]>): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const entries = Object.entries(headers)
+    .slice(0, MAX_CAPTURED_HEADERS)
+    .map(([key, value]) => {
+      const normalizedValue = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+      const safeValue = SENSITIVE_HEADER_NAMES.has(key.toLowerCase())
+        ? '[redacted]'
+        : normalizeHeaderValue(normalizedValue);
+      return [key, safeValue] as const;
+    })
+    .filter(([, value]) => value.length > 0);
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeResponseHeadersForCallback(headers?: Record<string, string[]>): Record<string, string[]> | undefined {
+  if (!headers) return undefined;
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? value.map(item => String(item)) : [String(value)],
+    ]),
+  );
+}
+
+function pushUnique(target: string[], value: string, max: number): void {
+  if (!value || target.includes(value)) return;
+  target.push(value);
+  if (target.length > max) target.splice(0, target.length - max);
+}
+
+function calculateUploadSize(uploadData: OnBeforeRequestListenerDetails['uploadData']): number | undefined {
+  if (!Array.isArray(uploadData) || uploadData.length === 0) return undefined;
+  let size = 0;
+  let hasData = false;
+  for (const item of uploadData) {
+    if (item.bytes) {
+      size += item.bytes.byteLength;
+      hasData = true;
+    } else if (typeof item.file === 'string' && item.file) {
+      hasData = true;
+    }
+  }
+  return hasData ? size : undefined;
+}
+
+function summarizeScope(scope: OperationScopeState): BrowserOperationNetworkCapture {
+  const summary: BrowserNetworkActivitySummary | null = scope.requestCount > 0
+    ? {
+      requestCount: scope.requestCount,
+      failedRequestCount: scope.failedRequestCount,
+      urls: [...scope.urls],
+      statusCodes: [...scope.statusCodes],
+    }
+    : null;
+
+  return {
+    eventIds: [...scope.eventIds],
+    summary,
+  };
+}
+
 export class BrowserInstrumentation {
   private tabIdByWebContentsId = new Map<number, string>();
   private consoleEventsByTab = new Map<string, BrowserConsoleEvent[]>();
   private networkEventsByTab = new Map<string, BrowserNetworkEvent[]>();
-  private requestMetadataById = new Map<string, {
-    tabId: string;
-    method: string;
-    url: string;
-    resourceType: string;
-    startedAt: number;
-    uploadSize?: number;
-  }>();
+  private requestMetadataById = new Map<string, RequestMetadata>();
   private requestIdsByTab = new Map<string, Set<string>>();
+  private operationScopesById = new Map<string, OperationScopeState>();
+  private interceptionPolicies = new Map<string, BrowserNetworkInterceptionPolicy>();
   private sessionAttached = false;
   private callbackReturn: CallbackResponse = { cancel: false };
+
+  constructor(private readonly contextId: string) {}
 
   attachSession(sessionInstance: Session): void {
     if (this.sessionAttached) return;
@@ -66,20 +196,91 @@ export class BrowserInstrumentation {
     sessionInstance.webRequest.onBeforeRequest((details: OnBeforeRequestListenerDetails, callback: (response: CallbackResponse) => void) => {
       const tabId = this.resolveTabId(details.webContentsId);
       if (!tabId) return callback({ cancel: false });
-      const requestId = String(details.id);
-
-      this.requestMetadataById.set(requestId, {
+      const requestId = this.requestKeyFromDetails(details);
+      if (!requestId) return callback({ cancel: false });
+      const operationId = this.resolveOperationId(tabId);
+      const meta: RequestMetadata = {
         tabId,
+        contextId: this.contextId,
+        operationId,
         method: details.method || 'GET',
         url: details.url || '',
         resourceType: details.resourceType || 'unknown',
         startedAt: Date.now(),
-        uploadSize: Array.isArray(details.uploadData) ? details.uploadData.length : undefined,
-      });
+        uploadSize: calculateUploadSize(details.uploadData),
+      };
+
+      this.requestMetadataById.set(requestId, meta);
       const byTab = this.requestIdsByTab.get(tabId) || new Set<string>();
       byTab.add(requestId);
       this.requestIdsByTab.set(tabId, byTab);
-      callback(this.callbackReturn);
+
+      const interception = this.applyBeforeRequestPolicies({
+        contextId: this.contextId,
+        operationId,
+        tabId,
+        method: meta.method,
+        url: meta.url,
+        resourceType: meta.resourceType,
+      });
+      callback(interception || this.callbackReturn);
+    });
+
+    sessionInstance.webRequest.onBeforeSendHeaders((details: OnBeforeSendHeadersListenerDetails, callback: (response: BeforeSendResponse) => void) => {
+      const requestId = this.requestKeyFromDetails(details);
+      const requestMeta = requestId ? this.requestMetadataById.get(requestId) : undefined;
+      const tabId = requestMeta?.tabId || this.resolveTabId(details.webContentsId) || null;
+      const operationId = requestMeta?.operationId || (tabId ? this.resolveOperationId(tabId) : null);
+      const requestHeaders = normalizeRequestHeaders(details.requestHeaders as Record<string, string | string[]>);
+      if (requestMeta) {
+        requestMeta.requestHeaders = requestHeaders;
+      }
+
+      const interception = this.applyBeforeSendHeadersPolicies({
+        contextId: this.contextId,
+        operationId,
+        tabId,
+        method: requestMeta?.method || details.method || 'GET',
+        url: requestMeta?.url || details.url || '',
+        resourceType: requestMeta?.resourceType || details.resourceType || 'unknown',
+        requestHeaders,
+      }, details.requestHeaders as Record<string, string | string[]>);
+
+      callback(interception || { cancel: false, requestHeaders: details.requestHeaders });
+    });
+
+    sessionInstance.webRequest.onHeadersReceived((details: OnHeadersReceivedListenerDetails, callback: (response: HeadersReceivedResponse) => void) => {
+      const requestId = this.requestKeyFromDetails(details);
+      const requestMeta = requestId ? this.requestMetadataById.get(requestId) : undefined;
+      const tabId = requestMeta?.tabId || this.resolveTabId(details.webContentsId) || null;
+      const operationId = requestMeta?.operationId || (tabId ? this.resolveOperationId(tabId) : null);
+      const responseHeaders = normalizeResponseHeaders(details.responseHeaders);
+      if (requestMeta) {
+        requestMeta.responseStartedAt = Date.now();
+        requestMeta.responseHeaders = responseHeaders;
+      }
+
+      const interception = this.applyHeadersReceivedPolicies({
+        contextId: this.contextId,
+        operationId,
+        tabId,
+        method: requestMeta?.method || details.method || 'GET',
+        url: requestMeta?.url || details.url || '',
+        resourceType: requestMeta?.resourceType || details.resourceType || 'unknown',
+        statusCode: typeof details.statusCode === 'number' ? details.statusCode : null,
+        responseHeaders: details.responseHeaders,
+      });
+
+      callback(interception || {});
+    });
+
+    sessionInstance.webRequest.onBeforeRedirect((details: OnBeforeRedirectListenerDetails) => {
+      const requestId = this.requestKeyFromDetails(details);
+      if (!requestId) return;
+      const requestMeta = this.requestMetadataById.get(requestId);
+      if (!requestMeta) return;
+      requestMeta.responseStartedAt = Date.now();
+      requestMeta.responseHeaders = normalizeResponseHeaders(details.responseHeaders);
     });
 
     sessionInstance.webRequest.onCompleted((details: OnCompletedListenerDetails) => {
@@ -90,7 +291,8 @@ export class BrowserInstrumentation {
         responseSize?: number;
         encodedDataLength?: number;
       };
-      const timingMs = requestMeta ? Date.now() - requestMeta.startedAt : undefined;
+      const completedAt = Date.now();
+      const timingMs = requestMeta ? completedAt - requestMeta.startedAt : undefined;
       if (requestId) this.requestMetadataById.delete(requestId);
       if (requestMeta && requestId && requestMeta.tabId) {
         const byTab = this.requestIdsByTab.get(requestMeta.tabId);
@@ -102,30 +304,41 @@ export class BrowserInstrumentation {
       const effectiveTabId = requestMeta?.tabId || tabId;
       if (!effectiveTabId) return;
 
-      this.pushNetworkEvent(effectiveTabId, {
+      const event: BrowserNetworkEvent = {
         id: generateId('net'),
+        requestId: requestId || generateId('req'),
+        contextId: requestMeta?.contextId || this.contextId,
+        operationId: requestMeta?.operationId ?? null,
         tabId: effectiveTabId,
         method: requestMeta?.method || details.method || 'GET',
         url: requestMeta?.url || details.url || '',
         resourceType: requestMeta?.resourceType || details.resourceType || 'unknown',
         statusCode: typeof details.statusCode === 'number' ? details.statusCode : null,
         status: 'completed',
-        timestamp: Date.now(),
+        timestamp: completedAt,
         durationMs: timingMs,
         startTimestamp: requestMeta?.startedAt,
-        endTimestamp: Date.now(),
+        responseTimestamp: requestMeta?.responseStartedAt,
+        endTimestamp: completedAt,
         fromCache: responseStats.fromCache === true,
         error: typeof details.error === 'string' && details.error ? details.error : undefined,
         responseSize: typeof responseStats.responseSize === 'number' ? responseStats.responseSize : undefined,
         encodedDataLength: typeof responseStats.encodedDataLength === 'number' ? responseStats.encodedDataLength : undefined,
-      });
+        requestHeaders: requestMeta?.requestHeaders,
+        responseHeaders: requestMeta?.responseHeaders,
+        requestBodySize: requestMeta?.uploadSize,
+      };
+
+      this.pushNetworkEvent(effectiveTabId, event);
+      this.recordOperationEvent(event);
     });
 
     sessionInstance.webRequest.onErrorOccurred((details: OnErrorOccurredListenerDetails) => {
       const tabId = this.resolveTabId(details.webContentsId);
       const requestId = this.requestKeyFromDetails(details);
       const requestMeta = requestId ? this.requestMetadataById.get(requestId) : undefined;
-      const timingMs = requestMeta ? Date.now() - requestMeta.startedAt : undefined;
+      const completedAt = Date.now();
+      const timingMs = requestMeta ? completedAt - requestMeta.startedAt : undefined;
       if (requestMeta && requestId) {
         this.requestMetadataById.delete(requestId);
         const byTab = this.requestIdsByTab.get(requestMeta.tabId);
@@ -138,21 +351,55 @@ export class BrowserInstrumentation {
       const effectiveTabId = requestMeta?.tabId || tabId;
       if (!effectiveTabId) return;
 
-      this.pushNetworkEvent(effectiveTabId, {
+      const event: BrowserNetworkEvent = {
         id: generateId('net'),
+        requestId: requestId || generateId('req'),
+        contextId: requestMeta?.contextId || this.contextId,
+        operationId: requestMeta?.operationId ?? null,
         tabId: effectiveTabId,
         method: requestMeta?.method || details.method || 'GET',
         url: requestMeta?.url || details.url || '',
         resourceType: requestMeta?.resourceType || details.resourceType || 'unknown',
         statusCode: null,
         status: 'failed',
-        timestamp: Date.now(),
+        timestamp: completedAt,
         durationMs: timingMs,
         startTimestamp: requestMeta?.startedAt,
-        endTimestamp: Date.now(),
+        responseTimestamp: requestMeta?.responseStartedAt,
+        endTimestamp: completedAt,
+        requestHeaders: requestMeta?.requestHeaders,
+        responseHeaders: requestMeta?.responseHeaders,
+        requestBodySize: requestMeta?.uploadSize,
         error: details.error || 'Request failed',
-      });
+      };
+
+      this.pushNetworkEvent(effectiveTabId, event);
+      this.recordOperationEvent(event);
     });
+  }
+
+  registerNetworkInterceptionPolicy(policy: BrowserNetworkInterceptionPolicy): void {
+    this.interceptionPolicies.set(policy.id, policy);
+  }
+
+  beginOperationNetworkScope(scope: BrowserOperationNetworkScope): void {
+    this.operationScopesById.set(scope.operationId, {
+      ...scope,
+      startedAt: Date.now(),
+      eventIds: [],
+      urls: [],
+      statusCodes: [],
+      requestCount: 0,
+      failedRequestCount: 0,
+    });
+  }
+
+  completeOperationNetworkScope(operationId: string): BrowserOperationNetworkCapture | null {
+    const scope = this.operationScopesById.get(operationId);
+    if (!scope) return null;
+    const capture = summarizeScope(scope);
+    this.operationScopesById.delete(operationId);
+    return capture;
   }
 
   attachTab(tabId: string, webContents: WebContents): void {
@@ -215,5 +462,98 @@ export class BrowserInstrumentation {
 
   private resolveTabId(webContentsId?: number): string | undefined {
     return webContentsId == null ? undefined : this.tabIdByWebContentsId.get(webContentsId);
+  }
+
+  private resolveOperationId(tabId: string): string | null {
+    const candidates = Array.from(this.operationScopesById.values())
+      .filter(scope => scope.contextId === this.contextId);
+    const tabScoped = candidates
+      .filter(scope => scope.tabId === tabId)
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    if (tabScoped) return tabScoped.operationId;
+
+    const mostRecent = candidates
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    return mostRecent?.operationId ?? null;
+  }
+
+  private recordOperationEvent(event: BrowserNetworkEvent): void {
+    if (!event.operationId) return;
+    const scope = this.operationScopesById.get(event.operationId);
+    if (!scope) return;
+    scope.requestCount += 1;
+    if (event.status === 'failed' || (typeof event.statusCode === 'number' && event.statusCode >= 400)) {
+      scope.failedRequestCount += 1;
+    }
+    pushUnique(scope.eventIds, event.id, MAX_OPERATION_EVENT_IDS);
+    pushUnique(scope.urls, event.url, MAX_OPERATION_URLS);
+    if (typeof event.statusCode === 'number') {
+      if (!scope.statusCodes.includes(event.statusCode)) {
+        scope.statusCodes.push(event.statusCode);
+        if (scope.statusCodes.length > MAX_OPERATION_STATUS_CODES) {
+          scope.statusCodes.splice(0, scope.statusCodes.length - MAX_OPERATION_STATUS_CODES);
+        }
+      }
+    }
+  }
+
+  private buildInterceptionContext(input: BrowserNetworkInterceptionContext): BrowserNetworkInterceptionContext {
+    return { ...input };
+  }
+
+  private applyBeforeRequestPolicies(
+    input: BrowserNetworkInterceptionContext,
+  ): CallbackResponse | null {
+    let response: CallbackResponse | undefined;
+    for (const policy of this.interceptionPolicies.values()) {
+      const context = this.buildInterceptionContext(input);
+      if (policy.matches && !policy.matches(context)) continue;
+      const result = policy.onBeforeRequest?.(context);
+      if (!result) continue;
+      response = {
+        cancel: result.cancel ?? response?.cancel ?? false,
+        redirectURL: result.redirectURL ?? response?.redirectURL,
+      };
+    }
+    return response || null;
+  }
+
+  private applyBeforeSendHeadersPolicies(
+    input: BrowserNetworkInterceptionContext,
+    requestHeaders: Record<string, string | string[]>,
+  ): BeforeSendResponse | null {
+    let nextHeaders = { ...requestHeaders };
+    let changed = false;
+    for (const policy of this.interceptionPolicies.values()) {
+      const context = this.buildInterceptionContext(input);
+      if (policy.matches && !policy.matches(context)) continue;
+      const result = policy.onBeforeSendHeaders?.(context);
+      if (!result?.requestHeaders) continue;
+      nextHeaders = { ...nextHeaders, ...result.requestHeaders };
+      changed = true;
+    }
+
+    return changed ? { cancel: false, requestHeaders: nextHeaders } : null;
+  }
+
+  private applyHeadersReceivedPolicies(
+    input: BrowserNetworkInterceptionContext,
+  ): HeadersReceivedResponse | null {
+    let nextHeaders = input.responseHeaders ? { ...input.responseHeaders } : undefined;
+    let changed = false;
+    for (const policy of this.interceptionPolicies.values()) {
+      const context = this.buildInterceptionContext(input);
+      if (policy.matches && !policy.matches(context)) continue;
+      const result = policy.onHeadersReceived?.(context);
+      if (!result?.responseHeaders) continue;
+      nextHeaders = {
+        ...(nextHeaders || {}),
+        ...result.responseHeaders,
+      };
+      changed = true;
+    }
+
+    if (!changed) return null;
+    return { responseHeaders: normalizeResponseHeadersForCallback(nextHeaders) };
   }
 }

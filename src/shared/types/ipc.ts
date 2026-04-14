@@ -3,9 +3,11 @@ import { AppEventType } from './events';
 import { PhysicalWindowRole } from './windowRoles';
 import { TerminalSessionInfo } from './terminal';
 import { BrowserState, BrowserHistoryEntry, BrowserNavigationState, TabInfo, BookmarkEntry, ExtensionInfo, BrowserSettings, BrowserDownloadState, BrowserAuthDiagnostics } from './browser';
+import { BrowserOperationLedgerEntry } from './browserOperationLedger';
 import { BrowserActionableElement, BrowserConsoleEvent, BrowserFinding, BrowserFormModel, BrowserNetworkEvent, BrowserSiteStrategy, BrowserSnapshot, BrowserSurfaceEvalFixture, BrowserTaskMemory } from './browserIntelligence';
 import { SurfaceActionInput, SurfaceActionRecord, SurfaceActionKind } from '../actions/surfaceActionTypes';
 import { AgentInvocationOptions, TaskMemoryRecord } from './model';
+import { DocumentImportRequest, DocumentInvocationAttachment } from './attachments';
 
 export const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -19,6 +21,7 @@ export const IPC_CHANNELS = {
   SET_ACTIVE_TASK: 'workspace:set-active-task',
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
   ADD_LOG: 'workspace:add-log',
+  ATTACHMENTS_IMPORT_DOCUMENTS: 'attachments:import-documents',
 
   // Execution split control (replaces old layout channels)
   APPLY_EXECUTION_PRESET: 'workspace:apply-execution-preset',
@@ -46,6 +49,7 @@ export const IPC_CHANNELS = {
   BROWSER_GET_FORM_MODEL: 'browser:get-form-model',
   BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
   BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
+  BROWSER_GET_OPERATION_LEDGER: 'browser:get-operation-ledger',
   BROWSER_RECORD_FINDING: 'browser:record-finding',
   BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
   BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',
@@ -130,6 +134,10 @@ export interface WorkspaceAPI {
 
   addLog(level: LogLevel, source: LogSource, message: string, taskId?: string): Promise<void>;
 
+  attachments: {
+    importDocuments(taskId: string, documents: DocumentImportRequest[]): Promise<DocumentInvocationAttachment[]>;
+  };
+
   // Execution split control
   applyExecutionPreset(preset: ExecutionLayoutPreset): Promise<void>;
   setSplitRatio(ratio: number): Promise<void>;
@@ -162,6 +170,7 @@ export interface WorkspaceAPI {
     getFormModel(tabId?: string): Promise<BrowserFormModel[]>;
     getConsoleEvents(tabId?: string, since?: number): Promise<BrowserConsoleEvent[]>;
     getNetworkEvents(tabId?: string, since?: number): Promise<BrowserNetworkEvent[]>;
+    getOperationLedger(limit?: number): Promise<BrowserOperationLedgerEntry[]>;
     recordFinding(input: { taskId: string; tabId?: string; title: string; summary: string; severity?: BrowserFinding['severity']; evidence?: string[]; snapshotId?: string | null }): Promise<BrowserFinding>;
     getTaskMemory(taskId: string): Promise<BrowserTaskMemory>;
     getSiteStrategy(origin: string): Promise<BrowserSiteStrategy | null>;

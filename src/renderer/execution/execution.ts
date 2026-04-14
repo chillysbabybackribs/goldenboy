@@ -138,20 +138,43 @@ function reportBrowserBounds(): void {
 }
 
 // ─── Tabs ───────────────────────────────────────────────────────────────────
-function getTabsRenderKey(
-  tabs: any[],
-  activeTabId: string,
-  splitLeftTabId: string | null,
-  splitRightTabId: string | null,
-): string {
-  const tabKey = tabs.map((tab) => [
+function getTabsDataRenderKey(tabs: any[]): string {
+  return tabs.map((tab) => [
     tab.id,
     tab.navigation?.title || '',
     tab.navigation?.url || '',
     tab.navigation?.favicon || '',
     tab.status || '',
   ].join('|')).join('||');
-  return `${activeTabId}::${splitLeftTabId || ''}::${splitRightTabId || ''}::${tabKey}`;
+}
+
+function getTabsSelectionRenderKey(
+  activeTabId: string,
+  splitLeftTabId: string | null,
+  splitRightTabId: string | null,
+): string {
+  return `${activeTabId}::${splitLeftTabId || ''}::${splitRightTabId || ''}`;
+}
+
+function updateTabSelectionClasses(
+  activeTabId: string,
+  splitLeftTabId: string | null,
+  splitRightTabId: string | null,
+  shouldPlayShimmer: boolean,
+): void {
+  const tabElements = tabList.querySelectorAll('.browser-tab');
+  for (const node of tabElements) {
+    const tabEl = node as HTMLElement;
+    const tabId = tabEl.dataset.tabId || '';
+    const isActive = tabId === activeTabId;
+    const isSplitLeft = tabId === splitLeftTabId;
+    const isSplitRight = tabId === splitRightTabId;
+    tabEl.classList.toggle('active', isActive);
+    tabEl.classList.toggle('split-left', isSplitLeft);
+    tabEl.classList.toggle('split-right', isSplitRight);
+    tabEl.classList.toggle('split-active-side', isActive && (isSplitLeft || isSplitRight));
+    tabEl.classList.toggle('tab-shimmer-on', isActive && shouldPlayShimmer);
+  }
 }
 
 function renderTabs(
@@ -162,8 +185,10 @@ function renderTabs(
 ): void {
   cachedTabsForOverflow = tabs;
   cachedActiveTabId = activeTabId;
-  const tabsKey = getTabsRenderKey(tabs, activeTabId, splitLeftTabId, splitRightTabId);
-  const shouldRender = tabsKey !== lastRenderedTabsKey;
+  const tabsDataKey = getTabsDataRenderKey(tabs);
+  const selectionKey = getTabsSelectionRenderKey(activeTabId, splitLeftTabId, splitRightTabId);
+  const shouldRender = tabsDataKey !== lastRenderedTabsDataKey;
+  const shouldUpdateSelection = shouldRender || selectionKey !== lastRenderedTabsSelectionKey;
   const shouldScrollActiveTab = activeTabId !== lastRenderedActiveTabId || tabs.length !== lastRenderedTabCount;
   const shouldPlayShimmer = activeTabId !== lastShimmeredTabId;
 
@@ -192,20 +217,37 @@ function renderTabs(
       </div>`;
     }).join('');
 
-    lastRenderedTabsKey = tabsKey;
-    lastRenderedActiveTabId = activeTabId;
+    lastRenderedTabsDataKey = tabsDataKey;
     lastRenderedTabCount = tabs.length;
+  } else if (shouldUpdateSelection) {
+    updateTabSelectionClasses(activeTabId, splitLeftTabId, splitRightTabId, shouldPlayShimmer);
+  }
+
+  if (shouldUpdateSelection) {
+    lastRenderedTabsSelectionKey = selectionKey;
+    lastRenderedActiveTabId = activeTabId;
     lastShimmeredTabId = activeTabId;
   }
 
+  const needsLayoutPass = shouldRender || shouldScrollActiveTab || btnNewTab.parentElement !== tabList;
+  const shouldRefreshOverflowDropdown = overflowOpen && (shouldRender || shouldUpdateSelection);
+  if (!needsLayoutPass && !shouldRefreshOverflowDropdown) return;
+
   requestAnimationFrame(() => {
-    btnNewTab.style.display = 'inline-flex';
-    tabList.append(btnNewTab);
+    if (btnNewTab.parentElement !== tabList) {
+      btnNewTab.style.display = 'inline-flex';
+      tabList.append(btnNewTab);
+    }
     if (shouldScrollActiveTab) {
       const activeTab = tabList.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
       activeTab?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
     }
-    updateTabOverflow();
+    if (needsLayoutPass) {
+      updateTabOverflow();
+    }
+    if (shouldRefreshOverflowDropdown) {
+      renderTabOverflowDropdown();
+    }
   });
 }
 
@@ -271,13 +313,21 @@ tabContextMenu.addEventListener('click', (e: Event) => {
   }
 
   if (action === 'split-tab') {
-    void workspaceAPI?.browser.splitTab(activeContextTabId);
+    void workspaceAPI?.actions.submit({
+      target: 'browser',
+      kind: 'browser.split-tab',
+      payload: { tabId: activeContextTabId },
+    });
     hideTabContextMenu();
     return;
   }
 
   if (action === 'clear-split-view') {
-    void workspaceAPI?.browser.clearSplitView();
+    void workspaceAPI?.actions.submit({
+      target: 'browser',
+      kind: 'browser.clear-split-view',
+      payload: {},
+    });
     hideTabContextMenu();
     return;
   }
@@ -289,7 +339,8 @@ tabContextMenu.addEventListener('click', (e: Event) => {
 
 let cachedTabsForOverflow: any[] = [];
 let cachedActiveTabId = '';
-let lastRenderedTabsKey = '';
+let lastRenderedTabsDataKey = '';
+let lastRenderedTabsSelectionKey = '';
 let lastRenderedActiveTabId = '';
 let lastRenderedTabCount = 0;
 

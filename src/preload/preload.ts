@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AgentInvocationOptions } from '../shared/types/model';
+import type { DocumentImportRequest } from '../shared/types/attachments';
+import type { BrowserOperationLedgerEntry } from '../shared/types/browserOperationLedger';
 
 const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -13,6 +15,7 @@ const IPC_CHANNELS = {
   SET_ACTIVE_TASK: 'workspace:set-active-task',
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
   ADD_LOG: 'workspace:add-log',
+  ATTACHMENTS_IMPORT_DOCUMENTS: 'attachments:import-documents',
 
   APPLY_EXECUTION_PRESET: 'workspace:apply-execution-preset',
   SET_SPLIT_RATIO: 'workspace:set-split-ratio',
@@ -37,6 +40,7 @@ const IPC_CHANNELS = {
   BROWSER_GET_FORM_MODEL: 'browser:get-form-model',
   BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
   BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
+  BROWSER_GET_OPERATION_LEDGER: 'browser:get-operation-ledger',
   BROWSER_RECORD_FINDING: 'browser:record-finding',
   BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
   BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',
@@ -122,6 +126,12 @@ const api = {
     return ipcRenderer.invoke(IPC_CHANNELS.ADD_LOG, level, source, message, taskId);
   },
 
+  attachments: {
+    importDocuments(taskId: string, documents: DocumentImportRequest[]) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_IMPORT_DOCUMENTS, taskId, documents);
+    },
+  },
+
   // Execution split control
   applyExecutionPreset(preset: string) {
     return ipcRenderer.invoke(IPC_CHANNELS.APPLY_EXECUTION_PRESET, preset);
@@ -198,6 +208,7 @@ const api = {
     getFormModel(tabId?: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_FORM_MODEL, tabId); },
     getConsoleEvents(tabId?: string, since?: number) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_CONSOLE_EVENTS, tabId, since); },
     getNetworkEvents(tabId?: string, since?: number) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_NETWORK_EVENTS, tabId, since); },
+    getOperationLedger(limit?: number): Promise<BrowserOperationLedgerEntry[]> { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_OPERATION_LEDGER, limit); },
     recordFinding(input: any) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_RECORD_FINDING, input); },
     getTaskMemory(taskId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_TASK_MEMORY, taskId); },
     getSiteStrategy(origin: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_SITE_STRATEGY, origin); },

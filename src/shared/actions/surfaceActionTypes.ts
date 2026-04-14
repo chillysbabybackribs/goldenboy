@@ -23,6 +23,8 @@ export type BrowserActionKind =
   | 'browser.create-tab'
   | 'browser.close-tab'
   | 'browser.activate-tab'
+  | 'browser.split-tab'
+  | 'browser.clear-split-view'
   | 'browser.click'
   | 'browser.type'
   | 'browser.dismiss-foreground-ui'
@@ -52,6 +54,7 @@ export type BrowserCreateTabPayload = {
 };
 export type BrowserCloseTabPayload = { tabId: string };
 export type BrowserActivateTabPayload = { tabId: string };
+export type BrowserSplitTabPayload = { tabId?: string };
 export type BrowserEmptyPayload = Record<string, never>;
 export type BrowserClickPayload = { selector: string; tabId?: string };
 export type BrowserTypePayload = { selector: string; text: string; tabId?: string };
@@ -73,6 +76,8 @@ export type SurfaceActionPayloadMap = {
   'browser.create-tab': BrowserCreateTabPayload;
   'browser.close-tab': BrowserCloseTabPayload;
   'browser.activate-tab': BrowserActivateTabPayload;
+  'browser.split-tab': BrowserSplitTabPayload;
+  'browser.clear-split-view': BrowserEmptyPayload;
   'browser.click': BrowserClickPayload;
   'browser.type': BrowserTypePayload;
   'browser.dismiss-foreground-ui': BrowserSemanticTargetPayload;
@@ -150,6 +155,11 @@ export function summarizePayload(kind: SurfaceActionKind, payload: Record<string
     }
     case 'browser.close-tab': return `Close tab ${(payload as BrowserCloseTabPayload).tabId}`;
     case 'browser.activate-tab': return `Switch to tab ${(payload as BrowserActivateTabPayload).tabId}`;
+    case 'browser.split-tab': {
+      const tabId = (payload as BrowserSplitTabPayload).tabId;
+      return tabId ? `Split tab ${tabId}` : 'Split active tab';
+    }
+    case 'browser.clear-split-view': return 'Clear split view';
     case 'browser.click': return `Click: ${(payload as BrowserClickPayload).selector}`;
     case 'browser.type': return `Type in: ${(payload as BrowserTypePayload).selector}`;
     case 'browser.dismiss-foreground-ui': return 'Dismiss foreground UI';
@@ -181,6 +191,7 @@ export function summarizePayload(kind: SurfaceActionKind, payload: Record<string
 export const BROWSER_ACTION_KINDS: BrowserActionKind[] = [
   'browser.navigate', 'browser.back', 'browser.forward', 'browser.reload', 'browser.stop',
   'browser.create-tab', 'browser.close-tab', 'browser.activate-tab',
+  'browser.split-tab', 'browser.clear-split-view',
   'browser.click', 'browser.type',
   'browser.dismiss-foreground-ui', 'browser.return-to-primary-surface',
   'browser.click-ranked-action', 'browser.wait-for-overlay-state',

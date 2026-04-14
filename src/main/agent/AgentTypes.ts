@@ -7,6 +7,11 @@ export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'ca
 export type AgentToolStatus = 'running' | 'completed' | 'failed';
 
 export type AgentToolName =
+  | 'attachments.list'
+  | 'attachments.search'
+  | 'attachments.read_chunk'
+  | 'attachments.read_document'
+  | 'attachments.stats'
   | 'runtime.request_tool_pack'
   | 'runtime.list_tool_packs'
   | 'runtime.haiku_browser_session'
@@ -122,6 +127,7 @@ export type AgentToolContext = {
   agentId: string;
   mode: AgentMode;
   taskId?: string;
+  contextId?: string;
   toolNames?: string[];
   onProgress?: (status: string) => void;
 };

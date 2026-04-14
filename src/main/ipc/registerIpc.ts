@@ -10,15 +10,18 @@ import { TaskRecord, ExecutionLayoutPreset, TaskStatus, LogLevel, LogSource } fr
 import { ActionType } from '../state/actions';
 import { terminalService } from '../terminal/TerminalService';
 import { browserService } from '../browser/BrowserService';
+import { getRecentBrowserOperationLedgerEntries } from '../browser/browserOperationLedger';
 import { surfaceActionRouter } from '../actions/SurfaceActionRouter';
 import { SurfaceActionInput } from '../../shared/actions/surfaceActionTypes';
 import { DiskCache } from '../context/diskCache';
 import { PageExtractor } from '../context/pageExtractor';
 import { agentModelService } from '../agent/AgentModelService';
 import { agentToolExecutor } from '../agent/AgentToolExecutor';
+import { documentAttachmentStore } from '../attachments/DocumentAttachmentStore';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import * as path from 'path';
 import * as os from 'os';
+import type { DocumentImportRequest } from '../../shared/types/attachments';
 
 type TrustedIpcEvent = IpcMainEvent | IpcMainInvokeEvent;
 
@@ -89,6 +92,10 @@ export function registerIpc(): void {
     return { id: task.id, title: task.title };
   });
 
+  safeHandle(IPC_CHANNELS.ATTACHMENTS_IMPORT_DOCUMENTS, async (_event, taskId: string, documents: DocumentImportRequest[]) => {
+    return documentAttachmentStore.importDocuments(taskId, documents);
+  });
+
   safeHandle(IPC_CHANNELS.DELETE_TASK, (_event, taskId: string) => {
     const state = appStateStore.getState();
     const task = state.tasks.find((entry) => entry.id === taskId);
@@ -96,6 +103,7 @@ export function registerIpc(): void {
     if (task.status === 'running') {
       throw new Error('Cannot delete a running chat');
     }
+    documentAttachmentStore.clearTask(taskId);
     taskMemoryStore.clearTask(taskId);
     appStateStore.dispatch({ type: ActionType.DELETE_TASK, taskId });
   });
@@ -230,6 +238,9 @@ export function registerIpc(): void {
   });
   safeHandle(IPC_CHANNELS.BROWSER_GET_NETWORK_EVENTS, (_event, tabId?: string, since?: number) => {
     return browserService.getNetworkEvents(tabId, since);
+  });
+  safeHandle(IPC_CHANNELS.BROWSER_GET_OPERATION_LEDGER, (_event, limit?: number) => {
+    return getRecentBrowserOperationLedgerEntries(limit);
   });
   safeHandle(IPC_CHANNELS.BROWSER_RECORD_FINDING, (_event, input: { taskId: string; tabId?: string; title: string; summary: string; severity?: 'info' | 'warning' | 'critical'; evidence?: string[]; snapshotId?: string | null }) => {
     return browserService.recordTabFinding(input);

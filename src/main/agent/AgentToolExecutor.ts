@@ -2,6 +2,7 @@ import { AgentToolContext, AgentToolDefinition, AgentToolName, AgentToolResult }
 import { agentRunStore } from './AgentRunStore';
 import { agentCache, makeToolCacheKey } from './AgentCache';
 import { validateToolResult } from './ConstraintValidator';
+import { runWithBrowserOperationContext } from '../browser/browserOperationContext';
 
 const CACHEABLE_TOOLS = new Set<AgentToolName>([
   'browser.get_state',
@@ -94,11 +95,20 @@ export class AgentToolExecutor {
     });
 
     try {
-      const result = await withTimeout(
+      const executeTool = () => withTimeout(
         tool.execute(input, context),
         timeoutForTool(name),
         `Timed out while running tool ${name}`,
       );
+      const result = name.startsWith('browser.')
+        ? await runWithBrowserOperationContext({
+            source: 'agent',
+            taskId: context.taskId ?? null,
+            agentId: context.agentId,
+            runId: context.runId,
+            contextId: context.contextId ?? null,
+          }, executeTool)
+        : await executeTool();
 
       // Post-execution deterministic constraint validation
       const validation = validateToolResult(name, result, input);

@@ -8,6 +8,12 @@ import { generateId } from '../../../shared/utils/ids';
 import { geminiSidecar } from '../GeminiSidecar';
 import { WebIntentInstruction, WebIntentVM } from '../../browser/WebIntentVM';
 import { agentCache } from '../AgentCache';
+import {
+  BrowserOperationKind,
+  BrowserOperationPayloadMap,
+  BrowserOperationResult,
+  executeBrowserOperation,
+} from '../../browser/browserOperations';
 
 const SIDECAR_RANK_TIMEOUT_MS = 1200;
 const SIDECAR_JUDGE_TIMEOUT_MS = 1200;
@@ -62,6 +68,16 @@ function requireBrowserCreated(): void {
   if (!browserService.isCreated()) {
     throw new Error('Browser surface is not initialized yet. Open the execution window before using browser tools.');
   }
+}
+
+async function runBrowserOperation<K extends BrowserOperationKind>(
+  kind: K,
+  payload: BrowserOperationPayloadMap[K],
+  input?: { invalidateCache?: boolean },
+): Promise<BrowserOperationResult> {
+  const result = await executeBrowserOperation({ kind, payload });
+  if (input?.invalidateCache) invalidateBrowserCaches();
+  return result;
 }
 
 function includesText(haystack: string, needle: string): boolean {
@@ -249,8 +265,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
   const pageExtractor = new PageExtractor((expression, tabId) => browserService.executeInPage(expression, tabId));
   const webIntentVm = new WebIntentVM({
     async navigate(url, tabId) {
-      if (tabId) browserService.activateTab(tabId);
-      browserService.navigate(url);
+      if (tabId) {
+        await runBrowserOperation('browser.activate-tab', { tabId });
+      }
+      await runBrowserOperation('browser.navigate', { url });
     },
     async waitForSettled(timeoutMs = 7000) {
       await waitForBrowserSettled(timeoutMs);
@@ -272,34 +290,47 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       };
     },
     async getDialogs(tabId) {
-      return browserService.getPendingDialogs(tabId);
+      const result = await runBrowserOperation('browser.get-dialogs', { tabId });
+      return (result.data.dialogs as ReturnType<typeof browserService.getPendingDialogs>) || [];
     },
     async acceptDialog(input) {
-      return browserService.acceptDialog(input);
+      const result = await runBrowserOperation('browser.accept-dialog', input, { invalidateCache: true });
+      return result.data.result as Awaited<ReturnType<typeof browserService.acceptDialog>>;
     },
     async dismissDialog(input) {
-      return browserService.dismissDialog(input);
+      const result = await runBrowserOperation('browser.dismiss-dialog', input, { invalidateCache: true });
+      return result.data.result as Awaited<ReturnType<typeof browserService.dismissDialog>>;
     },
     async getActionableElements(tabId) {
-      return browserService.getActionableElements(tabId);
+      const result = await runBrowserOperation('browser.get-actionable-elements', { tabId });
+      return (result.data.elements as Awaited<ReturnType<typeof browserService.getActionableElements>>) || [];
     },
     async getFormModel(tabId) {
       return browserService.getFormModel(tabId);
     },
     async click(selector, tabId) {
-      return browserService.clickElement(selector, tabId);
+      const result = await runBrowserOperation('browser.click', { selector, tabId }, { invalidateCache: true });
+      return result.data.result as Awaited<ReturnType<typeof browserService.clickElement>>;
     },
     async type(selector, text, tabId) {
-      return browserService.typeInElement(selector, text, tabId);
+      const result = await runBrowserOperation('browser.type', { selector, text, tabId }, { invalidateCache: true });
+      return result.data.result as Awaited<ReturnType<typeof browserService.typeInElement>>;
     },
     async upload(selector, filePath, tabId) {
-      return browserService.uploadFileToElement(selector, filePath, tabId);
+      const result = await runBrowserOperation('browser.upload-file', { selector, filePath, tabId }, { invalidateCache: true });
+      return result.data.result as Awaited<ReturnType<typeof browserService.uploadFileToElement>>;
     },
     async drag(sourceSelector, targetSelector, tabId) {
-      return browserService.dragElement(sourceSelector, targetSelector, tabId);
+      const result = await runBrowserOperation(
+        'browser.drag',
+        { sourceSelector, targetSelector, tabId },
+        { invalidateCache: true },
+      );
+      return result.data.result as Awaited<ReturnType<typeof browserService.dragElement>>;
     },
     async hover(selector, tabId) {
-      return browserService.hoverElement(selector, tabId);
+      const result = await runBrowserOperation('browser.hover', { selector, tabId }, { invalidateCache: true });
+      return result.data.result as Awaited<ReturnType<typeof browserService.hoverElement>>;
     },
     async executeInPage(expression, tabId) {
       return browserService.executeInPage(expression, tabId);
@@ -312,7 +343,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       description: 'Return current browser state.',
       inputSchema: { type: 'object' },
       async execute() {
-        return { summary: 'Read browser state', data: { state: browserService.getState() } };
+        return runBrowserOperation('browser.get-state', {});
       },
     },
     {
@@ -320,7 +351,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       description: 'Return open browser tabs.',
       inputSchema: { type: 'object' },
       async execute() {
-        return { summary: 'Read browser tabs', data: { tabs: browserService.getTabs() } };
+        return runBrowserOperation('browser.get-tabs', {});
       },
     },
     {
@@ -330,18 +361,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const url = requireString(objectInput(input), 'url');
-        browserService.navigate(url);
-        await waitForBrowserSettled();
-        invalidateBrowserCaches();
-        const state = browserService.getState();
-        return {
-          summary: `Navigated to ${state.navigation.url || url}`,
-          data: {
-            url: state.navigation.url || url,
-            title: state.navigation.title,
-            isLoading: state.navigation.isLoading,
-          },
-        };
+        return runBrowserOperation('browser.navigate', { url }, { invalidateCache: true });
       },
     },
     {
@@ -357,20 +377,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const query = requireString(objectInput(input), 'query');
-        browserService.navigate(query);
-        await waitForBrowserSettled();
-        invalidateBrowserCaches();
-        const state = browserService.getState();
+        const result = await runBrowserOperation('browser.search-web', { query }, { invalidateCache: true });
         logBrowserCache(`Opened web search for "${query}"`);
-        return {
-          summary: `Searched web for "${query}"`,
-          data: {
-            query,
-            url: state.navigation.url,
-            title: state.navigation.title,
-            isLoading: state.navigation.isLoading,
-          },
-        };
+        return result;
       },
     },
     {
@@ -404,8 +413,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         };
 
         progress('opening search results');
-        browserService.navigate(query);
-        await waitForBrowserSettled(10_000);
+        await runBrowserOperation('browser.search-web', { query }, { invalidateCache: true });
 
         const searchState = browserService.getState();
         const searchTabId = searchState.activeTabId;
@@ -448,14 +456,16 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const targets = rankedSearchResults.slice(0, maxPages);
         for (const target of targets) {
           progress(`opening result ${target.index}: ${compactText(target.title, 80)}`);
-          const tab = browserService.createTab(target.url);
+          const createTabResult = await runBrowserOperation('browser.create-tab', { url: target.url });
+          const tabId = typeof createTabResult.data.tabId === 'string' ? createTabResult.data.tabId : '';
+          if (!tabId) throw new Error(`Browser create-tab did not return a tab id for ${target.url}`);
           await waitForBrowserSettled(10_000);
           const [page, evidence] = await Promise.all([
-            cachePageForTab(pageExtractor, tab.id),
-            browserService.extractPageEvidence(tab.id),
+            cachePageForTab(pageExtractor, tabId),
+            browserService.extractPageEvidence(tabId),
           ]);
           const relevantChunks = pageKnowledgeStore.answerFromCache(query, {
-            tabId: tab.id,
+            tabId,
             limit: 4,
           });
           const matchSnippets = relevantChunks.matches.map(match => match.snippet);
@@ -488,7 +498,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
               : `result ${target.index} reviewed; continuing`,
           );
           openedPages.push({
-            tabId: tab.id,
+            tabId,
             resultIndex: target.index,
             title: evidence?.title || page.title || target.title,
             url: evidence?.url || page.url || target.url,
@@ -529,7 +539,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         }
 
         progress(stoppedEarly ? 'stopping after sufficient evidence' : 'research pass complete');
-        browserService.activateTab(searchTabId);
+        await runBrowserOperation('browser.activate-tab', { tabId: searchTabId }, { invalidateCache: true });
         invalidateBrowserCaches();
         logBrowserCache(`Research search "${query}" parsed ${searchResults.length} results, opened ${openedPages.length} page(s), stoppedEarly=${stoppedEarly}`);
 
@@ -579,10 +589,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object' },
       async execute() {
         requireBrowserCreated();
-        browserService.goBack();
+        const result = await runBrowserOperation('browser.back', {}, { invalidateCache: true });
         await waitForBrowserSettled();
-        invalidateBrowserCaches();
-        return { summary: 'Navigated back', data: { navigation: browserService.getState().navigation } };
+        return result;
       },
     },
     {
@@ -591,10 +600,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object' },
       async execute() {
         requireBrowserCreated();
-        browserService.goForward();
+        const result = await runBrowserOperation('browser.forward', {}, { invalidateCache: true });
         await waitForBrowserSettled();
-        invalidateBrowserCaches();
-        return { summary: 'Navigated forward', data: { navigation: browserService.getState().navigation } };
+        return result;
       },
     },
     {
@@ -603,10 +611,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object' },
       async execute() {
         requireBrowserCreated();
-        browserService.reload();
+        const result = await runBrowserOperation('browser.reload', {}, { invalidateCache: true });
         await waitForBrowserSettled();
-        invalidateBrowserCaches();
-        return { summary: 'Reloaded browser tab', data: { navigation: browserService.getState().navigation } };
+        return result;
       },
     },
     {
@@ -615,13 +622,13 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
       async execute(input) {
         requireBrowserCreated();
-        const tab = browserService.createTab(optionalString(objectInput(input), 'url'));
+        const url = optionalString(objectInput(input), 'url');
+        const result = await runBrowserOperation('browser.create-tab', { url }, { invalidateCache: true });
         await waitForBrowserSettled();
-        invalidateBrowserCaches();
         return {
-          summary: `Created tab ${tab.id}`,
+          summary: result.summary,
           data: {
-            tab,
+            ...result.data,
             activeTabId: browserService.getState().activeTabId,
             tabs: browserService.getTabs(),
           },
@@ -647,9 +654,8 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         if (ids.length === 0) throw new Error('Expected tabId or tabIds for browser.close_tab.');
 
         for (const tabId of ids) {
-          browserService.closeTab(tabId);
+          await runBrowserOperation('browser.close-tab', { tabId }, { invalidateCache: true });
         }
-        invalidateBrowserCaches();
         return {
           summary: `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`,
           data: {
@@ -667,12 +673,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const tabId = requireString(objectInput(input), 'tabId');
-        browserService.activateTab(tabId);
-        invalidateBrowserCaches();
+        const result = await runBrowserOperation('browser.activate-tab', { tabId }, { invalidateCache: true });
         return {
-          summary: `Activated tab ${tabId}`,
+          summary: result.summary,
           data: {
-            tabId,
+            ...result.data,
             activeTabId: browserService.getState().activeTabId,
             tabs: browserService.getTabs(),
           },
@@ -687,9 +692,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
-        const result = await browserService.clickElement(selector, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return { summary: `Clicked ${selector}`, data: { result } };
+        return runBrowserOperation(
+          'browser.click',
+          { selector, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -701,9 +708,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const text = requireString(obj, 'text');
-        const result = await browserService.typeInElement(selector, text, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return { summary: `Typed into ${selector}`, data: { result } };
+        return runBrowserOperation(
+          'browser.type',
+          { selector, text, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -715,14 +724,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const filePath = requireString(obj, 'filePath');
-        const result = await browserService.uploadFileToElement(selector, filePath, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return {
-          summary: result.uploaded
-            ? `Attached ${result.fileName || result.filePath || filePath} to ${selector}`
-            : `Upload failed for ${selector}: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        return runBrowserOperation(
+          'browser.upload-file',
+          { selector, filePath, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -733,14 +739,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
-        const result = await browserService.downloadLink(selector, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return {
-          summary: result.started
-            ? `Started browser download from ${result.href || selector}`
-            : `Download link failed for ${selector}: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        return runBrowserOperation(
+          'browser.download-link',
+          { selector, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -751,14 +754,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const url = requireString(obj, 'url');
-        const result = await browserService.downloadUrl(url, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return {
-          summary: result.started
-            ? `Started browser download for ${url}`
-            : `Download URL failed for ${url}: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        return runBrowserOperation(
+          'browser.download-url',
+          { url, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -775,19 +775,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const state = optionalString(obj, 'state');
-        const filename = optionalString(obj, 'filename');
-        const tabId = optionalString(obj, 'tabId');
-        const downloads = browserService.getDownloads()
-          .filter(download => !state || download.state === state)
-          .filter(download => !filename || download.filename === filename)
-          .filter(download => !tabId || download.sourceTabId === tabId);
-        return {
-          summary: downloads.length === 0
-            ? 'No browser downloads matched'
-            : `Found ${downloads.length} browser download${downloads.length === 1 ? '' : 's'}`,
-          data: { downloads },
-        };
+        return runBrowserOperation('browser.get-downloads', {
+          state: optionalString(obj, 'state'),
+          filename: optionalString(obj, 'filename'),
+          tabId: optionalString(obj, 'tabId'),
+        });
       },
     },
     {
@@ -805,20 +797,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const result = await browserService.waitForDownload({
+        return runBrowserOperation('browser.wait-for-download', {
           downloadId: optionalString(obj, 'downloadId'),
           filename: optionalString(obj, 'filename'),
           tabId: optionalString(obj, 'tabId'),
           timeoutMs: optionalNumber(obj, 'timeoutMs', 15_000),
         });
-        return {
-          summary: result.timedOut
-            ? 'Timed out waiting for browser download'
-            : result.completed
-              ? `Browser download completed: ${result.download?.filename || 'unknown file'}`
-              : `Browser download settled without completion: ${result.download?.state || 'unknown state'}`,
-          data: { result },
-        };
       },
     },
     {
@@ -838,14 +822,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const sourceSelector = requireString(obj, 'sourceSelector');
         const targetSelector = requireString(obj, 'targetSelector');
-        const result = await browserService.dragElement(sourceSelector, targetSelector, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return {
-          summary: result.dragged
-            ? `Dragged ${sourceSelector} to ${targetSelector}`
-            : `Drag failed from ${sourceSelector} to ${targetSelector}: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        return runBrowserOperation(
+          'browser.drag',
+          { sourceSelector, targetSelector, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -863,14 +844,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
-        const result = await browserService.hoverElement(selector, optionalString(obj, 'tabId'));
-        invalidateBrowserCaches();
-        return {
-          summary: result.hovered
-            ? `Hovered ${selector}`
-            : `Hover failed for ${selector}: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        return runBrowserOperation(
+          'browser.hover',
+          { selector, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
       },
     },
     {
@@ -888,13 +866,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
-        const result = await browserService.hitTestElement(selector, optionalString(obj, 'tabId'));
-        return {
-          summary: result.intercepted
-            ? `Pointer to ${selector} is intercepted by ${result.hitSelector || result.hitTagName || 'another element'}`
-            : `Pointer to ${selector} reaches the target element`,
-          data: { result },
-        };
+        return runBrowserOperation('browser.hit-test', {
+          selector,
+          tabId: optionalString(obj, 'tabId'),
+        });
       },
     },
     {
@@ -1082,26 +1057,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const tabId = optionalString(obj, 'tabId');
-        const textLimit = Math.min(optionalNumber(obj, 'textLimit', 3000), 6000);
-        const elementLimit = Math.min(optionalNumber(obj, 'elementLimit', 30), 80);
-        const [metadata, text, snapshot, forms] = await Promise.all([
-          browserService.getPageMetadata(tabId),
-          browserService.getPageText(textLimit),
-          browserService.captureTabSnapshot(tabId),
-          browserService.getFormModel(tabId),
-        ]);
-        return {
-          summary: `Inspected page ${snapshot.title || snapshot.url}`,
-          data: {
-            navigation: browserService.getState().navigation,
-            metadata,
-            text,
-            viewport: snapshot.viewport,
-            forms,
-            actionableElements: snapshot.actionableElements.slice(0, elementLimit),
-          },
-        };
+        return runBrowserOperation('browser.inspect-page', {
+          tabId: optionalString(obj, 'tabId'),
+          textLimit: Math.min(optionalNumber(obj, 'textLimit', 3000), 6000),
+          elementLimit: Math.min(optionalNumber(obj, 'elementLimit', 30), 80),
+        });
       },
     },
     {
@@ -1180,10 +1140,14 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         if (!match?.ref?.selector) {
           throw new Error(`No clickable element found for text: ${text}`);
         }
-        const result = await browserService.clickElement(match.ref.selector, tabId);
+        const result = await runBrowserOperation(
+          'browser.click',
+          { selector: match.ref.selector, tabId },
+          { invalidateCache: true },
+        );
         return {
           summary: `Clicked text "${text}"`,
-          data: { result, element: match },
+          data: { result: result.data.result, element: match },
         };
       },
     },
@@ -1345,14 +1309,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
       async execute(input) {
         requireBrowserCreated();
-        const tabId = optionalString(objectInput(input), 'tabId');
-        const dialogs = browserService.getPendingDialogs(tabId);
-        return {
-          summary: dialogs.length === 0
-            ? 'No pending JavaScript dialogs'
-            : `Found ${dialogs.length} pending JavaScript dialog${dialogs.length === 1 ? '' : 's'}`,
-          data: { dialogs },
-        };
+        return runBrowserOperation('browser.get-dialogs', {
+          tabId: optionalString(objectInput(input), 'tabId'),
+        });
       },
     },
     {
@@ -1369,18 +1328,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const result = await browserService.acceptDialog({
+        return runBrowserOperation('browser.accept-dialog', {
           tabId: optionalString(obj, 'tabId'),
           dialogId: optionalString(obj, 'dialogId'),
           promptText: optionalString(obj, 'promptText'),
-        });
-        invalidateBrowserCaches();
-        return {
-          summary: result.accepted
-            ? `Accepted JavaScript dialog${result.dialog?.message ? `: ${result.dialog.message}` : ''}`
-            : `Accept dialog failed: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        }, { invalidateCache: true });
       },
     },
     {
@@ -1396,17 +1348,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const result = await browserService.dismissDialog({
+        return runBrowserOperation('browser.dismiss-dialog', {
           tabId: optionalString(obj, 'tabId'),
           dialogId: optionalString(obj, 'dialogId'),
-        });
-        invalidateBrowserCaches();
-        return {
-          summary: result.dismissed
-            ? `Dismissed JavaScript dialog${result.dialog?.message ? `: ${result.dialog.message}` : ''}`
-            : `Dismiss dialog failed: ${result.error || 'unknown error'}`,
-          data: { result },
-        };
+        }, { invalidateCache: true });
       },
     },
     {
@@ -1454,8 +1399,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object', properties: { tabId: { type: 'string' } } },
       async execute(input) {
         requireBrowserCreated();
-        const elements = await browserService.getActionableElements(optionalString(objectInput(input), 'tabId'));
-        return { summary: `Found ${elements.length} actionable elements`, data: { elements } };
+        return runBrowserOperation('browser.get-actionable-elements', {
+          tabId: optionalString(objectInput(input), 'tabId'),
+        });
       },
     },
     {
@@ -1464,8 +1410,9 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object', properties: { tabId: { type: 'string' } } },
       async execute(input) {
         requireBrowserCreated();
-        const snapshot = await browserService.captureTabSnapshot(optionalString(objectInput(input), 'tabId'));
-        return { summary: `Captured snapshot ${snapshot.id}`, data: { snapshot } };
+        return runBrowserOperation('browser.capture-snapshot', {
+          tabId: optionalString(objectInput(input), 'tabId'),
+        });
       },
     },
   ];

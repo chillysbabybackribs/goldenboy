@@ -1,5 +1,6 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
-import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID, ProviderId } from '../../shared/types/model.js';
+import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID, ProviderId, InvocationAttachment, ImageInvocationAttachment } from '../../shared/types/model.js';
+import type { DocumentImportRequest, DocumentInvocationAttachment } from '../../shared/types/attachments.js';
 import {
   appendCodexItemProgress as appendCodexItemProgressInternal,
   appendThought as appendThoughtInternal,
@@ -15,6 +16,7 @@ import {
 
 const getWorkspaceAPI = () => (window as any).workspaceAPI as WorkspaceAPI | null;
 const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
+const getAttachmentAPI = () => getWorkspaceAPI()?.attachments ?? null;
 
 // ─── DOM ────────────────────────────────────────────────────────────────────
 
@@ -451,11 +453,13 @@ chatThread.addEventListener('toggle', (event: Event) => {
 }, true);
 
 const chatResizeObserver = new ResizeObserver(() => {
+  if (chatEmptyState.parentNode) return;
   scheduleChatScrollToBottom(false, 4);
 });
 chatResizeObserver.observe(chatThread);
 
 const chatMutationObserver = new MutationObserver(() => {
+  if (chatEmptyState.parentNode) return;
   scheduleChatScrollToBottom(false, 1);
   updateChatScrollControls();
 });
@@ -578,19 +582,31 @@ function shouldShowMemoryEntry(entry: TaskMemoryEntry): boolean {
   return true;
 }
 
-function appendUserMessage(text: string, imageDataUrls?: string[]): void {
-  if (chatEmptyState.parentNode) chatEmptyState.remove();
+type DocumentAttachmentPreview = Pick<DocumentInvocationAttachment, 'name' | 'mediaType' | 'sizeBytes'>
+  & Partial<Pick<DocumentInvocationAttachment, 'id' | 'status' | 'statusDetail' | 'excerpt' | 'chunkCount' | 'tokenEstimate' | 'language'>>;
+
+function formatAttachmentSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return '0 B';
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  if (sizeBytes < 1024 * 1024 * 1024) return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function appendUserTextMessage(text: string): void {
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-msg chat-msg-user';
+  bubble.textContent = text;
+  chatInner.appendChild(bubble);
+}
+
+function appendUserAttachmentMessage(imageDataUrls: string[], documents: DocumentAttachmentPreview[]): void {
+  if (imageDataUrls.length === 0 && documents.length === 0) return;
+
   const el = document.createElement('div');
-  const hasText = Boolean(text.trim());
-  const hasImages = imageDataUrls && imageDataUrls.length > 0;
+  el.className = 'chat-msg chat-msg-user-attachments';
 
-  el.className = 'chat-msg chat-msg-user' + (!hasText && hasImages ? ' chat-msg-user-imgonly' : '');
-
-  if (hasText) {
-    el.textContent = text;
-  }
-
-  if (hasImages) {
+  if (imageDataUrls.length > 0) {
     const imgContainer = document.createElement('div');
     imgContainer.className = 'chat-msg-images';
     for (const url of imageDataUrls) {
@@ -603,8 +619,97 @@ function appendUserMessage(text: string, imageDataUrls?: string[]): void {
     el.appendChild(imgContainer);
   }
 
+  if (documents.length > 0) {
+    const docContainer = document.createElement('div');
+    docContainer.className = 'chat-msg-documents';
+    for (const docAttachment of documents) {
+      const card = document.createElement('div');
+      card.className = 'chat-msg-document';
+
+      const header = document.createElement('div');
+      header.className = 'chat-msg-document-header';
+
+      const icon = document.createElement('span');
+      icon.className = 'chat-msg-document-icon';
+      icon.innerHTML =
+        '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+      const title = document.createElement('span');
+      title.className = 'chat-msg-document-name';
+      title.textContent = docAttachment.name;
+
+      header.append(icon, title);
+
+      const meta = document.createElement('div');
+      meta.className = 'chat-msg-document-meta';
+      const metaParts = [
+        docAttachment.mediaType,
+        formatAttachmentSize(docAttachment.sizeBytes),
+        docAttachment.status,
+        typeof docAttachment.chunkCount === 'number' && docAttachment.chunkCount > 0 ? `${docAttachment.chunkCount} chunks` : '',
+      ].filter((part): part is string => Boolean(part));
+      meta.textContent = metaParts.join(' • ');
+
+      card.append(header, meta);
+
+      if (docAttachment.excerpt?.trim()) {
+        const excerpt = document.createElement('div');
+        excerpt.className = 'chat-msg-document-excerpt';
+        excerpt.textContent = docAttachment.excerpt.trim();
+        card.appendChild(excerpt);
+      } else if (docAttachment.statusDetail?.trim()) {
+        const detail = document.createElement('div');
+        detail.className = 'chat-msg-document-excerpt';
+        detail.textContent = docAttachment.statusDetail.trim();
+        card.appendChild(detail);
+      }
+
+      docContainer.appendChild(card);
+    }
+    el.appendChild(docContainer);
+  }
+
   chatInner.appendChild(el);
+}
+
+function appendUserMessage(text: string, imageDataUrls: string[] = [], documents: DocumentAttachmentPreview[] = []): void {
+  if (chatEmptyState.parentNode) chatEmptyState.remove();
+  const hasText = Boolean(text.trim());
+  if (hasText) appendUserTextMessage(text);
+  appendUserAttachmentMessage(imageDataUrls, documents);
   scheduleChatScrollToBottom(true);
+}
+
+function getAttachmentImageDataUrls(attachments?: InvocationAttachment[]): string[] {
+  if (!attachments?.length) return [];
+  return attachments
+    .filter((attachment): attachment is ImageInvocationAttachment => attachment.type === 'image')
+    .map((attachment) => `data:${attachment.mediaType};base64,${attachment.data}`);
+}
+
+function getAttachmentDocumentPreviews(attachments?: InvocationAttachment[]): DocumentAttachmentPreview[] {
+  if (!attachments?.length) return [];
+  return attachments
+    .filter((attachment): attachment is DocumentInvocationAttachment => attachment.type === 'document')
+    .map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      mediaType: attachment.mediaType,
+      sizeBytes: attachment.sizeBytes,
+      status: attachment.status,
+      statusDetail: attachment.statusDetail,
+      excerpt: attachment.excerpt,
+      chunkCount: attachment.chunkCount,
+      tokenEstimate: attachment.tokenEstimate,
+      language: attachment.language,
+    }));
+}
+
+function getTaskMemoryAttachments(entry: TaskMemoryEntry): InvocationAttachment[] {
+  const attachments = Array.isArray(entry.metadata?.attachments)
+    ? entry.metadata.attachments as InvocationAttachment[]
+    : [];
+  return attachments;
 }
 
 function clearChatThread(): void {
@@ -706,7 +811,10 @@ function replaceWithError(taskId: string, error: string): void {
 }
 
 function appendMemoryEntry(entry: TaskMemoryEntry): void {
-  // History view: only show the final model result, nothing else
+  if (!shouldShowMemoryEntry(entry)) return;
+
+  if (entry.kind === 'user_prompt') return;
+
   if (entry.kind !== 'model_result') return;
 
   if (chatEmptyState.parentNode) chatEmptyState.remove();
@@ -743,9 +851,23 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
   renderedTaskMemoryKey = memoryKey;
   clearChatThread();
 
-  // Show only the last model result entry for completed tasks
-  const lastResult = [...memory.entries].reverse().find(e => e.kind === 'model_result');
-  if (lastResult) appendMemoryEntry(lastResult);
+  const state = (window as any).__lastState;
+  const activeTask = state?.tasks?.find((task: any) => task.id === taskId) || null;
+  const latestUserPrompt = [...memory.entries]
+    .reverse()
+    .find((entry) => entry.kind === 'user_prompt' && shouldShowMemoryEntry(entry));
+
+  if (activeTask?.status === 'running') {
+    createLiveRunCard(
+      taskId,
+      activeTask.owner || 'system',
+      latestUserPrompt?.text?.trim() || undefined,
+    );
+  }
+
+  for (const entry of memory.entries) {
+    appendMemoryEntry(entry);
+  }
 }
 
 // ─── Chat Submission ───────────────────────────────────────────────────────
@@ -771,6 +893,11 @@ function fileToBase64(file: File): Promise<string> {
 
 type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
+function getElectronFilePath(file: File): string | undefined {
+  const candidate = (file as File & { path?: unknown }).path;
+  return typeof candidate === 'string' && candidate.trim() ? candidate : undefined;
+}
+
 function getImageMediaType(file: File): ImageMediaType {
   const type = file.type.toLowerCase();
   if (type === 'image/png') return 'image/png';
@@ -779,11 +906,11 @@ function getImageMediaType(file: File): ImageMediaType {
   return 'image/jpeg';
 }
 
-async function buildAttachments(): Promise<Array<{ type: 'image'; mediaType: ImageMediaType; data: string; name: string }>> {
+async function buildAttachments(): Promise<ImageInvocationAttachment[]> {
   const imageFiles = attachedFiles.filter(f => f.type === 'image');
   if (imageFiles.length === 0) return [];
 
-  const results: Array<{ type: 'image'; mediaType: ImageMediaType; data: string; name: string }> = [];
+  const results: ImageInvocationAttachment[] = [];
   for (const entry of imageFiles) {
     const data = await fileToBase64(entry.file);
     results.push({
@@ -791,19 +918,59 @@ async function buildAttachments(): Promise<Array<{ type: 'image'; mediaType: Ima
       mediaType: getImageMediaType(entry.file),
       data,
       name: entry.file.name,
+      path: getElectronFilePath(entry.file),
     });
   }
   return results;
 }
 
+function buildDocumentImportRequests(): DocumentImportRequest[] {
+  const documentFiles = attachedFiles.filter((entry) => entry.type === 'document');
+  if (documentFiles.length === 0) return [];
+
+  const missingPathNames = documentFiles
+    .filter(({ file }) => !getElectronFilePath(file))
+    .map(({ file }) => file.name);
+  if (missingPathNames.length > 0) {
+    throw new Error(`Document attachments require a local file path. Missing path for: ${missingPathNames.join(', ')}`);
+  }
+
+  return documentFiles.map(({ file }) => ({
+    path: getElectronFilePath(file)!,
+    name: file.name,
+    mediaType: file.type || undefined,
+    sizeBytes: file.size,
+    lastModifiedMs: file.lastModified,
+  }));
+}
+
+function buildPendingDocumentPreviews(): DocumentAttachmentPreview[] {
+  return attachedFiles
+    .filter((entry) => entry.type === 'document')
+    .map(({ file }) => ({
+      name: file.name,
+      mediaType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+      status: 'queued',
+      chunkCount: 0,
+      tokenEstimate: 0,
+      language: '',
+    }));
+}
+
 async function submitChat(): Promise<void> {
   const prompt = chatInput.value.trim();
   const hasImages = attachedFiles.some(f => f.type === 'image');
-  if (!prompt && !hasImages) { chatInput.focus(); return; }
+  const hasDocuments = attachedFiles.some(f => f.type === 'document');
+  if (!prompt && !hasImages && !hasDocuments) { chatInput.focus(); return; }
+
+  const imageAttachments = await buildAttachments();
+  const imageDataUrls = getAttachmentImageDataUrls(imageAttachments);
+  const pendingDocumentPreviews = buildPendingDocumentPreviews();
 
   const modelApi = getModelAPI();
   if (!modelApi?.invoke) {
-    appendUserMessage(prompt || '(image)');
+    appendUserMessage(prompt, imageDataUrls, pendingDocumentPreviews);
     chatInput.value = '';
     clearAttachments();
     const disabledTaskId = `model-disabled-${chatCounter++}`;
@@ -813,12 +980,6 @@ async function submitChat(): Promise<void> {
     chatInput.focus();
     return;
   }
-
-  // Capture attachments and preview URLs before clearing
-  const pendingAttachments = await buildAttachments();
-  const imagePreviewUrls = attachedFiles
-    .filter(f => f.type === 'image' && f.previewUrl)
-    .map(f => f.previewUrl!);
 
   chatCounter++;
   let taskId = getActiveTaskIdFromState();
@@ -833,32 +994,50 @@ async function submitChat(): Promise<void> {
       chatInput.focus();
       return;
     }
-    const titleSource = prompt || 'Image attachment';
+    const titleSource = prompt || pendingDocumentPreviews[0]?.name || imageAttachments[0]?.name || 'Attachment';
     const title = titleSource.length > 48 ? `${titleSource.slice(0, 48)}...` : titleSource;
     const createdTask = await workspaceAPI.createTask(title);
     taskId = createdTask.id;
   }
 
-  chatInput.value = '';
-  clearAttachments();
-  chatStopBtn.hidden = false;
-
   const resolvedOwner: string = owner;
 
-  runningTaskId = taskId;
-  createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
-
-  const invokeOptions = pendingAttachments.length > 0
-    ? { attachments: pendingAttachments }
-    : undefined;
-
-  const effectivePrompt = prompt || (pendingAttachments.length > 0 ? 'Describe this image.' : '');
-
   try {
+    let documentAttachments: DocumentInvocationAttachment[] = [];
+    if (hasDocuments) {
+      const attachmentApi = getAttachmentAPI();
+      if (!attachmentApi?.importDocuments) {
+        throw new Error('Document attachment import is not available in this build.');
+      }
+      documentAttachments = await attachmentApi.importDocuments(taskId, buildDocumentImportRequests());
+    }
+
+    const pendingAttachments: InvocationAttachment[] = [...imageAttachments, ...documentAttachments];
+    const effectivePrompt = prompt || (documentAttachments.length > 0 ? 'Review the attached document(s).' : prompt);
+    const invokeOptions = pendingAttachments.length > 0 || effectivePrompt !== prompt
+      ? {
+        attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
+        displayPrompt: prompt,
+      }
+      : undefined;
+
+    chatInput.value = '';
+    appendUserMessage(prompt, imageDataUrls, documentAttachments);
+    clearAttachments();
+    chatStopBtn.hidden = false;
+
+    runningTaskId = taskId;
+    createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
+
     const result = await modelApi.invoke(taskId, effectivePrompt, resolvedOwner, invokeOptions);
     replaceWithResult(taskId, result, result?.providerId || resolvedOwner);
   } catch (err: any) {
-    replaceWithError(taskId, err.message || String(err));
+    const message = err?.message || String(err);
+    if (runningTaskId === taskId) {
+      replaceWithError(taskId, message);
+    } else {
+      getWorkspaceAPI()?.addLog('error', 'system', `Failed to send chat: ${message}`, taskId);
+    }
   } finally {
     runningTaskId = null;
     chatStopBtn.hidden = true;
@@ -894,6 +1073,19 @@ chatInput.addEventListener('keydown', (e: KeyboardEvent) => {
     e.preventDefault();
     void submitChat();
   }
+});
+
+// Idle-state suggestion chips — fill input on click
+chatEmptyState.addEventListener('click', (e: MouseEvent) => {
+  const chip = (e.target as HTMLElement).closest('.cc-idle-chip') as HTMLElement | null;
+  if (!chip) return;
+  const prompt = chip.dataset.prompt;
+  if (!prompt) return;
+  chatInput.value = prompt;
+  chatInput.focus();
+  // Auto-resize the textarea in case the prompt is longer than one line
+  chatInput.style.height = 'auto';
+  chatInput.style.height = `${chatInput.scrollHeight}px`;
 });
 
 // Paste images directly into the textarea

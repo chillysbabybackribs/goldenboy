@@ -177,7 +177,10 @@ class SurfaceActionRouter {
       let result: { summary: string; data: Record<string, unknown> };
 
       if (action.target === 'browser') {
-        result = await executeBrowserAction(action.kind, action.payload);
+        result = await executeBrowserAction(action.kind, action.payload, {
+          taskId: action.taskId,
+          origin: action.origin,
+        });
       } else {
         result = await executeTerminalAction(action.kind, action.payload);
       }

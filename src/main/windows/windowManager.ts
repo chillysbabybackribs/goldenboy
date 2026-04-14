@@ -12,6 +12,7 @@ import { browserService } from '../browser/BrowserService';
 
 const windows: Map<PhysicalWindowRole, BrowserWindow> = new Map();
 const roleByWebContentsId: Map<number, PhysicalWindowRole> = new Map();
+const WINDOW_BACKGROUND_COLOR = '#000000';
 
 function getRendererPath(role: PhysicalWindowRole): string {
   return path.join(__dirname, '..', '..', '..', 'renderer', role, 'index.html');
@@ -62,6 +63,7 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
     minWidth: 600,
     minHeight: 400,
     title: titleMap[role],
+    backgroundColor: WINDOW_BACKGROUND_COLOR,
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,

@@ -14,7 +14,7 @@ import { appStateStore } from '../state/appStateStore';
 import { eventBus } from '../events/eventBus';
 import { AppEventType } from '../../shared/types/events';
 import { generateId } from '../../shared/utils/ids';
-import { AgentProvider } from './AgentTypes';
+import { AgentProvider, AgentToolName } from './AgentTypes';
 import { AgentRuntime } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
 import { HaikuProvider } from './HaikuProvider';
@@ -22,6 +22,7 @@ import { AppServerBackedProvider } from './AppServerBackedProvider';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
+import { createAttachmentToolDefinitions, DOCUMENT_ATTACHMENT_TOOL_NAMES } from './tools/attachmentTools';
 import { createFilesystemToolDefinitions } from './tools/filesystemTools';
 import { createRuntimeToolDefinitions } from './tools/runtimeTools';
 import { createTerminalToolDefinitions } from './tools/terminalTools';
@@ -43,6 +44,8 @@ import {
   NO_MATERIAL_RESEARCH_UPDATE,
   shouldRunBackgroundResearchSynthesis,
 } from './researchSynthesis';
+import type { InvocationAttachment } from '../../shared/types/model';
+import type { DocumentInvocationAttachment } from '../../shared/types/attachments';
 
 type ProviderEntry = {
   id: ProviderId;
@@ -62,12 +65,90 @@ const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }
   { id: HAIKU_PROVIDER_ID, label: 'Haiku 4.5', modelId: HAIKU_PROVIDER_ID },
 ];
 
+function buildAttachmentSummary(attachments?: InvocationAttachment[]): string | null {
+  if (!attachments?.length) return null;
+  const images = attachments.filter((attachment) => attachment.type === 'image');
+  const documents = attachments.filter((attachment): attachment is DocumentInvocationAttachment => attachment.type === 'document');
+  const parts: string[] = [];
+
+  if (images.length === 1) {
+    parts.push(images[0].name?.trim() ? `[Attached image: ${images[0].name.trim()}]` : '[Attached image]');
+  } else if (images.length > 1) {
+    const names = images
+      .map((attachment) => attachment.name?.trim())
+      .filter((name): name is string => Boolean(name));
+    if (names.length > 0) {
+      const listed = names.slice(0, 3).join(', ');
+      const suffix = names.length > 3 ? `, +${names.length - 3} more` : '';
+      parts.push(`[Attached images: ${listed}${suffix}]`);
+    } else {
+      parts.push(`[Attached ${images.length} images]`);
+    }
+  }
+
+  if (documents.length === 1) {
+    parts.push(`[Attached document: ${documents[0].name}]`);
+  } else if (documents.length > 1) {
+    const listed = documents.slice(0, 3).map((document) => document.name).join(', ');
+    const suffix = documents.length > 3 ? `, +${documents.length - 3} more` : '';
+    parts.push(`[Attached documents: ${listed}${suffix}]`);
+  }
+
+  return parts.join('\n') || null;
+}
+
+function buildChatUserMessageText(prompt: string, attachments?: InvocationAttachment[]): string {
+  const text = prompt.trim();
+  const attachmentSummary = buildAttachmentSummary(attachments);
+  if (text && attachmentSummary) return `${text}\n${attachmentSummary}`;
+  if (text) return text;
+  return attachmentSummary || prompt;
+}
+
+function buildDocumentAttachmentContext(attachments?: InvocationAttachment[]): string | null {
+  const documents = attachments?.filter((attachment): attachment is DocumentInvocationAttachment => attachment.type === 'document') || [];
+  if (documents.length === 0) return null;
+
+  const sections = [
+    '## Attached Documents',
+    'One or more task documents were staged by the host. Use attachments.list to inspect them, attachments.search to find relevant passages, and attachments.read_chunk or attachments.read_document for details. Do not assume document contents from filenames alone.',
+  ];
+
+  for (const [index, document] of documents.slice(0, 5).entries()) {
+    const detail = [
+      document.mediaType,
+      `${document.sizeBytes} bytes`,
+      `status=${document.status}`,
+      document.chunkCount > 0 ? `${document.chunkCount} chunks` : '',
+    ].filter(Boolean).join(' • ');
+    sections.push('', `${index + 1}. ${document.name} (${detail})`);
+    if (document.excerpt) sections.push(document.excerpt);
+  }
+
+  if (documents.length > 5) {
+    sections.push('', `...and ${documents.length - 5} more attached documents.`);
+  }
+
+  return sections.join('\n');
+}
+
+function withDocumentAttachmentTools(
+  allowedTools: 'all' | AgentToolName[],
+  attachments?: InvocationAttachment[],
+): 'all' | AgentToolName[] {
+  if (allowedTools === 'all') return 'all';
+  const hasDocuments = attachments?.some((attachment) => attachment.type === 'document');
+  if (!hasDocuments) return allowedTools;
+  return Array.from(new Set([...allowedTools, ...DOCUMENT_ATTACHMENT_TOOL_NAMES]));
+}
+
 class AgentModelService {
   private providers = new Map<ProviderId, ProviderEntry>();
   private activeTaskProviders = new Map<string, ActiveTaskInvocation>();
 
   init(): void {
     agentToolExecutor.registerMany([
+      ...createAttachmentToolDefinitions(),
       ...createRuntimeToolDefinitions(),
       ...createBrowserToolDefinitions(),
       ...createChatToolDefinitions(),
@@ -125,8 +206,16 @@ class AgentModelService {
     }
     const activeTask = this.createTaskInvocation(providerId);
 
-    const chatUserMessage = chatKnowledgeStore.recordUserMessage(taskId, prompt);
-    taskMemoryStore.recordUserPrompt(taskId, prompt);
+    const attachmentSummary = buildAttachmentSummary(options?.attachments);
+    const displayPrompt = typeof options?.displayPrompt === 'string' ? options.displayPrompt : prompt;
+    const chatUserMessage = chatKnowledgeStore.recordUserMessage(
+      taskId,
+      buildChatUserMessageText(displayPrompt, options?.attachments),
+    );
+    taskMemoryStore.recordUserPrompt(taskId, displayPrompt, {
+      attachments: options?.attachments,
+      attachmentSummary,
+    });
     const taskMemoryContext = taskMemoryStore.buildContext(taskId);
     this.activeTaskProviders.set(taskId, activeTask);
 
@@ -150,13 +239,15 @@ class AgentModelService {
       }
 
       const runtimePrompt = withBrowserSearchDirective(prompt, options?.taskProfile);
+      const runtimeScope = scopeForPrompt(prompt, options?.taskProfile);
       const contextPrompt = buildContextPrompt([
         buildAutomaticTaskContinuationContext(taskId, prompt),
         chatKnowledgeStore.buildInvocationContext(taskId, chatUserMessage.id),
         taskMemoryContext,
+        buildDocumentAttachmentContext(options?.attachments),
       ]);
       const response = await activeTask.runtime.run({
-        ...scopeForPrompt(prompt, options?.taskProfile),
+        ...runtimeScope,
         mode: 'unrestricted-dev',
         agentId: providerId,
         role: 'primary',
@@ -165,6 +256,7 @@ class AgentModelService {
         cwd: options?.cwd,
         contextPrompt,
         systemPromptAddendum: options?.systemPrompt,
+        allowedTools: withDocumentAttachmentTools(runtimeScope.allowedTools, options?.attachments),
         attachments: options?.attachments,
         onToken: (text) => {
           this.emitProgress({

@@ -105,19 +105,24 @@ export type AgentTaskProfileOverride = {
   requiresBrowserSearchDirective?: boolean;
 };
 
-export type InvocationAttachment = {
+export type ImageInvocationAttachment = {
   type: 'image';
   mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
   /** Base64-encoded image data (no data-URL prefix). */
   data: string;
   name?: string;
+  /** Optional local filesystem path for providers that can read images directly from disk. */
+  path?: string;
 };
+
+export type InvocationAttachment = ImageInvocationAttachment | DocumentInvocationAttachment;
 
 export type AgentInvocationOptions = {
   systemPrompt?: string;
   cwd?: string;
   taskProfile?: AgentTaskProfileOverride;
   attachments?: InvocationAttachment[];
+  displayPrompt?: string;
 };
 
 // ─── Codex CLI Event Types (from `codex exec --json`) ─────────────────────
@@ -285,3 +290,4 @@ export const DEFAULT_HAIKU_CONFIG: HaikuInvocationConfig = {
   maxTokens: 4096,
   streaming: true,
 };
+import type { DocumentInvocationAttachment } from './attachments';

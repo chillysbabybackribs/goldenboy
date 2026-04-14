@@ -183,3 +183,67 @@ describe('turn text emission', () => {
     expect(tokens).toEqual([]);
   });
 });
+
+describe('turn input attachments', () => {
+  it('includes local image attachments in turn/start input', async () => {
+    let turnStartMessage: any = null;
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'turn/start') {
+          turnStartMessage = msg;
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            for (const handler of handlers) {
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: '',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: '',
+        tools: [],
+        attachments: [{
+          type: 'image',
+          mediaType: 'image/png',
+          data: 'ZmFrZQ==',
+          name: 'diagram.png',
+          path: '/tmp/diagram.png',
+        }],
+      },
+      currentTools: [],
+      toolCatalog: [],
+    });
+
+    expect(turnStartMessage).toBeTruthy();
+    expect(turnStartMessage.params.input).toEqual([
+      { type: 'local_image', path: '/tmp/diagram.png' },
+    ]);
+  });
+});

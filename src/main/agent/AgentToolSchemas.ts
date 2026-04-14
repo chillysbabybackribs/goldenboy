@@ -1,6 +1,7 @@
 import { AgentProvider, AgentToolDefinition } from './AgentTypes';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
+import { createAttachmentToolDefinitions } from './tools/attachmentTools';
 import { createFilesystemToolDefinitions } from './tools/filesystemTools';
 import { createRuntimeToolDefinitions } from './tools/runtimeTools';
 import { createTerminalToolDefinitions } from './tools/terminalTools';
@@ -15,6 +16,7 @@ export function summarizeToolDefinitions(tools: AgentToolDefinition[]): AgentToo
 
 export function createUnrestrictedDevToolSchemas(providerFactory: (input: SubAgentSpawnInput) => AgentProvider): AgentToolSchemaSummary[] {
   return summarizeToolDefinitions([
+    ...createAttachmentToolDefinitions(),
     ...createRuntimeToolDefinitions(),
     ...createBrowserToolDefinitions(),
     ...createChatToolDefinitions(),

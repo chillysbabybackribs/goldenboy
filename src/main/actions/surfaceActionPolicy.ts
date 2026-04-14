@@ -23,6 +23,8 @@ export const ACTION_CONCURRENCY_POLICY: Record<SurfaceActionKind, ActionConcurre
   'browser.create-tab':   { mode: 'serialize' },
   'browser.close-tab':    { mode: 'serialize' },
   'browser.activate-tab': { mode: 'serialize' },
+  'browser.split-tab':    { mode: 'serialize', replacesSameKind: true },
+  'browser.clear-split-view': { mode: 'serialize', replacesSameKind: true },
   'browser.click':        { mode: 'serialize' },
   'browser.type':         { mode: 'serialize' },
   'browser.dismiss-foreground-ui': { mode: 'serialize', replacesSameKind: true },

@@ -1,6 +1,7 @@
 import { AgentPromptBuilder } from './AgentPromptBuilder';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
+import { createAttachmentToolDefinitions } from './tools/attachmentTools';
 import { createFilesystemToolDefinitions } from './tools/filesystemTools';
 import { createRuntimeToolDefinitions } from './tools/runtimeTools';
 import { createTerminalToolDefinitions } from './tools/terminalTools';
@@ -65,6 +66,7 @@ function createBenchmarkTools(): AgentToolDefinition[] {
   });
 
   return [
+    ...createAttachmentToolDefinitions(),
     ...createRuntimeToolDefinitions(),
     ...createBrowserToolDefinitions(),
     ...createChatToolDefinitions(),
