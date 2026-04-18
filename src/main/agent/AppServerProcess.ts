@@ -78,6 +78,10 @@ export class AppServerProcess extends EventEmitter {
   private readyPromise: Promise<{ wsPort: number }> | null = null;
   private readyResolve: ((v: { wsPort: number }) => void) | null = null;
   private readyReject: ((e: Error) => void) | null = null;
+  private cleanupHandlersInstalled = false;
+  private readonly processExitHandler = () => {
+    this.stop();
+  };
 
   constructor(
     private readonly bridgePort: number,
@@ -104,6 +108,7 @@ export class AppServerProcess extends EventEmitter {
 
   async start(): Promise<void> {
     this.stopped = false;
+    this.installCleanupHandlers();
     this.writeConfig();
     try {
       await this.spawnAndWait();
@@ -115,10 +120,11 @@ export class AppServerProcess extends EventEmitter {
 
   stop(): void {
     this.stopped = true;
-    this.child?.kill();
+    this.killChildProcessTree();
     this.child = null;
     this.state = { status: 'stopped' };
     this.clearConfig();
+    this.removeCleanupHandlers();
   }
 
   private clearConfig(): void {
@@ -184,6 +190,7 @@ export class AppServerProcess extends EventEmitter {
     return new Promise((resolve, reject) => {
       const child = spawn('codex', ['app-server', '--listen', 'ws://127.0.0.1:0'], {
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
       });
       this.child = child;
 
@@ -266,5 +273,41 @@ export class AppServerProcess extends EventEmitter {
         this.handleCrash('restart failed');
       });
     }, this.backoffMs);
+  }
+
+  private killChildProcessTree(): void {
+    const child = this.child;
+    if (!child) return;
+
+    try {
+      if (process.platform !== 'win32' && typeof child.pid === 'number') {
+        process.kill(-child.pid, 'SIGTERM');
+        return;
+      }
+    } catch {
+      // Fall through to direct-child termination.
+    }
+
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+
+  private installCleanupHandlers(): void {
+    if (this.cleanupHandlersInstalled) return;
+    this.cleanupHandlersInstalled = true;
+    process.once('exit', this.processExitHandler);
+    process.once('SIGINT', this.processExitHandler);
+    process.once('SIGTERM', this.processExitHandler);
+  }
+
+  private removeCleanupHandlers(): void {
+    if (!this.cleanupHandlersInstalled) return;
+    this.cleanupHandlersInstalled = false;
+    process.removeListener('exit', this.processExitHandler);
+    process.removeListener('SIGINT', this.processExitHandler);
+    process.removeListener('SIGTERM', this.processExitHandler);
   }
 }

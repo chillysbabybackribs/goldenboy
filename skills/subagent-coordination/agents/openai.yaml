@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sub-Agent Coordination"
+  short_description: "Coordinate delegated multi-agent work"
+  default_prompt: "Use $subagent-coordination to split this task into bounded sub-agent runs and synthesize the result."

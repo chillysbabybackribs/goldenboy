@@ -33,6 +33,12 @@
 
         <!-- Chat thread -->
         <div class="cc-chat-shell">
+          <div class="cc-turn-nav" id="turnNav" hidden>
+            <button class="cc-turn-nav-btn" id="turnPrevBtn" type="button">Previous Turn</button>
+            <span class="cc-turn-nav-meta" id="turnNavMeta"></span>
+            <button class="cc-turn-nav-btn" id="turnNextBtn" type="button">Next Turn</button>
+            <button class="cc-turn-nav-btn" id="turnReuseBtn" type="button">Reuse Prompt</button>
+          </div>
           <div class="cc-chat" id="chatThread">
             <div class="cc-chat-inner" id="chatInner">
               <div class="cc-chat-empty" id="chatEmptyState">
@@ -78,16 +84,6 @@
                 <button class="cc-logs-overlay-close" id="logsCloseBtn" type="button">✕</button>
               </div>
               <div class="cc-logs-stream" id="logStream"></div>
-            </div>
-
-            <!-- History popup — anchored above input box -->
-            <div class="cc-history-overlay" id="historyOverlay" hidden>
-              <div class="cc-history-header">
-                <span class="cc-history-title">HISTORY</span>
-                <button class="cc-history-new" id="historyNewBtn" type="button">NEW</button>
-                <button class="cc-history-close" id="historyCloseBtn" type="button">✕</button>
-              </div>
-              <div class="cc-history-list" id="historyList"></div>
             </div>
 
             <!-- Unified input box: inline utilities + textarea + inner bar -->
@@ -143,6 +139,52 @@
         </div>
 
       </div>
+
+      <aside class="cc-sidebar" id="artifactSidebar">
+        <button
+          class="cc-sidebar-toggle"
+          id="artifactSidebarToggle"
+          type="button"
+          aria-label="Collapse artifact sidebar"
+          aria-expanded="true"
+          title="Collapse artifact sidebar"
+        >
+          <span class="cc-sidebar-toggle-icon" aria-hidden="true">⟨</span>
+        </button>
+        <section class="cc-sidecard cc-active-artifact-card" id="activeArtifactCard">
+          <div class="cc-sidecard-header">
+            <span class="cc-sidecard-title">Active Artifact</span>
+          </div>
+          <div class="cc-active-artifact-empty" id="activeArtifactEmpty">No active artifact selected.</div>
+          <div class="cc-active-artifact-body" id="activeArtifactBody" hidden>
+            <div class="cc-active-artifact-topline">
+              <span class="cc-active-artifact-title" id="activeArtifactTitle"></span>
+              <span class="cc-artifact-format-badge" id="activeArtifactFormat"></span>
+            </div>
+            <div class="cc-active-artifact-meta" id="activeArtifactMeta"></div>
+            <div class="cc-active-artifact-actions">
+              <button class="cc-artifact-open-btn" id="activeArtifactOpenBtn" type="button">Open</button>
+              <button class="cc-artifact-delete-btn" id="activeArtifactDeleteBtn" type="button">Delete</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="cc-sidecard cc-artifact-registry-card">
+          <div class="cc-sidecard-header">
+            <span class="cc-sidecard-title">Artifacts</span>
+          </div>
+          <div class="cc-artifact-list" id="artifactList"></div>
+        </section>
+
+        <section class="cc-sidecard cc-history-panel" id="historyOverlay" hidden>
+          <div class="cc-sidecard-header cc-history-header">
+            <span class="cc-sidecard-title">History</span>
+            <button class="cc-history-new" id="historyNewBtn" type="button">New</button>
+            <button class="cc-history-close" id="historyCloseBtn" type="button">✕</button>
+          </div>
+          <div class="cc-history-list" id="historyList"></div>
+        </section>
+      </aside>
 
     </div>
 

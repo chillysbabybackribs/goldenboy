@@ -161,6 +161,15 @@ function areViewBoundsEqual(a: ViewBounds, b: ViewBounds): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
+function isTabEntryViewAlive(entry: TabEntry | undefined): boolean {
+  if (!entry) return false;
+  try {
+    return !entry.view.webContents.isDestroyed();
+  } catch {
+    return false;
+  }
+}
+
 export class BrowserService {
   private tabs: Map<string, TabEntry> = new Map();
   private activeTabId: string = '';
@@ -403,6 +412,7 @@ export class BrowserService {
   createTab(url?: string, insertAfterTabId?: string): TabInfo {
     const tab = this.createTabInternal(url || this.settings.homepage, true, insertAfterTabId);
     this.activateTabInternal(tab.id);
+    this.scheduleHistoryPersist();
     this.syncState();
     return tab.info;
   }
@@ -505,17 +515,19 @@ export class BrowserService {
       this.splitRightTabId = null;
     }
 
-    this.destroyTabEntry(entry);
     this.tabs.delete(tabId);
+    this.destroyTabEntry(entry);
     this.normalizeSplitState();
     this.applyTabLayout();
 
     eventBus.emit(AppEventType.BROWSER_TAB_CLOSED, { tabId });
+    this.scheduleHistoryPersist();
     this.syncState();
   }
 
   activateTab(tabId: string): void {
     this.activateTabInternal(tabId);
+    this.scheduleHistoryPersist();
     this.syncState();
   }
 
@@ -576,6 +588,7 @@ export class BrowserService {
     this.destroyTabEntry(rightEntry);
     this.normalizeSplitState();
     this.applyTabLayout();
+    this.scheduleHistoryPersist();
     this.syncState();
   }
 
@@ -617,20 +630,59 @@ export class BrowserService {
   }
 
   private destroyTabEntry(entry: TabEntry): void {
+    this.releaseTabEntry(entry);
+    try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
+  }
+
+  private releaseTabEntry(entry: TabEntry): void {
     if (this.hostWindow && !this.hostWindow.isDestroyed()) {
       try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
     }
     this.attachedTabIds.delete(entry.id);
     this.appliedBoundsByTabId.delete(entry.id);
-    this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
+    try { this.instrumentation.detachTab(entry.id, entry.view.webContents.id); } catch {}
     pageKnowledgeStore.removePagesForTab(entry.id);
     this.dialogManager.detachTab(entry.id);
-    try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
+  }
+
+  private pruneDestroyedTabEntries(): boolean {
+    let removedAny = false;
+    for (const [tabId, entry] of Array.from(this.tabs.entries())) {
+      if (isTabEntryViewAlive(entry)) continue;
+      this.releaseTabEntry(entry);
+      this.tabs.delete(tabId);
+      removedAny = true;
+      this.emitLog('warn', `Removed destroyed browser tab ${tabId}`);
+    }
+    if (removedAny) {
+      this.normalizeSplitState();
+      this.scheduleHistoryPersist();
+      this.syncState();
+    }
+    return removedAny;
+  }
+
+  private handleUnexpectedTabDestroy(tabId: string, relayout: boolean = true): void {
+    if (this.disposed) return;
+    const entry = this.tabs.get(tabId);
+    if (!entry || isTabEntryViewAlive(entry)) return;
+
+    this.releaseTabEntry(entry);
+    this.tabs.delete(tabId);
+    this.normalizeSplitState();
+    this.emitLog('warn', `Browser tab ${tabId} was destroyed unexpectedly`);
+
+    if (relayout && this.tabs.size > 0) {
+      this.applyTabLayout();
+    }
+    this.scheduleHistoryPersist();
+    this.syncState();
   }
 
   private applyTabLayout(): void {
     if (!this.hostWindow || this.hostWindow.isDestroyed()) return;
     if (this.tabs.size === 0) return;
+    if (this.pruneDestroyedTabEntries() && this.tabs.size === 0) return;
 
     this.normalizeSplitState();
 
@@ -672,13 +724,28 @@ export class BrowserService {
     }
 
     for (const { entry, bounds } of nextVisibleEntries) {
-      if (!this.attachedTabIds.has(entry.id)) {
-        this.hostWindow.contentView.addChildView(entry.view);
-      }
-      const previousBounds = this.appliedBoundsByTabId.get(entry.id);
-      if (!previousBounds || !areViewBoundsEqual(previousBounds, bounds)) {
-        entry.view.setBounds(bounds);
-        this.appliedBoundsByTabId.set(entry.id, bounds);
+      try {
+        if (!isTabEntryViewAlive(entry)) {
+          this.handleUnexpectedTabDestroy(entry.id, false);
+          this.applyTabLayout();
+          return;
+        }
+
+        if (!this.attachedTabIds.has(entry.id)) {
+          this.hostWindow.contentView.addChildView(entry.view);
+        }
+        const previousBounds = this.appliedBoundsByTabId.get(entry.id);
+        if (!previousBounds || !areViewBoundsEqual(previousBounds, bounds)) {
+          entry.view.setBounds(bounds);
+          this.appliedBoundsByTabId.set(entry.id, bounds);
+        }
+      } catch (error) {
+        if (!isTabEntryViewAlive(entry)) {
+          this.handleUnexpectedTabDestroy(entry.id, false);
+          this.applyTabLayout();
+          return;
+        }
+        throw error;
       }
     }
 
@@ -693,6 +760,10 @@ export class BrowserService {
     const wc = entry.view.webContents;
     const info = entry.info;
     const nav = info.navigation;
+
+    wc.once('destroyed', () => {
+      this.handleUnexpectedTabDestroy(entry.id);
+    });
 
     wc.on('focus', () => {
       if (this.activeTabId !== entry.id) {

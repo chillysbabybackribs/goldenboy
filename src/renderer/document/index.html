@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' blob: data:">
+  <title>Documents</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="document.css">
+</head>
+<body>
+  <div class="doc-shell">
+    <aside class="doc-sidebar">
+      <div class="doc-sidebar-header">
+        <span class="doc-sidebar-title">Artifacts</span>
+      </div>
+      <div class="doc-artifact-list" id="artifactList"></div>
+    </aside>
+
+    <main class="doc-main">
+      <header class="doc-header">
+        <div class="doc-header-copy">
+          <div class="doc-title-row">
+            <h1 class="doc-title" id="artifactTitle">No artifact selected</h1>
+            <span class="doc-format-badge" id="artifactFormat" hidden></span>
+          </div>
+          <div class="doc-meta" id="artifactMeta">Open an artifact from the Command Center to inspect it here.</div>
+        </div>
+        <div class="doc-actions">
+          <button class="doc-btn" id="refreshBtn" type="button">Refresh</button>
+          <button class="doc-btn doc-btn-danger" id="deleteBtn" type="button">Delete</button>
+        </div>
+      </header>
+
+      <section class="doc-preview-shell">
+        <div class="doc-preview-empty" id="previewEmpty">No artifact loaded.</div>
+        <div class="doc-preview-meta" id="previewKind" hidden></div>
+        <div class="doc-preview" id="previewContainer" hidden></div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="document.js"></script>
+</body>
+</html>

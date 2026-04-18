@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AgentInvocationOptions } from '../shared/types/model';
 import type { DocumentImportRequest } from '../shared/types/attachments';
+import type { CreateArtifactInput } from '../shared/types/artifacts';
+import type { DocumentArtifactSummary, DocumentArtifactView } from '../shared/types/document';
+import type { BrowserReplayRequest } from '../shared/types/browserDeterministic';
 import type { BrowserOperationLedgerEntry } from '../shared/types/browserOperationLedger';
 
 const IPC_CHANNELS = {
@@ -16,6 +19,19 @@ const IPC_CHANNELS = {
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
   ADD_LOG: 'workspace:add-log',
   ATTACHMENTS_IMPORT_DOCUMENTS: 'attachments:import-documents',
+  ARTIFACT_CREATE: 'artifact:create',
+  ARTIFACT_GET: 'artifact:get',
+  ARTIFACT_LIST: 'artifact:list',
+  ARTIFACT_SET_ACTIVE: 'artifact:set-active',
+  ARTIFACT_GET_ACTIVE: 'artifact:get-active',
+  ARTIFACT_DELETE: 'artifact:delete',
+  ARTIFACT_REPLACE_CONTENT: 'artifact:replace-content',
+  ARTIFACT_APPEND_CONTENT: 'artifact:append-content',
+  DOCUMENT_OPEN_ARTIFACT: 'document:open-artifact',
+  DOCUMENT_GET_CURRENT: 'document:get-current',
+  DOCUMENT_GET_ARTIFACT: 'document:get-artifact',
+  DOCUMENT_LIST_ARTIFACTS: 'document:list-artifacts',
+  DOCUMENT_SET_CURRENT: 'document:set-current',
 
   APPLY_EXECUTION_PRESET: 'workspace:apply-execution-preset',
   SET_SPLIT_RATIO: 'workspace:set-split-ratio',
@@ -41,6 +57,7 @@ const IPC_CHANNELS = {
   BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
   BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
   BROWSER_GET_OPERATION_LEDGER: 'browser:get-operation-ledger',
+  BROWSER_REPLAY_OPERATION: 'browser:replay-operation',
   BROWSER_RECORD_FINDING: 'browser:record-finding',
   BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
   BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',
@@ -49,8 +66,6 @@ const IPC_CHANNELS = {
   BROWSER_ADD_BOOKMARK: 'browser:add-bookmark',
   BROWSER_REMOVE_BOOKMARK: 'browser:remove-bookmark',
   BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
-  BROWSER_SPLIT_TAB: 'browser:split-tab',
-  BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
   BROWSER_ZOOM_IN: 'browser:zoom-in',
   BROWSER_ZOOM_OUT: 'browser:zoom-out',
   BROWSER_ZOOM_RESET: 'browser:zoom-reset',
@@ -79,7 +94,6 @@ const IPC_CHANNELS = {
   MODEL_GET_PROVIDERS: 'model:get-providers',
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
-  MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
@@ -90,7 +104,6 @@ const IPC_CHANNELS = {
   TERMINAL_OUTPUT: 'terminal:output',
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
-  TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
 } as const;
 
 const api = {
@@ -124,6 +137,51 @@ const api = {
 
   addLog(level: string, source: string, message: string, taskId?: string) {
     return ipcRenderer.invoke(IPC_CHANNELS.ADD_LOG, level, source, message, taskId);
+  },
+
+  artifacts: {
+    create(input: CreateArtifactInput) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_CREATE, input);
+    },
+    get(artifactId: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_GET, artifactId);
+    },
+    list() {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_LIST);
+    },
+    setActive(artifactId: string | null) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_SET_ACTIVE, artifactId);
+    },
+    getActive() {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_GET_ACTIVE);
+    },
+    delete(artifactId: string, deletedBy?: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_DELETE, { artifactId, deletedBy });
+    },
+    replaceContent(input: { artifactId?: string | null; content: string; updatedBy?: string }) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_REPLACE_CONTENT, input);
+    },
+    appendContent(input: { artifactId?: string | null; content: string; updatedBy?: string }) {
+      return ipcRenderer.invoke(IPC_CHANNELS.ARTIFACT_APPEND_CONTENT, input);
+    },
+  },
+
+  document: {
+    openArtifact(artifactId: string): Promise<DocumentArtifactView> {
+      return ipcRenderer.invoke(IPC_CHANNELS.DOCUMENT_OPEN_ARTIFACT, artifactId);
+    },
+    getCurrent(): Promise<DocumentArtifactView | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.DOCUMENT_GET_CURRENT);
+    },
+    getArtifact(artifactId: string): Promise<DocumentArtifactView> {
+      return ipcRenderer.invoke(IPC_CHANNELS.DOCUMENT_GET_ARTIFACT, artifactId);
+    },
+    listArtifacts(): Promise<DocumentArtifactSummary[]> {
+      return ipcRenderer.invoke(IPC_CHANNELS.DOCUMENT_LIST_ARTIFACTS);
+    },
+    setCurrent(artifactId: string | null): Promise<DocumentArtifactView | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.DOCUMENT_SET_CURRENT, artifactId);
+    },
   },
 
   attachments: {
@@ -181,7 +239,9 @@ const api = {
     });
   },
 
-  // ── Browser (queries, management, UI features, subscriptions) ───────────
+  // ── Browser (queries, management, diagnostics, subscriptions) ────────────
+  // Operational browser actions should go through actions.submit so they are
+  // routed through the canonical browser-operation/ledger path.
 
   browser: {
     getState() {
@@ -209,6 +269,7 @@ const api = {
     getConsoleEvents(tabId?: string, since?: number) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_CONSOLE_EVENTS, tabId, since); },
     getNetworkEvents(tabId?: string, since?: number) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_NETWORK_EVENTS, tabId, since); },
     getOperationLedger(limit?: number): Promise<BrowserOperationLedgerEntry[]> { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_OPERATION_LEDGER, limit); },
+    replayOperation(request: BrowserReplayRequest) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REPLAY_OPERATION, request); },
     recordFinding(input: any) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_RECORD_FINDING, input); },
     getTaskMemory(taskId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_TASK_MEMORY, taskId); },
     getSiteStrategy(origin: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_SITE_STRATEGY, origin); },
@@ -238,8 +299,6 @@ const api = {
     loadExtension(extPath: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_LOAD_EXTENSION, extPath); },
     removeExtension(extensionId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REMOVE_EXTENSION, extensionId); },
     getExtensions() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_EXTENSIONS); },
-    splitTab(tabId?: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SPLIT_TAB, tabId); },
-    clearSplitView() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_SPLIT_VIEW); },
     // Downloads
     getDownloads() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_DOWNLOADS); },
     cancelDownload(downloadId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CANCEL_DOWNLOAD, downloadId); },
@@ -276,9 +335,6 @@ const api = {
     resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RESOLVE, prompt, explicitOwner, options);
     },
-    handoff(taskId: string, from: string, to: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.MODEL_HANDOFF, taskId, from, to);
-    },
     runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RUN_INTENT_PROGRAM, taskId, input);
     },
@@ -289,7 +345,8 @@ const api = {
     },
   },
 
-  // ── Terminal (raw PTY I/O, queries, subscriptions) ──────────────────────
+  // ── Terminal (raw PTY transport, queries, subscriptions) ────────────────
+  // Orchestrated terminal actions belong on actions.submit / terminal tools.
 
   terminal: {
     startSession(cols?: number, rows?: number) {
@@ -303,9 +360,6 @@ const api = {
     },
     resize(cols: number, rows: number) {
       return ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_RESIZE, cols, rows);
-    },
-    captureScrollback() {
-      return ipcRenderer.invoke(IPC_CHANNELS.TERMINAL_CAPTURE_SCROLLBACK);
     },
     onOutput(callback: (data: string) => void) {
       ipcRenderer.on(IPC_CHANNELS.TERMINAL_OUTPUT, (_event: any, data: string) => {

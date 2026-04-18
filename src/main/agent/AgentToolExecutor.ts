@@ -3,6 +3,7 @@ import { agentRunStore } from './AgentRunStore';
 import { agentCache, makeToolCacheKey } from './AgentCache';
 import { validateToolResult } from './ConstraintValidator';
 import { runWithBrowserOperationContext } from '../browser/browserOperationContext';
+import { runtimeLedgerStore } from '../models/runtimeLedgerStore';
 
 const CACHEABLE_TOOLS = new Set<AgentToolName>([
   'browser.get_state',
@@ -93,6 +94,16 @@ export class AgentToolExecutor {
       toolName: name,
       toolInput: input,
     });
+    runtimeLedgerStore.recordToolEvent({
+      taskId: context.taskId ?? null,
+      runId: context.runId,
+      summary: `Started tool ${name}`,
+      metadata: {
+        toolCallId: record.id,
+        toolName: name,
+        status: 'running',
+      },
+    });
 
     try {
       const executeTool = () => withTimeout(
@@ -120,10 +131,31 @@ export class AgentToolExecutor {
         agentCache.setToolResult(cacheKey, result, cacheTtlForTool(name));
       }
       agentRunStore.finishToolCall(record.id, 'completed', result);
+      runtimeLedgerStore.recordToolEvent({
+        taskId: context.taskId ?? null,
+        runId: context.runId,
+        summary: `Completed tool ${name}: ${result.summary}`,
+        metadata: {
+          toolCallId: record.id,
+          toolName: name,
+          status: 'completed',
+          validationStatus: result.validation?.status,
+        },
+      });
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       agentRunStore.finishToolCall(record.id, 'failed', null, message);
+      runtimeLedgerStore.recordToolEvent({
+        taskId: context.taskId ?? null,
+        runId: context.runId,
+        summary: `Failed tool ${name}: ${message}`,
+        metadata: {
+          toolCallId: record.id,
+          toolName: name,
+          status: 'failed',
+        },
+      });
       throw err;
     }
   }

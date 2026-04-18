@@ -175,18 +175,9 @@ html, body { overflow: hidden; }
   pointer-events: none;
 }
 
-.browser-tab.active.tab-shimmer-on::after {
-  animation: tab-shimmer 4.2s linear forwards;
-}
-
 .browser-tab.split-left.active::after,
 .browser-tab.split-right.active::after {
   opacity: 1;
-}
-
-@keyframes tab-shimmer {
-  from { background-position: 100% 0; }
-  to { background-position: 0 0; }
 }
 
 /* ── Tab internals ── */

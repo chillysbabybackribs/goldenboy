@@ -1,0 +1,445 @@
+{
+  "generatedAt": "2026-04-18T15:35:47.260Z",
+  "providers": [
+    "gpt-5.4"
+  ],
+  "scenarios": [
+    "local-config-lookup"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  Correct  Grounded  MinPath\n----------------------------------------------------------------------------------------\ngpt-5.4      1          1        0        0        0%         100%     100%      100%\n\n## gpt-5.4\n- local-config-lookup: strong_pass | asked=true | coverage=1.00 | failures=none\n\nScenarios without any submitted runs: tests-infer-behavior, runtime-status-from-logs, cross-source-summary, stale-doc-vs-current-code, true-missing-information",
+  "runs": [
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526490792-di92yb",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526490792-di92yb",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "[providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:8) defines the routing defaults.\n\nThe default fallback order is `gpt-5.4 -> haiku`, via `DEFAULT_PROVIDER_ORDER = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID]`. The IDs are declared in [model.ts](/home/dp/Desktop/v2workspace/src/shared/types/model.ts:7).\n\n`pickProviderForPrompt(...)` applies task-specific preference before that fallback:\n- `research`: `haiku -> gpt-5.4`\n- `browser-automation`: `gpt-5.4 -> haiku`\n- `implementation`: `gpt-5.4 -> haiku`\n- `orchestration`, `review`, `debug`: `gpt-5.4 -> haiku`\n\nSo the only default preference that differs from the general order is `research`, which prefers `haiku` first.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "call_AN80EXadtgr6OL0ER417qlSC",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.search_tools",
+            "arguments": {
+              "query": "filesystem.search_file_cache filesystem.read_file_chunk",
+              "limit": 10,
+              "include_loaded": true
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_AN80EXadtgr6OL0ER417qlSC",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.search_tools",
+            "arguments": {
+              "query": "filesystem.search_file_cache filesystem.read_file_chunk",
+              "limit": 10,
+              "include_loaded": true
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 10 tool matches for \\\"filesystem.search_file_cache filesystem.read_file_chunk\\\"\",\"data\":{\"query\":\"filesystem.search_file_cache filesystem.read_file_chunk\",\"matches\":[{\"name\":\"filesystem.read_file_chunk\",\"description\":\"Read one indexed file chunk by chunk id. Use after filesystem.search_file_cache instead of reading whole files.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"file-cache\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"filesystem.search_file_cache\",\"description\":\"Search indexed file chunks by query, optional path prefix, and language. Returns snippets and chunk ids for targeted reads.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"file-cache\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"filesystem.answer_from_cache\",\"description\":\"Answer a file/code question from cached file chunks with compact excerpts and source chunk ids. Prefer this before full file reads.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"file-cache\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"filesystem.read\",\"description\":\"Read a UTF-8 file with freshness-aware cache reuse. Prefer indexed chunks when available, and use startLine/endLine/maxChars to keep reads tight.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"implementation\",\"debug\",\"review\",\"orchestration\",\"general\",\"file-edit\"],\"bindingState\":\"callable\",\"callableNow\":true,\"invokableNow\":true,\"invocationMethod\":\"direct\",\"availableNextTurn\":false,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"browser.read_cached_chunk\",\"description\":\"Read a specific cached page chunk by chunk id. Use after browser.search_page_cache returns a relevant chunk id.\",\"category\":\"browser\",\"relatedPackIds\":[\"research\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"description matches \\\"search\\\"\"},{\"name\":\"filesystem.search\",\"description\":\"Fallback file path and text search under a local path. Prefer filesystem.search_file_cache for indexed source lookup when possible.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"implementation\",\"debug\",\"review\",\"orchestration\",\"general\",\"file-edit\"],\"bindingState\":\"callable\",\"callableNow\":true,\"invokableNow\":true,\"invocationMethod\":\"direct\",\"availableNextTurn\":false,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"filesystem.file_cache_stats\",\"description\":\"Return file knowledge cache size, token estimate, and hit/miss counters.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"file-cache\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"filesystem.list_cached_files\",\"description\":\"List files currently indexed in the file knowledge cache.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"file-cache\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"filesystem\\\"\"},{\"name\":\"browser.search_page_cache\",\"description\":\"Search cached browser page chunks and return compact snippets plus chunk ids. Prefer this before reading full page text.\",\"category\":\"browser\",\"relatedPackIds\":[\"research\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"search\\\"\"},{\"name\":\"filesystem.index_workspace\",\"description\":\"Index a local workspace into compact searchable file chunks. Run this before file-heavy reasoning or after code changes.\",\"category\":\"filesystem\",\"relatedPackIds\":[\"file-cache\"],\"bindingState\":\"discoverable\",\"callableNow\":false,\"invokableNow\":true,\"invocationMethod\":\"runtime.invoke_tool\",\"availableNextTurn\":true,\"reason\":\"name matches \\\"filesystem\\\"\"}],\"tools\":[\"filesystem.read_file_chunk\",\"filesystem.search_file_cache\",\"filesystem.answer_from_cache\",\"filesystem.read\",\"browser.read_cached_chunk\",\"filesystem.search\",\"filesystem.file_cache_stats\",\"filesystem.list_cached_files\",\"browser.search_page_cache\",\"filesystem.index_workspace\"],\"suggestedPackIds\":[\"file-cache\",\"implementation\",\"debug\",\"review\",\"orchestration\",\"general\",\"file-edit\",\"research\"],\"hydration\":{\"callableNow\":[\"filesystem.read\",\"filesystem.search\"],\"invokableNow\":[\"filesystem.read_file_chunk\",\"filesystem.search_file_cache\",\"filesystem.answer_from_cache\",\"filesystem.read\",\"browser.read_cached_chunk\",\"filesystem.search\",\"filesystem.file_cache_stats\",\"filesystem.list_cached_files\",\"browser.search_page_cache\",\"filesystem.index_workspace\"],\"availableNextTurn\":[\"filesystem.read_file_chunk\",\"filesystem.search_file_cache\",\"filesystem.answer_from_cache\",\"browser.read_cached_chunk\",\"filesystem.file_cache_stats\",\"filesystem.list_cached_files\",\"browser.search_page_cache\",\"filesystem.index_workspace\"],\"failed\":[]}}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_UEBR7kFTwAy3P3xMKxRxfjNX",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.search_file_cache",
+              "input": "{\"query\":\"provider routing defaults preference order default providers route routing\", \"path_prefix\":\"/home/dp/Desktop/v2workspace\"}"
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_UEBR7kFTwAy3P3xMKxRxfjNX",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.search_file_cache",
+              "input": "{\"query\":\"provider routing defaults preference order default providers route routing\", \"path_prefix\":\"/home/dp/Desktop/v2workspace\"}"
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Tool execution error: Invalid input for filesystem.search_file_cache: input must be an object; got string."
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_PnaGYVfCvciutgALd6Ir67XB",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.require_tools",
+            "arguments": {
+              "tools": [
+                "filesystem.search_file_cache",
+                "filesystem.read_file_chunk"
+              ],
+              "availability": "now",
+              "mode": "exact",
+              "onFailure": "fail"
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_PnaGYVfCvciutgALd6Ir67XB",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.require_tools",
+            "arguments": {
+              "tools": [
+                "filesystem.search_file_cache",
+                "filesystem.read_file_chunk"
+              ],
+              "availability": "now",
+              "mode": "exact",
+              "onFailure": "fail"
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Granted 2 exact tools for runtime invocation\",\"data\":{\"mode\":\"exact\",\"availability\":\"now\",\"requestedTools\":[\"filesystem.search_file_cache\",\"filesystem.read_file_chunk\"],\"grantedNow\":[\"filesystem.search_file_cache\",\"filesystem.read_file_chunk\"],\"alreadyCallable\":[],\"denied\":[],\"invocationTool\":\"runtime.invoke_tool\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_gxmZbPDbBv9YeQgPEijCszT4",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "provider routing defaults",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_gxmZbPDbBv9YeQgPEijCszT4",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "provider routing defaults",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 6 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityAuditFixtures.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityBenchmarkHarness.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-33-688Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-41-468Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-29-58-344Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-30-33-056Z.json\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_rm72Nd4yzMV0ZgaVsZEvvDx5",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "provider routing",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_rm72Nd4yzMV0ZgaVsZEvvDx5",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "provider routing",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 11 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityAuditFixtures.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityBenchmarkHarness.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityLiveCapture.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/subagents/SubAgentManager.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/archive/root/CODEX_AUDIT.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/archive/root/FULL_AUDIT_PLAN.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-33-688Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-41-468Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-29-58-344Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-30-33-056Z.json\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_Ye4tkLIONbanHNe3UunigYnW",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "default preference order",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_Ye4tkLIONbanHNe3UunigYnW",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "default preference order",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 6 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityAuditFixtures.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityBenchmarkHarness.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-33-688Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-41-468Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-29-58-344Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-30-33-056Z.json\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_C8ETNNYCMfAm1qgf7CyR8tqX",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+              "maxChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_C8ETNNYCMfAm1qgf7CyR8tqX",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+              "maxChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 3105 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts\",\"relativePath\":\"src/main/agent/providerRouting.ts\",\"content\":\"import {\\n  HAIKU_PROVIDER_ID,\\n  PRIMARY_PROVIDER_ID,\\n  type AgentTaskKind,\\n  type AgentTaskProfileOverride,\\n  type ProviderId,\\n} from '../../shared/types/model';\\nimport { buildTaskProfile } from './taskProfile';\\n\\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\\n\\nexport type PrimaryProviderBackend = 'exec' | 'app-server';\\n\\nexport type ProviderRoutingCapabilities = Partial<Record<ProviderId, {\\n  supportsV2ToolRuntime: boolean;\\n}>>;\\n\\nexport function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {\\n  return kind === 'orchestration'\\n    || kind === 'research'\\n    || kind === 'browser-automation'\\n    || kind === 'implementation'\\n    || kind === 'debug'\\n    || kind === 'review';\\n}\\n\\nexport function shouldPreferExecForTaskKind(taskKind: AgentTaskKind): boolean {\\n  return taskKind === 'implementation' || taskKind === 'debug' || taskKind === 'review';\\n}\\n\\nexport function resolvePrimaryProviderBackend(\\n  taskKind: AgentTaskKind,\\n  configuredMode = process.env.CODEX_PROVIDER,\\n  execAvailable = true,\\n): PrimaryProviderBackend {\\n  if (!execAvailable) return 'app-server';\\n  if (configuredMode === 'exec') return 'exec';\\n  return shouldPreferExecForTaskKind(taskKind) ? 'exec' : 'app-server';\\n}\\n\\nexport function providerSupportsPrompt(\\n  providerId: ProviderId,\\n  prompt: string,\\n  overrides?: AgentTaskProfileOverride,\\n  capabilities?: ProviderRoutingCapabilities,\\n): boolean {\\n  const profile = buildTaskProfile(prompt, overrides);\\n  if (!taskKindRequiresV2ToolRuntime(profile.kind)) return true;\\n  if (!capabilities) return true;\\n  return capabilities[providerId]?.supportsV2ToolRuntime === true;\\n}\\n\\nexport function pickProviderForPrompt(\\n  prompt: string,\\n  availableProviders: Iterable<ProviderId>,\\n  overrides?: AgentTaskProfileOverride,\\n  capabilities?: ProviderRoutingCapabilities,\\n): ProviderId | null {\\n  const available = new Set(\\n    Array.from(availableProviders).filter((providerId) => providerSupportsPrompt(\\n      providerId,\\n      prompt,\\n      overrides,\\n      capabilities,\\n    )),\\n  );\\n  const profile = buildTaskProfile(prompt, overrides);\\n\\n  if (available.size === 0) return null;\\n\\n  if (profile.kind === 'research') {\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n  }\\n\\n  if (profile.kind === 'browser-automation') {\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n  }\\n\\n  if (profile.kind === 'implementation') {\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n  }\\n\\n  if (\\n    profile.kind === 'orchestration'\\n    || profile.kind === 'review'\\n    || profile.kind === 'debug'\\n  ) {\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n  }\\n\\n  for (const providerId of DEFAULT_PROVIDER_ORDER) {\\n    if (available.has(providerId)) return providerId;\\n  }\\n\\n  return null;\\n}\\n\",\"truncated\":false,\"startLine\":1,\"endLine\":101,\"totalLines\":101,\"chunkCount\":2,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_DJpm0Or4Y5DFKTTkkm85rRss",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts",
+              "maxChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_DJpm0Or4Y5DFKTTkkm85rRss",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts",
+              "maxChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 2840 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts\",\"relativePath\":\"src/main/agent/providerRouting.test.ts\",\"content\":\"import { describe, expect, it } from 'vitest';\\nimport { pickProviderForPrompt } from './providerRouting';\\nimport { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/model';\\n\\ndescribe('provider routing', () => {\\n  const capabilities = {\\n    [PRIMARY_PROVIDER_ID]: { supportsV2ToolRuntime: true },\\n    [HAIKU_PROVIDER_ID]: { supportsV2ToolRuntime: true },\\n  } as const;\\n\\n  it('prefers haiku for research tasks when available', () => {\\n    expect(pickProviderForPrompt('Search online for the latest SEC guidance', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(HAIKU_PROVIDER_ID);\\n  });\\n\\n  it('routes implementation, debug, and review tasks to gpt-5.4 when available', () => {\\n    expect(pickProviderForPrompt('Patch this TypeScript file and run the local build', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Debug why the Electron app crashes on startup', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Review this PR diff and call out regressions', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n  });\\n\\n  it('falls back to the remaining available provider', () => {\\n    expect(pickProviderForPrompt('Search for the latest Electron release notes', [PRIMARY_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Help me think through a product naming idea', [HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(HAIKU_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Search online for the latest Electron release notes', [HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(HAIKU_PROVIDER_ID);\\n  });\\n\\n  it('routes repo-wide planning to gpt-5.4 and CI investigation to the debug path', () => {\\n    expect(pickProviderForPrompt('Plan a repo-wide migration strategy', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Investigate the failing CI and explain root cause', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n  });\\n\\n  it('uses explicit task kind overrides ahead of prompt heuristics', () => {\\n    expect(pickProviderForPrompt(\\n      'Help me think through a product naming idea',\\n      [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID],\\n      { kind: 'implementation' },\\n      capabilities,\\n    )).toBe(PRIMARY_PROVIDER_ID);\\n\\n    expect(pickProviderForPrompt(\\n      'Patch this TypeScript file and run the local build',\\n      [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID],\\n      { kind: 'research' },\\n      capabilities,\\n    )).toBe(HAIKU_PROVIDER_ID);\\n  });\\n});\\n\",\"truncated\":false,\"startLine\":1,\"endLine\":57,\"totalLines\":57,\"chunkCount\":1,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_6hKSk4kF5kz2cZRa6Ff819rg",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "PRIMARY_PROVIDER_ID",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_6hKSk4kF5kz2cZRa6Ff819rg",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "PRIMARY_PROVIDER_ID",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 20 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/shared/types/appState.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/shared/types/model.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/renderer/command/command.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AgentModelService.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AgentModelService.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AgentPromptBuilder.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/CodexProvider.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/CodexProvider.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerToolRuntime.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/researchSynthesis.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/startupProgress.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/tools/subagentTools.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/subagents/SubAgentManager.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/specs/2026-04-13-codex-app-server-provider-design.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-command-center-input-area-redesign.md\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_7B0zolZUdMkhx2vKgRYJoYA2",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "HAIKU_PROVIDER_ID",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_7B0zolZUdMkhx2vKgRYJoYA2",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "HAIKU_PROVIDER_ID",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 18 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/shared/types/appState.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/shared/types/model.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/renderer/command/command.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AgentModelService.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AgentModelService.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerToolRuntime.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/researchSynthesis.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/startupProgress.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/tools/subagentTools.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/subagents/SubAgentManager.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-command-center-input-area-redesign.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-33-688Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-41-468Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-29-58-344Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-30-33-056Z.json\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_uV74Huo67A9aDipvUI1guTi6",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+              "maxChars": 4000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_uV74Huo67A9aDipvUI1guTi6",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+              "maxChars": 4000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 4020 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/shared/types/model.ts\",\"relativePath\":\"src/shared/types/model.ts\",\"content\":\"// ═══════════════════════════════════════════════════════════════════════════\\n// Model Layer Types — Provider registry, routing, handoff, Codex events\\n// ═══════════════════════════════════════════════════════════════════════════\\n\\n// ─── Provider Identity ────────────────────────────────────────────────────\\n\\nexport const PRIMARY_PROVIDER_ID = 'gpt-5.4' as const;\\nexport const HAIKU_PROVIDER_ID = 'haiku' as const;\\nexport const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;\\n\\nexport type ProviderId = typeof PROVIDER_IDS[number];\\nexport type LegacyProviderId = 'codex';\\nexport type AnyProviderId = ProviderId | LegacyProviderId;\\n\\nexport type ProviderKind = 'cli-process' | 'api-streaming';\\n\\nexport type ProviderStatus = 'available' | 'unavailable' | 'busy' | 'error';\\n\\nexport type ProviderCapability =\\n  | 'code-generation'\\n  | 'code-editing'\\n  | 'shell-execution'\\n  | 'repo-analysis'\\n  | 'chat'\\n  | 'summarization'\\n  | 'intent-parsing'\\n  | 'plan'\\n  | 'planning'\\n  | 'synthesis';\\n\\n// ─── Provider Definition (static, configured at startup) ──────────────────\\n\\nexport type ProviderDefinition = {\\n  id: ProviderId;\\n  displayName: string;\\n  kind: ProviderKind;\\n  capabilities: ProviderCapability[];\\n};\\n\\n// ─── Provider Metrics (from Codex /status) ────────────────────────────────\\n\\nexport type CodexStatusMetrics = {\\n  contextWindow?: { percentLeft: number; used: string; total: string };\\n  limit5h?: { percentLeft: number; resetsAt: string };\\n  limitWeekly?: { percentLeft: number; resetsAt: string };\\n  credits?: number;\\n};\\n\\n// ─── Provider Runtime (dynamic, changes per-request) ──────────────────────\\n\\nexport type ProviderRuntime = {\\n  id: ProviderId;\\n  status: ProviderStatus;\\n  activeTaskId: string | null;\\n  lastActivityAt: number | null;\\n  errorDetail: string | null;\\n  sessionId?: string;\\n  model?: string;\\n  metrics?: CodexStatusMetrics;\\n};\\n\\nexport function createDefaultProviderRuntime(id: ProviderId): ProviderRuntime {\\n  return {\\n    id,\\n    status: 'unavailable',\\n    activeTaskId: null,\\n    lastActivityAt: null,\\n    errorDetail: null,\\n  };\\n}\\n\\nexport function isProviderId(value: string): value is ProviderId {\\n  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;\\n}\\n\\nexport function isLegacyProviderId(value: string): value is LegacyProviderId {\\n  return value === 'codex';\\n}\\n\\n// ─── Task Ownership ───────────────────────────────────────────────────────\\n\\nexport type ModelOwner = ProviderId | 'user';\\n\\nexport type AgentTaskKind =\\n  | 'orchestration'\\n  | 'research'\\n  | 'browser-automation'\\n  | 'implementation'\\n  | 'debug'\\n  | 'review'\\n  | 'delegation'\\n  | 'browser-search'\\n  | 'local-code'\\n  | 'general';\\n\\nexport const AGENT_TOOL_PACK_PRESETS = ['all', 'mode-6', 'mode-4'] as const;\\nexport type AgentToolPackPreset = typeof AGENT_TOOL_PACK_PRESETS[number];\\n\\nexport type AgentTaskProfileOverride = {\\n  kind?: AgentTaskKind;\\n  skillNames?: string[];\\n  toolPackPreset?: AgentToolPackPreset;\\n  canSpawnSubagents?: boolean;\\n  maxToolTurns?: number;\\n  requiresBrowserSearchDirective?: boolean;\\n};\\n\\nexport type ImageInvocationAttachment = {\\n  type: 'image';\\n  mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';\\n  /** Base64-encoded image data (no data-URL prefix). */\\n  data: string;\\n  name?: string;\\n  /** Optional local filesystem path for providers that can read images directly from disk. */\\n  path?: string;\\n};\\n\\nexport type InvocationAttachment = ImageInvocationAttachment | DocumentInvocationAttachment;\\n\\nexport type AgentInvocationOptions = {\\n  systemPrompt?: string;\\n  cwd?: string;\\n  taskProfile?: AgentTaskProfileOverride;\\n  attachments?: InvocationAttachment[];\\n  displayPrompt?: string;\\n};\\n\\n// ─── Codex CLI Event Types (from `codex exec --json`) ─────────────────────\\n\\nexport type CodexItemType = 'agent_message' | 'command_execution' | 'file_change' | 'mcp_tool_call';\\nexport type CodexItemStatus = 'in_progress' | 'completed' | 'failed';\\nexport type CodexFileChangeKind = 'add' | 'update' | 'delete';\\n\\nexport type CodexFil\\n...[file truncated]\",\"truncated\":true,\"startLine\":1,\"endLine\":160,\"totalLines\":295,\"chunkCount\":2,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "gpt-5-4-final-1776526547256",
+            "type": "agent_message",
+            "text": "[providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:8) defines the routing defaults.\n\nThe default fallback order is `gpt-5.4 -> haiku`, via `DEFAULT_PROVIDER_ORDER = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID]`. The IDs are declared in [model.ts](/home/dp/Desktop/v2workspace/src/shared/types/model.ts:7).\n\n`pickProviderForPrompt(...)` applies task-specific preference before that fallback:\n- `research`: `haiku -> gpt-5.4`\n- `browser-automation`: `gpt-5.4 -> haiku`\n- `implementation`: `gpt-5.4 -> haiku`\n- `orchestration`, `review`, `debug`: `gpt-5.4 -> haiku`\n\nSo the only default preference that differs from the general order is `research`, which prefers `haiku` first."
+          }
+        ],
+        "usage": {
+          "inputTokens": 73409,
+          "outputTokens": 487,
+          "durationMs": 56168
+        },
+        "runId": "run_mo4i05a0_f6saek"
+      }
+    }
+  ]
+}

@@ -43,15 +43,20 @@ describe('research synthesis helpers', () => {
 
   it('builds constrained synthesis prompts and formats published output', () => {
     expect(buildBackgroundResearchSynthesisTask()).toContain(NO_MATERIAL_RESEARCH_UPDATE);
+    expect(buildBackgroundResearchSynthesisTask({
+      groundedEvidenceReasoning: true,
+    })).toContain('Preserve the grounded evidence reasoning signals');
 
     const context = buildBackgroundResearchSynthesisContext({
       prompt: 'Compare A vs B.',
       fastAnswer: 'Fast answer.',
       threadSummary: 'Summary.',
+      groundedResearchContext: 'Validated claim: A is supported by two sources. Conflict: B vs C.',
       evidenceTranscript: '[tool] browser.research_search result...',
     });
     expect(context).toContain('## Original Request');
     expect(context).toContain('## Fast Browser Answer');
+    expect(context).toContain('## Grounded Evidence Reasoning');
     expect(context).toContain('## Browser Evidence Transcript');
 
     expect(formatBackgroundResearchSynthesis('Sharper final answer.'))

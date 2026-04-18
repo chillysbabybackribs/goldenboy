@@ -160,7 +160,6 @@ function updateTabSelectionClasses(
   activeTabId: string,
   splitLeftTabId: string | null,
   splitRightTabId: string | null,
-  shouldPlayShimmer: boolean,
 ): void {
   const tabElements = tabList.querySelectorAll('.browser-tab');
   for (const node of tabElements) {
@@ -173,7 +172,6 @@ function updateTabSelectionClasses(
     tabEl.classList.toggle('split-left', isSplitLeft);
     tabEl.classList.toggle('split-right', isSplitRight);
     tabEl.classList.toggle('split-active-side', isActive && (isSplitLeft || isSplitRight));
-    tabEl.classList.toggle('tab-shimmer-on', isActive && shouldPlayShimmer);
   }
 }
 
@@ -190,7 +188,6 @@ function renderTabs(
   const shouldRender = tabsDataKey !== lastRenderedTabsDataKey;
   const shouldUpdateSelection = shouldRender || selectionKey !== lastRenderedTabsSelectionKey;
   const shouldScrollActiveTab = activeTabId !== lastRenderedActiveTabId || tabs.length !== lastRenderedTabCount;
-  const shouldPlayShimmer = activeTabId !== lastShimmeredTabId;
 
   if (shouldRender) {
     tabList.innerHTML = tabs.map(tab => {
@@ -199,7 +196,6 @@ function renderTabs(
       const faviconHtml = tab.navigation?.favicon
         ? `<img class="tab-favicon" src="${escapeHtml(tab.navigation.favicon)}">`
         : '';
-      const isNewActive = isActive && shouldPlayShimmer;
       const isSplitLeft = tab.id === splitLeftTabId;
       const isSplitRight = tab.id === splitRightTabId;
       const splitClass = isSplitLeft ? 'split-left' : isSplitRight ? 'split-right' : '';
@@ -208,7 +204,6 @@ function renderTabs(
         isActive ? 'active' : '',
         splitClass,
         splitActiveClass,
-        isNewActive ? 'tab-shimmer-on' : '',
       ].filter(Boolean).join(' ');
       return `<div class="browser-tab ${tabClasses}" data-tab-id="${tab.id}">
         ${faviconHtml}
@@ -220,13 +215,12 @@ function renderTabs(
     lastRenderedTabsDataKey = tabsDataKey;
     lastRenderedTabCount = tabs.length;
   } else if (shouldUpdateSelection) {
-    updateTabSelectionClasses(activeTabId, splitLeftTabId, splitRightTabId, shouldPlayShimmer);
+    updateTabSelectionClasses(activeTabId, splitLeftTabId, splitRightTabId);
   }
 
   if (shouldUpdateSelection) {
     lastRenderedTabsSelectionKey = selectionKey;
     lastRenderedActiveTabId = activeTabId;
-    lastShimmeredTabId = activeTabId;
   }
 
   const needsLayoutPass = shouldRender || shouldScrollActiveTab || btnNewTab.parentElement !== tabList;
@@ -383,7 +377,6 @@ function renderTabOverflowDropdown(): void {
 }
 
 let overflowOpen = false;
-let lastShimmeredTabId = '';
 
 function setOverflowOpen(open: boolean): void {
   overflowOpen = open;
@@ -980,8 +973,7 @@ function updateTerminalMeta(session: TerminalSessionInfo): void {
   const m: Record<string, string> = { idle: 'Idle', starting: 'Starting', running: 'Running', exited: 'Exited', error: 'Error' };
   terminalStatus.textContent = m[session.status] || session.status;
   const p: string[] = []; if (session.shell) p.push(session.shell.split('/').pop() || session.shell); if (session.pid) p.push(`PID ${session.pid}`);
-  if (session.persistent) p.push('tmux');
-  else p.push('no persistence');
+  p.push('ephemeral PTY');
   terminalMeta.textContent = p.join(' | ');
   if (session.status === 'running') { connectionDot.className = 'status-dot done'; connectionLabel.textContent = session.restored ? 'Reconnected' : 'Connected'; }
 }

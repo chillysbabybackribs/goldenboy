@@ -27,6 +27,10 @@ export class AppServerBackedProvider implements AgentProvider {
 
   constructor(private readonly options: AppServerBackedProviderOptions) {}
 
+  async prewarm(): Promise<void> {
+    await this.getDelegate();
+  }
+
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
     const provider = await this.getDelegate();
     return provider.invoke(request);
@@ -78,6 +82,9 @@ export class AppServerBackedProvider implements AgentProvider {
         }
         return provider;
       })();
+      this.connectPromise.catch(() => {
+        this.connectPromise = null;
+      });
     }
 
     return this.connectPromise;

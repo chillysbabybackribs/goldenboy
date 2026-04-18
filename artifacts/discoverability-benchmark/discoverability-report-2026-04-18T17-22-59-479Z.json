@@ -1,0 +1,1062 @@
+{
+  "generatedAt": "2026-04-18T17:22:59.479Z",
+  "providers": [
+    "gpt-5.4"
+  ],
+  "scenarios": [
+    "cross-source-summary",
+    "stale-doc-vs-current-code",
+    "true-missing-information"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  CorrectEsc Correct  Grounded  MinPath\n---------------------------------------------------------------------------------------------------\ngpt-5.4      1          0        1        0        0%         0%         100%     100%      0%\n\n## gpt-5.4\nUnavailable runs:\n- cross-source-summary: benchmark unavailable: invocation timeout\n- true-missing-information: benchmark unavailable: invocation timeout\n\nBuckets:\n- stale_vs_current: scenarios=1 | strong=0 | soft=1 | fail=0 | correctEsc=0% | minPath=0%\n\n- stale-doc-vs-current-code: soft_pass | asked=false | correctEscalation=false | coverage=0.50 | failures=none\n\nScenarios without any submitted runs: local-config-lookup, tests-infer-behavior, runtime-status-from-logs",
+  "runs": [
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-cross-source-summary-gpt-5.4-1776532814799-ycpxds",
+      "prompt": "Using `ConstraintValidator.ts`, `discoverabilityAudit.ts`, and `MODEL_DISCOVERABILITY_AUDIT_PLAN.md`, explain how tool-result validation differs from discoverability benchmark scoring in this repo.",
+      "result": {
+        "taskId": "discoverability-live-cross-source-summary-gpt-5.4-1776532814799-ycpxds",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 60000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 60000
+        }
+      }
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-stale-doc-vs-current-code-gpt-5.4-1776532874906-fhtaa9",
+      "prompt": "A historical app-server rollout plan is marked partially stale. Check the current code and determine which implementation file now persists Codex thread IDs, and what persisted filename it uses.",
+      "result": {
+        "taskId": "discoverability-live-stale-doc-vs-current-code-gpt-5.4-1776532874906-fhtaa9",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "`src/main/agent/AppServerProvider.ts` is the implementation file that currently persists Codex thread IDs.\n\nIt stores them in `codex-threads.json`, resolved under Electron `app.getPath('userData')`, with a fallback to `os.tmpdir()` if `userData` is unavailable.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "call_bIXzFFVpKdHTjbUSjczXFvf9",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "thread ID codex",
+              "limit": 10
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_bIXzFFVpKdHTjbUSjczXFvf9",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "thread ID codex",
+              "limit": 10
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 0 matches\",\"data\":{\"matches\":[]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_sdnGb0xW1QWG8AnSFyAiA5XM",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "threadId",
+              "limit": 50
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_sdnGb0xW1QWG8AnSFyAiA5XM",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "threadId",
+              "limit": 50
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 6 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/specs/2026-04-13-codex-app-server-provider-design.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/specs/2026-04-13-codex-browser-tool-enforcement.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-browser-tool-enforcement.md\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_oVKRbnnOaKNCGs8XvXa8O1s5",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "codexThread",
+              "limit": 50
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_oVKRbnnOaKNCGs8XvXa8O1s5",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "codexThread",
+              "limit": 50
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 0 matches\",\"data\":{\"matches\":[]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_rAC58S89c1gQTeD7trkZzGTW",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "persist*thread",
+              "limit": 50
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_rAC58S89c1gQTeD7trkZzGTW",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "persist*thread",
+              "limit": 50
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 0 matches\",\"data\":{\"matches\":[]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_U2As3jC71CbC0H0xr76Gg2KS",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "startLine": 1,
+              "endLine": 260
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_U2As3jC71CbC0H0xr76Gg2KS",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "startLine": 1,
+              "endLine": 260
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 6020 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts\",\"relativePath\":\"src/main/agent/AppServerProvider.ts\",\"content\":\"import * as fs from 'fs';\\nimport * as path from 'path';\\nimport * as os from 'os';\\nimport { app } from 'electron';\\nimport {\\n  PRIMARY_PROVIDER_ID,\\n  type CodexItem,\\n  type ProviderId,\\n} from '../../shared/types/model';\\nimport type {\\n  AgentProvider,\\n  AgentProviderRequest,\\n  AgentProviderResult,\\n  AgentToolName,\\n} from './AgentTypes';\\nimport {\\n  applyAutoExpandedToolPack,\\n  applyRuntimeToolExpansion,\\n  DEFAULT_PROVIDER_MAX_TOOL_TURNS,\\n  describeProviderToolCall,\\n  formatAutoExpandedToolPackLines,\\n  normalizeProviderMaxToolTurns,\\n  publishProviderFinalOutput,\\n} from './providerToolRuntime';\\nimport {\\n  AgentToolBindingStore,\\n  createRequestToolBindingStore,\\n  listCallableRequestTools,\\n} from './toolBindingScope';\\nimport type { AppServerProcess } from './AppServerProcess';\\n\\n// ─── Constants ───────────────────────────────────────────────────────────\\n\\nconst THREAD_FILE = 'codex-threads.json';\\nconst SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;\\nconst TURN_TIMEOUT_MS = 3 * 60 * 1000;\\nconst DEFAULT_CONTEXT_PATH = path.join(os.tmpdir(), 'v2-tool-context.json');\\n\\n// Use the Node 24 built-in WebSocket global via type cast.\\n// eslint-disable-next-line @typescript-eslint/no-explicit-any\\nconst NativeWebSocket = (globalThis as any).WebSocket as typeof WebSocket;\\n\\n// ─── Thread Registry Types ───────────────────────────────────────────────\\n\\ntype ThreadEntry = { threadId: string; savedAt: number };\\ntype ThreadRegistry = Record<string, ThreadEntry>;\\n\\n// ─── Thread Registry Persistence ─────────────────────────────────────────\\n\\nfunction getThreadFilePath(): string {\\n  try {\\n    return path.join(app.getPath('userData'), THREAD_FILE);\\n  } catch {\\n    return path.join(os.tmpdir(), THREAD_FILE);\\n  }\\n}\\n\\nexport function pruneExpiredEntries(entries: ThreadRegistry, now: number): ThreadRegistry {\\n  const result: ThreadRegistry = {};\\n  for (const [taskId, entry] of Object.entries(entries)) {\\n    if (now - entry.savedAt <= SEVEN_DAYS_MS) {\\n      result[taskId] = entry;\\n    }\\n  }\\n  return result;\\n}\\n\\nexport function loadThreadRegistry(): ThreadRegistry {\\n  try {\\n    const filePath = getThreadFilePath();\\n    if (!fs.existsSync(filePath)) return {};\\n    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ThreadRegistry;\\n    return pruneExpiredEntries(typeof parsed === 'object' && parsed ? parsed : {}, Date.now());\\n  } catch {\\n    return {};\\n  }\\n}\\n\\nexport function saveThreadRegistry(registry: ThreadRegistry): void {\\n  try {\\n    fs.writeFileSync(getThreadFilePath(), JSON.stringify(registry, null, 2), 'utf-8');\\n  } catch (err) {\\n    console.error('AppServerProvider: failed to persist thread registry:', err);\\n  }\\n}\\n\\n// ─── MCP Name Translation ────────────────────────────────────────────────\\n\\nfunction fromMcpName(mcpName: string): string {\\n  return mcpName.replace(/__/g, '.');\\n}\\n\\nfunction toMcpName(toolName: string): string {\\n  return toolName.replace(/\\\\./g, '__');\\n}\\n\\nfunction shouldEmitThoughtStatus(text: string): boolean {\\n  const trimmed = text.trim();\\n  if (!trimmed) return false;\\n  if (trimmed.endsWith('?')) return true;\\n\\n  const lower = trimmed.toLowerCase();\\n  if (/(^|\\\\b)(need|needs|choose|confirm|select|pick|provide|enter|paste|upload|share|tell me|let me know|which|what|where|when)(\\\\b|$)/.test(lower)) {\\n    return true;\\n  }\\n  if (/(^|\\\\b)(blocked|cannot|can't|unable|missing|permission|permissions|sign in|login|log in|authenticate|approval required)(\\\\b|$)/.test(lower)) {\\n    return true;\\n  }\\n  return false;\\n}\\n\\n// ─── WebSocket Message Types ─────────────────────────────────────────────\\n\\ntype WsMsg = Record<string, unknown>;\\n\\n// Codex app-server uses JSON-RPC 2.0 over WebSocket.\\n// Responses: { id, result } or { id, error }\\n// Push notifications: { method, params }\\ntype WsNotification = { method: string; params: Record<string, unknown> };\\ntype WsResponse = { id: number; result?: Record<string, unknown>; error?: { code: number; message: string } };\\n\\n// ─── Provider Options ────────────────────────────────────────────────────\\n\\ntype AppServerProviderOptions = {\\n  providerId?: ProviderId;\\n  modelId?: string;\\n  process: AppServerProcess;\\n  contextPath?: string;\\n};\\n\\ntype TurnStartInputItem =\\n  | { type: 'text'; text: string }\\n  | { type: 'local_image'; path: string }\\n  | { type: 'input_image'; image_url: string };\\n\\n// ─── Provider Implementation ─────────────────────────────────────────────\\n\\nexport class AppServerProvider implements AgentProvider {\\n  readonly providerId: ProviderId;\\n  readonly modelId: string;\\n  readonly supportsAppToolExecutor = true;\\n\\n  private aborted = false;\\n  private abortCurrentTurn: (() => void) | null = null;\\n  private ws: WebSocket | null = null;\\n  private threadRegistry: ThreadRegistry = loadThreadRegistry();\\n  private nextId = 1;\\n  private readonly contextPath: string;\\n\\n  constructor(private readonly options: AppServerProviderOptions) {\\n    this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;\\n    this.modelId = options.modelId ?? this.providerId;\\n    this.contextPath = options.contextPath ?? DEFAULT_CONTEXT_PATH;\\n  }\\n\\n  abort(): void {\\n    this.aborted = true;\\n    this.abortCurrentTurn?.();\\n  }\\n\\n  async connect(wsPort: number): Promise<void> {\\n    return new Promise<void>((resolve, reject) => {\\n      const ws = new NativeWebSocket(`ws://127.0.0.1:${wsPort}`);\\n      const initId = this.nextId++;\\n\\n      const timer = setTimeout(() => {\\n        ws.removeEventListener('message', messageHandler);\\n        ws.close();\\n        reject(new Error('AppServerProvider: initialize handshake timed out'));\\n      }, 30_000);\\n\\n      const messageHandler = (event: MessageEvent): void => {\\n        try {\\n          const msg = JSON.parse(\\n            typeof event.data === 'string' ? event.data : event.data.toString(),\\n          ) as WsResponse;\\n          if (msg.id === initId) {\\n            clearTimeout(timer);\\n            ws.removeEventListener('message', messageHandler);\\n            if (msg.error) {\\n              ws.close();\\n              reject(new Error(`AppServerProvider: initialize failed: ${msg.\\n...[file truncated]\",\"truncated\":true,\"startLine\":1,\"endLine\":260,\"totalLines\":793,\"chunkCount\":4,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_nbCGg55s7OGzmrjT1U46sCAD",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts",
+              "startLine": 1,
+              "endLine": 260
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_nbCGg55s7OGzmrjT1U46sCAD",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts",
+              "startLine": 1,
+              "endLine": 260
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 6020 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts\",\"relativePath\":\"src/main/agent/AppServerProvider.test.ts\",\"content\":\"import { describe, it, expect, vi } from 'vitest';\\nimport { pruneExpiredEntries } from './AppServerProvider';\\nimport { AppServerProvider } from './AppServerProvider';\\n\\nconst SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;\\n\\ndescribe('thread registry persistence helpers', () => {\\n  describe('pruneExpiredEntries', () => {\\n    it('removes entries older than 7 days', () => {\\n      const now = Date.now();\\n      const entries = {\\n        'task-old': { threadId: 'thread-old', savedAt: now - SEVEN_DAYS_MS - 1 },\\n        'task-new': { threadId: 'thread-new', savedAt: now - 1000 },\\n      };\\n      const pruned = pruneExpiredEntries(entries, now);\\n      expect(pruned['task-old']).toBeUndefined();\\n      expect(pruned['task-new']).toBeDefined();\\n    });\\n\\n    it('keeps entries exactly at 7 days boundary', () => {\\n      const now = Date.now();\\n      const entries = {\\n        'task-boundary': { threadId: 'thread-b', savedAt: now - SEVEN_DAYS_MS },\\n      };\\n      const pruned = pruneExpiredEntries(entries, now);\\n      expect(pruned['task-boundary']).toBeDefined();\\n    });\\n  });\\n});\\n\\ndescribe('MCP name translation', () => {\\n  it('dots become __ (round-trip)', () => {\\n    expect('filesystem.list'.replace(/\\\\./g, '__')).toBe('filesystem__list');\\n    expect('filesystem__list'.replace(/__/g, '.')).toBe('filesystem.list');\\n  });\\n});\\n\\ndescribe('web_search config enforcement', () => {\\n  it('includes web_search disabled in thread/start params', async () => {\\n    const sentMessages: unknown[] = [];\\n    const mockWs = {\\n      send: (data: string) => {\\n        const msg = JSON.parse(data) as { id: number; method?: string };\\n        sentMessages.push(msg);\\n        if (msg.method === 'thread/start') {\\n          setTimeout(() => {\\n            const handler = (mockWs as any)._messageHandlers?.[0];\\n            handler?.({ data: JSON.stringify({ id: msg.id, result: { thread: { id: 'thread-1' } } }) });\\n          }, 0);\\n        }\\n      },\\n      addEventListener: (event: string, handler: unknown) => {\\n        if (event === 'message') {\\n          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];\\n          (mockWs as any)._messageHandlers.push(handler);\\n        }\\n      },\\n      removeEventListener: (_event: string, handler: unknown) => {\\n        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;\\n        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);\\n      },\\n    } as unknown as WebSocket;\\n\\n    const provider = new AppServerProvider({\\n      providerId: 'gpt-5.4' as any,\\n      modelId: 'gpt-5.4',\\n      process: {} as any,\\n    });\\n    await (provider as any).startThread(mockWs, 'task-1', 'system instructions');\\n\\n    const threadStart = sentMessages.find((m: any) => m.method === 'thread/start') as any;\\n    expect(threadStart).toBeDefined();\\n    expect(threadStart.params.config).toEqual({ web_search: 'disabled' });\\n    expect(threadStart.params.developerInstructions).toBe('system instructions');\\n    expect(threadStart.params.instructions).toBeUndefined();\\n  });\\n\\n  it('includes web_search disabled in thread/resume params', async () => {\\n    const sentMessages: unknown[] = [];\\n    const mockWs = {\\n      send: (data: string) => {\\n        const msg = JSON.parse(data) as { id: number; method?: string };\\n        sentMessages.push(msg);\\n        if (msg.method === 'thread/resume') {\\n          setTimeout(() => {\\n            const handler = (mockWs as any)._messageHandlers?.[0];\\n            handler?.({ data: JSON.stringify({ id: msg.id, result: {} }) });\\n          }, 0);\\n        }\\n      },\\n      addEventListener: (event: string, handler: unknown) => {\\n        if (event === 'message') {\\n          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];\\n          (mockWs as any)._messageHandlers.push(handler);\\n        }\\n      },\\n      removeEventListener: (_event: string, handler: unknown) => {\\n        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;\\n        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);\\n      },\\n    } as unknown as WebSocket;\\n\\n    const provider = new AppServerProvider({\\n      providerId: 'gpt-5.4' as any,\\n      modelId: 'gpt-5.4',\\n      process: {} as any,\\n    });\\n    await (provider as any).resumeThread(mockWs, 'task-1', 'thread-1', 'system instructions');\\n\\n    const threadResume = sentMessages.find((m: any) => m.method === 'thread/resume') as any;\\n    expect(threadResume).toBeDefined();\\n    expect(threadResume.params.config).toEqual({ web_search: 'disabled' });\\n    expect(threadResume.params.developerInstructions).toBe('system instructions');\\n    expect(threadResume.params.instructions).toBeUndefined();\\n  });\\n});\\n\\ndescribe('turn text emission', () => {\\n  it('streams assistant deltas immediately for tool-calling turns', async () => {\\n    const tokens: string[] = [];\\n    const statuses: string[] = [];\\n    const mockWs = {\\n      send: (data: string) => {\\n        const msg = JSON.parse(data) as { id: number; method?: string };\\n        if (msg.method === 'turn/start') {\\n          setTimeout(() => {\\n            const handlers = (mockWs as any)._messageHandlers ?? [];\\n            for (const handler of handlers) {\\n              handler({ data: JSON.stringify({ method: 'item/agentMessage/delta', params: { delta: 'Checking the page before I click.' } }) });\\n              handler({ data: JSON.stringify({\\n                method: 'item/started',\\n                params: {\\n                  item: {\\n                    id: 'tool-1',\\n                    type: 'mcpToolCall',\\n                    server: 'v2-tools',\\n                    tool: 'browser__click',\\n                    arguments: { selector: '#submit' },\\n                  },\\n                },\\n              }) });\\n              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });\\n            }\\n          }, 0);\\n        }\\n      },\\n      addEventListener: (event: string, handler: unknown) => {\\n        if (event === 'message') {\\n          (mockWs as any).\\n...[file truncated]\",\"truncated\":true,\"startLine\":1,\"endLine\":260,\"totalLines\":471,\"chunkCount\":4,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_iZn4qEjfXK21RVLqUOhluJLM",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "startLine": 1,
+              "endLine": 220
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_iZn4qEjfXK21RVLqUOhluJLM",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "startLine": 1,
+              "endLine": 220
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 6020 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md\",\"relativePath\":\"docs/superpowers/plans/2026-04-13-codex-app-server-provider.md\",\"content\":\"# Codex App-Server Provider Historical Implementation Plan\\n\\n> Status note: this document is historical and partially stale. It records the original rollout plan, not a line-by-line description of the current code. The current implementation in `src/main/agent/AppServerBackedProvider.ts`, `src/main/agent/AppServerProvider.ts`, `src/main/agent/AppServerProcess.ts`, `src/main/agent/V2ToolBridge.ts`, and `src/main/agent/AgentModelService.ts` is the source of truth.\\n\\n> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.\\n\\n**Original goal:** Replace the per-turn `codex exec` spawn loop with a persistent `codex app-server` WebSocket connection, giving real token streaming, session continuity, and lower latency.\\n\\n**Architecture (current code):** `V2ToolBridge` runs an in-process localhost HTTP server around `agentToolExecutor`; `AppServerProcess` manages the `codex app-server` child process and rewrites the managed `~/.codex/config.toml` MCP entry; `src/main/agent/v2-mcp-shim.js` bridges Codex MCP stdio to `V2ToolBridge` and watches the tool-context file for `notifications/tools/list_changed`; `AppServerProvider` handles the WebSocket thread/turn protocol, while `AppServerBackedProvider` owns bridge/process lifecycle and is the provider shape that `AgentModelService` instantiates for the primary provider path.\\n\\n**Tech Stack:** Node.js `http` + `net` (no external deps for the shim), `ws` for WebSocket client, Electron `app.getPath('userData')` for thread persistence, existing `agentToolExecutor` / `chatKnowledgeStore` / `ConstraintValidator` unchanged.\\n\\n## Verified Current Implementation Reality\\n\\nChecked against code on 2026-04-18.\\n\\n- `AgentModelService` prewarms a shared `AppServerBackedProvider` for the primary provider instead of wiring `AppServerProvider` directly.\\n- `AgentModelService.initializeAppServerProvider()` marks the primary provider as available only after `prewarm()` succeeds; on prewarm failure it records an error state instead of silently falling back to `CodexProvider`.\\n- `AgentModelService.init()` currently calls `initializeAppServerProvider(PROVIDER_CONFIGS[0])` and `initializeHaikuProvider(PROVIDER_CONFIGS[1])`; the older `initializeCodexProvider()` method still exists in the file but is not called from startup.\\n- `AgentModelService.createProviderInstance()` returns the shared prewarmed provider for the primary provider when available, otherwise creates a fresh `AppServerBackedProvider` instance for that task. It does not consult task kind or `resolvePrimaryProviderBackend()`.\\n- `providerRouting.ts` contains `resolvePrimaryProviderBackend()` and `PrimaryProviderBackend = 'exec' | 'app-server'`, but that helper is not wired into primary-provider construction yet, so the backend switch described later in this doc is still only partially implemented.\\n- `AppServerBackedProvider` lazily creates and owns `V2ToolBridge`, `AppServerProcess`, and a unique temp tool-context file, then delegates requests to `AppServerProvider`.\\n- `AppServerProcess` rewrites `~/.codex/config.toml` to register the `v2-tools` MCP server, strips older managed bridge entries, starts `codex app-server --listen ws://127.0.0.1:0`, waits for `/readyz`, restarts the process with backoff after crashes, and clears the managed config block on stop.\\n- `AppServerProvider` persists thread IDs in `codex-threads.json`, resumes threads by `taskId` when possible, falls back to `thread/start` when resume fails, writes the callable tool scope to the context file before each turn, starts/resumes threads with `approvalPolicy: 'never'`, `sandboxPolicy: { type: 'dangerFullAccess' }`, and `config: { web_search: 'disabled' }`, and sends `turn/interrupt` on abort.\\n- `V2ToolBridge` exposes `agentToolExecutor` over localhost HTTP, translates tool names between `.` and `__`, enforces the per-turn allowed tool set from the context file, and records non-chat tool calls into `chatKnowledgeStore`.\\n- `src/main/agent/v2-mcp-shim.js` is no longer just the minimal bridge sketched below; it also watches the context file and emits `notifications/tools/list_changed` so Codex can refresh callable tools mid-session.\\n- `CodexProvider` still exists in the codebase, but the primary provider path is app-server-backed when initialization succeeds.\\n\\n## Known Conflicts Between This Plan And Current Code\\n\\n- The planned `CODEX_PROVIDER=exec` escape hatch is only partially landed. The routing helper exists in `providerRouting.ts`, but `AgentModelService` still initializes and instantiates the primary provider through `AppServerBackedProvider`, so current startup remains app-server first with an error state if prewarm fails.\\n- The later sections that describe swapping to `CodexProvider` at startup via `CODEX_PROVIDER=exec` are historical design notes, not current behavior. Today there is no startup path in `AgentModelService.init()` that calls `initializeCodexProvider()` for the primary provider.\\n- The \\\"File Map\\\" below is historical rollout intent. Several entries marked `Create` are now long-landed files, and the implementation also touched lifecycle and routing code outside the original narrow file list.\\n- The step-by-step code snippets below should be treated as draft implementation notes only. They do not exactly match the current TypeScript or JavaScript sources, especially for `v2-mcp-shim.js`, `V2ToolBridge.ts`, `AppServerProcess.ts`, and the `AgentModelService` startup path.\\n\\n---\\n\\n## Historical File Map\\n\\n| Action | File | Responsibility |\\n|---|---|---|\\n| Create | `src/main/agent/v2-mcp-shim.js` | 39-line stdio↔HTTP bridge; spawned by codex as MCP server |\\n| Create | `src/main/agent/V2ToolBridge.ts` | In-process localhost HTTP server wrapping agentToolExecutor |\\n| Create | `src/main/agent/AppServerProcess.ts` | Manages `codex app-server` child process lifecycle |\\n| Create | `src/main/ag\\n...[file truncated]\",\"truncated\":true,\"startLine\":1,\"endLine\":220,\"totalLines\":1587,\"chunkCount\":4,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_sN4Jf3seWA52q9xTMJoB2pJF",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "query": "saveThreadRegistry(",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_sN4Jf3seWA52q9xTMJoB2pJF",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "query": "saveThreadRegistry(",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Tool execution error: ENOTDIR: not a directory, scandir '/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts'"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_pwGHo5OpjMLCuwv4LRgtBEgf",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "query": "threadRegistry",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_pwGHo5OpjMLCuwv4LRgtBEgf",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "query": "threadRegistry",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Tool execution error: ENOTDIR: not a directory, scandir '/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts'"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_X2CG9DGBByr6oEhNcnQaGaqX",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerBackedProvider.ts",
+              "query": "thread",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_X2CG9DGBByr6oEhNcnQaGaqX",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerBackedProvider.ts",
+              "query": "thread",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Tool execution error: ENOTDIR: not a directory, scandir '/home/dp/Desktop/v2workspace/src/main/agent/AppServerBackedProvider.ts'"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_tVh98WvFTfRXavcssDw05z4T",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "terminal.exec",
+            "arguments": {
+              "command": "rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts",
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "maxOutputChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_tVh98WvFTfRXavcssDw05z4T",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "terminal.exec",
+            "arguments": {
+              "command": "rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts",
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "maxOutputChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Executed command: rg -n \\\"THREAD_FILE|saveThreadRegistry|threadRegistry\\\\[|threadId\\\" src/main/agent/AppServerProvider.ts (exit 0)\",\"data\":{\"command\":\"rg -n \\\"THREAD_FILE|saveThreadRegistry|threadRegistry\\\\[|threadId\\\" src/main/agent/AppServerProvider.ts\",\"exitCode\":0,\"cwd\":\"/home/dp/Desktop/v2workspace\",\"durationMs\":15,\"output\":\"34:const THREAD_FILE = 'codex-threads.json';\\n45:type ThreadEntry = { threadId: string; savedAt: number };\\n52:    return path.join(app.getPath('userData'), THREAD_FILE);\\n54:    return path.join(os.tmpdir(), THREAD_FILE);\\n79:export function saveThreadRegistry(registry: ThreadRegistry): void {\\n242:    const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);\\n263:        threadId,\\n347:    const existing = this.threadRegistry[taskId];\\n350:        return await this.resumeThread(ws, taskId, existing.threadId, systemPrompt);\\n353:        delete this.threadRegistry[taskId];\\n354:        saveThreadRegistry(this.threadRegistry);\\n384:          const threadId = thread?.id;\\n385:          if (!threadId) {\\n389:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\\n390:          saveThreadRegistry(this.threadRegistry);\\n391:          resolve(threadId);\\n421:    threadId: string,\\n443:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\\n444:          saveThreadRegistry(this.threadRegistry);\\n445:          resolve(threadId);\\n462:          threadId,\\n478:      threadId: string;\\n494:    const { threadId, task, request, currentTools, toolCatalog } = params;\\n521:          params: { threadId },\\n726:          threadId,\\n\",\"filesystemCacheInvalidated\":true,\"followUp\":\"If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.\"},\"validation\":{\"status\":\"VALID\",\"constraints\":[{\"name\":\"exit_code\",\"status\":\"PASS\",\"observed\":\"0\",\"expected\":\"0\"}],\"summary\":\"All constraints passed.\"}}\n--- RUNTIME VALIDATION (deterministic — do not override) ---\nSTATUS: VALID\n  [PASS] exit_code: observed=0 expected=0\nVERDICT: All constraints passed.\n--- END RUNTIME VALIDATION ---"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_1rgLlPFAAxI2XvD85qtKmIuE",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "terminal.exec",
+            "arguments": {
+              "command": "rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "maxOutputChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_1rgLlPFAAxI2XvD85qtKmIuE",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "terminal.exec",
+            "arguments": {
+              "command": "rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "maxOutputChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Executed command: rg -n \\\"AppServerProvider|codex-threads\\\\.json|thread IDs|thread registry\\\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md (exit 0)\",\"data\":{\"command\":\"rg -n \\\"AppServerProvider|codex-threads\\\\.json|thread IDs|thread registry\\\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md\",\"exitCode\":0,\"cwd\":\"/home/dp/Desktop/v2workspace\",\"durationMs\":15,\"output\":\"3:> Status note: this document is historical and partially stale. It records the original rollout plan, not a line-by-line description of the current code. The current implementation in `src/main/agent/AppServerBackedProvider.ts`, `src/main/agent/AppServerProvider.ts`, `src/main/agent/AppServerProcess.ts`, `src/main/agent/V2ToolBridge.ts`, and `src/main/agent/AgentModelService.ts` is the source of truth.\\n9:**Architecture (current code):** `V2ToolBridge` runs an in-process localhost HTTP server around `agentToolExecutor`; `AppServerProcess` manages the `codex app-server` child process and rewrites the managed `~/.codex/config.toml` MCP entry; `src/main/agent/v2-mcp-shim.js` bridges Codex MCP stdio to `V2ToolBridge` and watches the tool-context file for `notifications/tools/list_changed`; `AppServerProvider` handles the WebSocket thread/turn protocol, while `AppServerBackedProvider` owns bridge/process lifecycle and is the provider shape that `AgentModelService` instantiates for the primary provider path.\\n17:- `AgentModelService` prewarms a shared `AppServerBackedProvider` for the primary provider instead of wiring `AppServerProvider` directly.\\n18:- `AgentModelService.initializeAppServerProvider()` marks the primary provider as available only after `prewarm()` succeeds; on prewarm failure it records an error state instead of silently falling back to `CodexProvider`.\\n19:- `AgentModelService.init()` currently calls `initializeAppServerProvider(PROVIDER_CONFIGS[0])` and `initializeHaikuProvider(PROVIDER_CONFIGS[1])`; the older `initializeCodexProvider()` method still exists in the file but is not called from startup.\\n22:- `AppServerBackedProvider` lazily creates and owns `V2ToolBridge`, `AppServerProcess`, and a unique temp tool-context file, then delegates requests to `AppServerProvider`.\\n24:- `AppServerProvider` persists thread IDs in `codex-threads.json`, resumes threads by `taskId` when possible, falls back to `thread/start` when resume fails, writes the callable tool scope to the context file before each turn, starts/resumes threads with `approvalPolicy: 'never'`, `sandboxPolicy: { type: 'dangerFullAccess' }`, and `config: { web_search: 'disabled' }`, and sends `turn/interrupt` on abort.\\n45:| Create | `src/main/agent/AppServerProvider.ts` | AgentProvider WebSocket implementation for the app-server turn loop |\\n46:| Create | `src/main/agent/AppServerBackedProvider.ts` | Lifecycle wrapper that owns bridge/process startup and delegates to `AppServerProvider` |\\n152:V2ToolBridge wraps `agentToolExecutor` behind a localhost HTTP server. It reads tool context (runId, agentId, taskId, mode) from a temp JSON file written by AppServerProvider before each turn. Tool names use `__` as separator instead of `.` to comply with MCP naming rules (e.g. `filesystem__list`).\\n715:## Task 4: AppServerProvider — AgentProvider WebSocket implementation\\n718:- Create: `src/main/agent/AppServerProvider.ts`\\n719:- Create: `src/main/agent/AppServerProvider.test.ts`\\n721:AppServerProvider implements `AgentProvider`. It maintains a thread registry (`Map<taskId, threadId>`), persisted to `userData/codex-threads.json`. Each `invoke()` does: write context file → thread/start or thread/resume → turn/start → accumulate streaming events → build AgentProviderResult.\\n728:// src/main/agent/AppServerProvider.test.ts\\n729:import { AppServerProvider, loadThreadRegistry, saveThreadRegistry, pruneExpiredEntries } from './AppServerProvider';\\n733:describe('thread registry persistence helpers', () => {\\n758:  // These are internal to AppServerProvider but we test via the provider's behavior indirectly.\\n771:npx jest src/main/agent/AppServerProvider.test.ts --no-coverage\\n774:Expected: FAIL — `AppServerProvider`, `loadThreadRegistry`, `saveThreadRegistry`, `pruneExpiredEntries` not found.\\n776:- [ ] **Step 3: Implement AppServerProvider**\\n779:// src/main/agent/AppServerProvider.ts\\n801:const THREAD_FILE = 'codex-threads.json';\\n844:    console.error('AppServerProvider: failed to persist thread registry:', err);\\n852:// ─── AppServerProvider ────────────────────────────────────────────────────────\\n854:type AppServerProviderOptions = {\\n860:export class AppServerProvider implements AgentProvider {\\n871:  constructor(private readonly options: AppServerProviderOptions) {\\n904:      throw new Error('AppServerProvider WebSocket is not connected. Wait for connect() to complete.');\\n1328:npx jest src/main/agent/AppServerProvider.test.ts --no-coverage\\n1336:git add src/main/agent/AppServerProvider.ts src/main/agent/AppServerProvider.test.ts\\n1337:git commit -m \\\"feat(codex): add AppServerProvider WebSocket AgentProvider with thread persistence\\\"\\n1347:Replace `initializeCodexProvider` with `initializeAppServerProvider`. The new method:\\n1352:5. Creates `AppServerProvider`, calls `provider.connect(wsPort)`.\\n1355:Also update `createProviderInstance()` to return an `AppServerProvider` for the primary provider.\\n1369:import { AppServerProvider } from './AppServerProvider';\\n1390:    void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);\\n1403:private async initializeAppServerProvider(config: { id: ProviderId; label: string; modelId: string }): Promise<void> {\\n1435:    const provider = new AppServerProvider({\\n1463:private appServerProvider: AppServerProvider | null = null;\\n1466:Then inside `initializeAppServerProvider`, after creating the provider and before `this.providers.set(...)`:\\n1510:git commit -m \\\"feat(codex): wire AppServerProvider into AgentModelService startup\\\"\\n1577:| AppServerProvider: thread/start + thread/resume with fallback | Task 4 |\\n1578:| AppServerProvider: token streaming via `item/agentMessage/delta` | Task 4 |\\n1579:| AppServerProvider: onItem + onStatus for mcpToolCall events | Task 4 |\\n1580:| AppServerProvider: tool pack expansion (resolveToolPackExpansion + resolveAutoExpandedToolPack) | Task 4 |\\n1581:| AppServerProvider: turn/interrupt on abort | Task 4 |\\n1582:| AppServerProvider: usage from `thread/tokenUsage/updated` | Task 4 |\\n1583:| Thread persistence: `userData/codex-threads.json`, 7-day eviction | Task 4 |\\n1584:| AgentModelService: V2ToolBridge → AppServerProcess → AppServerProvider startup | Task 5 |\\n\",\"filesystemCacheInvalidated\":true,\"followUp\":\"If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.\"},\"validation\":{\"status\":\"INVALID\",\"constraints\":[{\"name\":\"exit_code\",\"status\":\"PASS\",\"observed\":\"0\",\"expected\":\"0\"},{\"name\":\"output_error_signals\",\"status\":\"FAIL\",\"observed\":\"output contains error signals: \\\\bnot found\\\\b\",\"expected\":\"no error signals in output\"}],\"summary\":\"VALIDATION FAILED. output_error_signals: FAIL — output contains error signals: \\\\bnot found\\\\b\"}}\n--- RUNTIME VALIDATION (deterministic — do not override) ---\nSTATUS: INVALID\n  [PASS] exit_code: observed=0 expected=0\n  [FAIL] output_error_signals: observed=output contains error signals: \\bnot found\\b expected=no error signals in output\nVERDICT: VALIDATION FAILED. output_error_signals: FAIL — output contains error signals: \\bnot found\\b\nACTION REQUIRED: This result has failed deterministic validation. Do NOT claim this task succeeded. Report the failure to the user and explain what went wrong.\n--- END RUNTIME VALIDATION ---"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_xvDss9MWteGL9fdQ6qVmD2Ei",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "terminal.exec",
+            "arguments": {
+              "command": "rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent",
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "maxOutputChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_xvDss9MWteGL9fdQ6qVmD2Ei",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "terminal.exec",
+            "arguments": {
+              "command": "rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent",
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "maxOutputChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Executed command: rg -n \\\"threadId|codex-threads\\\\.json|saveThreadRegistry|loadThreadRegistry\\\" src/main/agent (exit 0)\",\"data\":{\"command\":\"rg -n \\\"threadId|codex-threads\\\\.json|saveThreadRegistry|loadThreadRegistry\\\" src/main/agent\",\"exitCode\":0,\"cwd\":\"/home/dp/Desktop/v2workspace\",\"durationMs\":20,\"output\":\"src/main/agent/AppServerProvider.ts:34:const THREAD_FILE = 'codex-threads.json';\\nsrc/main/agent/AppServerProvider.ts:45:type ThreadEntry = { threadId: string; savedAt: number };\\nsrc/main/agent/AppServerProvider.ts:68:export function loadThreadRegistry(): ThreadRegistry {\\nsrc/main/agent/AppServerProvider.ts:79:export function saveThreadRegistry(registry: ThreadRegistry): void {\\nsrc/main/agent/AppServerProvider.ts:146:  private threadRegistry: ThreadRegistry = loadThreadRegistry();\\nsrc/main/agent/AppServerProvider.ts:242:    const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);\\nsrc/main/agent/AppServerProvider.ts:263:        threadId,\\nsrc/main/agent/AppServerProvider.ts:350:        return await this.resumeThread(ws, taskId, existing.threadId, systemPrompt);\\nsrc/main/agent/AppServerProvider.ts:354:        saveThreadRegistry(this.threadRegistry);\\nsrc/main/agent/AppServerProvider.ts:384:          const threadId = thread?.id;\\nsrc/main/agent/AppServerProvider.ts:385:          if (!threadId) {\\nsrc/main/agent/AppServerProvider.ts:389:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\\nsrc/main/agent/AppServerProvider.ts:390:          saveThreadRegistry(this.threadRegistry);\\nsrc/main/agent/AppServerProvider.ts:391:          resolve(threadId);\\nsrc/main/agent/AppServerProvider.ts:421:    threadId: string,\\nsrc/main/agent/AppServerProvider.ts:443:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\\nsrc/main/agent/AppServerProvider.ts:444:          saveThreadRegistry(this.threadRegistry);\\nsrc/main/agent/AppServerProvider.ts:445:          resolve(threadId);\\nsrc/main/agent/AppServerProvider.ts:462:          threadId,\\nsrc/main/agent/AppServerProvider.ts:478:      threadId: string;\\nsrc/main/agent/AppServerProvider.ts:494:    const { threadId, task, request, currentTools, toolCatalog } = params;\\nsrc/main/agent/AppServerProvider.ts:521:          params: { threadId },\\nsrc/main/agent/AppServerProvider.ts:726:          threadId,\\nsrc/main/agent/AppServerProvider.test.ts:12:        'task-old': { threadId: 'thread-old', savedAt: now - SEVEN_DAYS_MS - 1 },\\nsrc/main/agent/AppServerProvider.test.ts:13:        'task-new': { threadId: 'thread-new', savedAt: now - 1000 },\\nsrc/main/agent/AppServerProvider.test.ts:23:        'task-boundary': { threadId: 'thread-b', savedAt: now - SEVEN_DAYS_MS },\\nsrc/main/agent/AppServerProvider.test.ts:166:      threadId: 'thread-1',\\nsrc/main/agent/AppServerProvider.test.ts:237:      threadId: 'thread-1',\\nsrc/main/agent/AppServerProvider.test.ts:304:      threadId: 'thread-1',\\nsrc/main/agent/AppServerProvider.test.ts:361:      threadId: 'thread-1',\\nsrc/main/agent/discoverabilityAuditFixtures.ts:109:    expectedAnswerIncludes: ['AppServerProvider', 'codex-threads.json'],\\n\",\"filesystemCacheInvalidated\":true,\"followUp\":\"If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.\"},\"validation\":{\"status\":\"VALID\",\"constraints\":[{\"name\":\"exit_code\",\"status\":\"PASS\",\"observed\":\"0\",\"expected\":\"0\"}],\"summary\":\"All constraints passed.\"}}\n--- RUNTIME VALIDATION (deterministic — do not override) ---\nSTATUS: VALID\n  [PASS] exit_code: observed=0 expected=0\nVERDICT: All constraints passed.\n--- END RUNTIME VALIDATION ---"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "gpt-5-4-final-1776532919375",
+            "type": "agent_message",
+            "text": "`src/main/agent/AppServerProvider.ts` is the implementation file that currently persists Codex thread IDs.\n\nIt stores them in `codex-threads.json`, resolved under Electron `app.getPath('userData')`, with a fallback to `os.tmpdir()` if `userData` is unavailable."
+          }
+        ],
+        "processEntries": [
+          {
+            "kind": "tool",
+            "text": "Files: search \"thread ID codex\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"thread ID codex\" -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"threadId\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"threadId\" -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"codexThread\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"codexThread\" -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"persist*thread\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"persist*thread\" -> done"
+          },
+          {
+            "kind": "thought",
+            "text": "I’m reading the implementation and its test to confirm whether that’s the active persistence path and to extract the exact filename."
+          },
+          {
+            "kind": "tool",
+            "text": "Files: read /home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: read /home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: read /home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: read /home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: read /home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: read /home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"saveThreadRegistry(\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"saveThreadRegistry(\" -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"threadRegistry\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"threadRegistry\" -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"thread\""
+          },
+          {
+            "kind": "tool",
+            "text": "Files: search \"thread\" -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Terminal: run rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts"
+          },
+          {
+            "kind": "tool",
+            "text": "Terminal: run rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Terminal: run rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md"
+          },
+          {
+            "kind": "tool",
+            "text": "Terminal: run rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md -> done"
+          },
+          {
+            "kind": "tool",
+            "text": "Terminal: run rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent"
+          },
+          {
+            "kind": "tool",
+            "text": "Terminal: run rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent -> done"
+          }
+        ],
+        "usage": {
+          "inputTokens": 81530,
+          "outputTokens": 480,
+          "durationMs": 44151
+        },
+        "runId": "run_mo4lszcb_pz71j7"
+      }
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532919385-klbdmg",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "result": {
+        "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532919385-klbdmg",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 60000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 60000
+        }
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "gpt-5.4",
+      "prompt": "Using `ConstraintValidator.ts`, `discoverabilityAudit.ts`, and `MODEL_DISCOVERABILITY_AUDIT_PLAN.md`, explain how tool-result validation differs from discoverability benchmark scoring in this repo.",
+      "output": "benchmark timeout after 60000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "gpt-5.4",
+      "prompt": "A historical app-server rollout plan is marked partially stale. Check the current code and determine which implementation file now persists Codex thread IDs, and what persisted filename it uses.",
+      "output": "`src/main/agent/AppServerProvider.ts` is the implementation file that currently persists Codex thread IDs.\n\nIt stores them in `codex-threads.json`, resolved under Electron `app.getPath('userData')`, with a fallback to `os.tmpdir()` if `userData` is unavailable.",
+      "toolCalls": [
+        {
+          "id": "tool_mo4lt7jo_pc58b3",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace",
+            "query": "thread ID codex",
+            "limit": 10
+          },
+          "output": {
+            "summary": "Found 0 matches",
+            "data": {
+              "matches": []
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532885620,
+          "completedAt": 1776532885631,
+          "error": null
+        },
+        {
+          "id": "tool_mo4lt7kf_ekenr1",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace",
+            "query": "threadId",
+            "limit": 50
+          },
+          "output": {
+            "summary": "Found 6 matches",
+            "data": {
+              "matches": [
+                {
+                  "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts",
+                  "reason": "content"
+                },
+                {
+                  "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+                  "reason": "content"
+                },
+                {
+                  "path": "/home/dp/Desktop/v2workspace/docs/superpowers/specs/2026-04-13-codex-app-server-provider-design.md",
+                  "reason": "content"
+                },
+                {
+                  "path": "/home/dp/Desktop/v2workspace/docs/superpowers/specs/2026-04-13-codex-browser-tool-enforcement.md",
+                  "reason": "content"
+                },
+                {
+                  "path": "/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+                  "reason": "content"
+                },
+                {
+                  "path": "/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-browser-tool-enforcement.md",
+                  "reason": "content"
+                }
+              ]
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532885647,
+          "completedAt": 1776532885686,
+          "error": null
+        },
+        {
+          "id": "tool_mo4lt7ly_03mogx",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace",
+            "query": "codexThread",
+            "limit": 50
+          },
+          "output": {
+            "summary": "Found 0 matches",
+            "data": {
+              "matches": []
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532885702,
+          "completedAt": 1776532885735,
+          "error": null
+        },
+        {
+          "id": "tool_mo4lt7n5_11425r",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace",
+            "query": "persist*thread",
+            "limit": 50
+          },
+          "output": {
+            "summary": "Found 0 matches",
+            "data": {
+              "matches": []
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532885745,
+          "completedAt": 1776532885781,
+          "error": null
+        },
+        {
+          "id": "tool_mo4ltbjx_wfedg1",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.read",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+            "startLine": 1,
+            "endLine": 260
+          },
+          "output": {
+            "summary": "Read 6020 characters from indexed file window",
+            "data": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+              "relativePath": "src/main/agent/AppServerProvider.ts",
+              "content": "import * as fs from 'fs';\nimport * as path from 'path';\nimport * as os from 'os';\nimport { app } from 'electron';\nimport {\n  PRIMARY_PROVIDER_ID,\n  type CodexItem,\n  type ProviderId,\n} from '../../shared/types/model';\nimport type {\n  AgentProvider,\n  AgentProviderRequest,\n  AgentProviderResult,\n  AgentToolName,\n} from './AgentTypes';\nimport {\n  applyAutoExpandedToolPack,\n  applyRuntimeToolExpansion,\n  DEFAULT_PROVIDER_MAX_TOOL_TURNS,\n  describeProviderToolCall,\n  formatAutoExpandedToolPackLines,\n  normalizeProviderMaxToolTurns,\n  publishProviderFinalOutput,\n} from './providerToolRuntime';\nimport {\n  AgentToolBindingStore,\n  createRequestToolBindingStore,\n  listCallableRequestTools,\n} from './toolBindingScope';\nimport type { AppServerProcess } from './AppServerProcess';\n\n// ─── Constants ───────────────────────────────────────────────────────────\n\nconst THREAD_FILE = 'codex-threads.json';\nconst SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;\nconst TURN_TIMEOUT_MS = 3 * 60 * 1000;\nconst DEFAULT_CONTEXT_PATH = path.join(os.tmpdir(), 'v2-tool-context.json');\n\n// Use the Node 24 built-in WebSocket global via type cast.\n// eslint-disable-next-line @typescript-eslint/no-explicit-any\nconst NativeWebSocket = (globalThis as any).WebSocket as typeof WebSocket;\n\n// ─── Thread Registry Types ───────────────────────────────────────────────\n\ntype ThreadEntry = { threadId: string; savedAt: number };\ntype ThreadRegistry = Record<string, ThreadEntry>;\n\n// ─── Thread Registry Persistence ─────────────────────────────────────────\n\nfunction getThreadFilePath(): string {\n  try {\n    return path.join(app.getPath('userData'), THREAD_FILE);\n  } catch {\n    return path.join(os.tmpdir(), THREAD_FILE);\n  }\n}\n\nexport function pruneExpiredEntries(entries: ThreadRegistry, now: number): ThreadRegistry {\n  const result: ThreadRegistry = {};\n  for (const [taskId, entry] of Object.entries(entries)) {\n    if (now - entry.savedAt <= SEVEN_DAYS_MS) {\n      result[taskId] = entry;\n    }\n  }\n  return result;\n}\n\nexport function loadThreadRegistry(): ThreadRegistry {\n  try {\n    const filePath = getThreadFilePath();\n    if (!fs.existsSync(filePath)) return {};\n    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ThreadRegistry;\n    return pruneExpiredEntries(typeof parsed === 'object' && parsed ? parsed : {}, Date.now());\n  } catch {\n    return {};\n  }\n}\n\nexport function saveThreadRegistry(registry: ThreadRegistry): void {\n  try {\n    fs.writeFileSync(getThreadFilePath(), JSON.stringify(registry, null, 2), 'utf-8');\n  } catch (err) {\n    console.error('AppServerProvider: failed to persist thread registry:', err);\n  }\n}\n\n// ─── MCP Name Translation ────────────────────────────────────────────────\n\nfunction fromMcpName(mcpName: string): string {\n  return mcpName.replace(/__/g, '.');\n}\n\nfunction toMcpName(toolName: string): string {\n  return toolName.replace(/\\./g, '__');\n}\n\nfunction shouldEmitThoughtStatus(text: string): boolean {\n  const trimmed = text.trim();\n  if (!trimmed) return false;\n  if (trimmed.endsWith('?')) return true;\n\n  const lower = trimmed.toLowerCase();\n  if (/(^|\\b)(need|needs|choose|confirm|select|pick|provide|enter|paste|upload|share|tell me|let me know|which|what|where|when)(\\b|$)/.test(lower)) {\n    return true;\n  }\n  if (/(^|\\b)(blocked|cannot|can't|unable|missing|permission|permissions|sign in|login|log in|authenticate|approval required)(\\b|$)/.test(lower)) {\n    return true;\n  }\n  return false;\n}\n\n// ─── WebSocket Message Types ─────────────────────────────────────────────\n\ntype WsMsg = Record<string, unknown>;\n\n// Codex app-server uses JSON-RPC 2.0 over WebSocket.\n// Responses: { id, result } or { id, error }\n// Push notifications: { method, params }\ntype WsNotification = { method: string; params: Record<string, unknown> };\ntype WsResponse = { id: number; result?: Record<string, unknown>; error?: { code: number; message: string } };\n\n// ─── Provider Options ────────────────────────────────────────────────────\n\ntype AppServerProviderOptions = {\n  providerId?: ProviderId;\n  modelId?: string;\n  process: AppServerProcess;\n  contextPath?: string;\n};\n\ntype TurnStartInputItem =\n  | { type: 'text'; text: string }\n  | { type: 'local_image'; path: string }\n  | { type: 'input_image'; image_url: string };\n\n// ─── Provider Implementation ─────────────────────────────────────────────\n\nexport class AppServerProvider implements AgentProvider {\n  readonly providerId: ProviderId;\n  readonly modelId: string;\n  readonly supportsAppToolExecutor = true;\n\n  private aborted = false;\n  private abortCurrentTurn: (() => void) | null = null;\n  private ws: WebSocket | null = null;\n  private threadRegistry: ThreadRegistry = loadThreadRegistry();\n  private nextId = 1;\n  private readonly contextPath: string;\n\n  constructor(private readonly options: AppServerProviderOptions) {\n    this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;\n    this.modelId = options.modelId ?? this.providerId;\n    this.contextPath = options.contextPath ?? DEFAULT_CONTEXT_PATH;\n  }\n\n  abort(): void {\n    this.aborted = true;\n    this.abortCurrentTurn?.();\n  }\n\n  async connect(wsPort: number): Promise<void> {\n    return new Promise<void>((resolve, reject) => {\n      const ws = new NativeWebSocket(`ws://127.0.0.1:${wsPort}`);\n      const initId = this.nextId++;\n\n      const timer = setTimeout(() => {\n        ws.removeEventListener('message', messageHandler);\n        ws.close();\n        reject(new Error('AppServerProvider: initialize handshake timed out'));\n      }, 30_000);\n\n      const messageHandler = (event: MessageEvent): void => {\n        try {\n          const msg = JSON.parse(\n            typeof event.data === 'string' ? event.data : event.data.toString(),\n          ) as WsResponse;\n          if (msg.id === initId) {\n            clearTimeout(timer);\n            ws.removeEventListener('message', messageHandler);\n            if (msg.error) {\n              ws.close();\n              reject(new Error(`AppServerProvider: initialize failed: ${msg.\n...[file truncated]",
+              "truncated": true,
+              "startLine": 1,
+              "endLine": 260,
+              "totalLines": 793,
+              "chunkCount": 4,
+              "source": "indexed-window"
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532890813,
+          "completedAt": 1776532890813,
+          "error": null
+        },
+        {
+          "id": "tool_mo4ltbk7_u8kl5y",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.read",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts",
+            "startLine": 1,
+            "endLine": 260
+          },
+          "output": {
+            "summary": "Read 6020 characters from indexed file window",
+            "data": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.test.ts",
+              "relativePath": "src/main/agent/AppServerProvider.test.ts",
+              "content": "import { describe, it, expect, vi } from 'vitest';\nimport { pruneExpiredEntries } from './AppServerProvider';\nimport { AppServerProvider } from './AppServerProvider';\n\nconst SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;\n\ndescribe('thread registry persistence helpers', () => {\n  describe('pruneExpiredEntries', () => {\n    it('removes entries older than 7 days', () => {\n      const now = Date.now();\n      const entries = {\n        'task-old': { threadId: 'thread-old', savedAt: now - SEVEN_DAYS_MS - 1 },\n        'task-new': { threadId: 'thread-new', savedAt: now - 1000 },\n      };\n      const pruned = pruneExpiredEntries(entries, now);\n      expect(pruned['task-old']).toBeUndefined();\n      expect(pruned['task-new']).toBeDefined();\n    });\n\n    it('keeps entries exactly at 7 days boundary', () => {\n      const now = Date.now();\n      const entries = {\n        'task-boundary': { threadId: 'thread-b', savedAt: now - SEVEN_DAYS_MS },\n      };\n      const pruned = pruneExpiredEntries(entries, now);\n      expect(pruned['task-boundary']).toBeDefined();\n    });\n  });\n});\n\ndescribe('MCP name translation', () => {\n  it('dots become __ (round-trip)', () => {\n    expect('filesystem.list'.replace(/\\./g, '__')).toBe('filesystem__list');\n    expect('filesystem__list'.replace(/__/g, '.')).toBe('filesystem.list');\n  });\n});\n\ndescribe('web_search config enforcement', () => {\n  it('includes web_search disabled in thread/start params', async () => {\n    const sentMessages: unknown[] = [];\n    const mockWs = {\n      send: (data: string) => {\n        const msg = JSON.parse(data) as { id: number; method?: string };\n        sentMessages.push(msg);\n        if (msg.method === 'thread/start') {\n          setTimeout(() => {\n            const handler = (mockWs as any)._messageHandlers?.[0];\n            handler?.({ data: JSON.stringify({ id: msg.id, result: { thread: { id: 'thread-1' } } }) });\n          }, 0);\n        }\n      },\n      addEventListener: (event: string, handler: unknown) => {\n        if (event === 'message') {\n          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];\n          (mockWs as any)._messageHandlers.push(handler);\n        }\n      },\n      removeEventListener: (_event: string, handler: unknown) => {\n        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;\n        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);\n      },\n    } as unknown as WebSocket;\n\n    const provider = new AppServerProvider({\n      providerId: 'gpt-5.4' as any,\n      modelId: 'gpt-5.4',\n      process: {} as any,\n    });\n    await (provider as any).startThread(mockWs, 'task-1', 'system instructions');\n\n    const threadStart = sentMessages.find((m: any) => m.method === 'thread/start') as any;\n    expect(threadStart).toBeDefined();\n    expect(threadStart.params.config).toEqual({ web_search: 'disabled' });\n    expect(threadStart.params.developerInstructions).toBe('system instructions');\n    expect(threadStart.params.instructions).toBeUndefined();\n  });\n\n  it('includes web_search disabled in thread/resume params', async () => {\n    const sentMessages: unknown[] = [];\n    const mockWs = {\n      send: (data: string) => {\n        const msg = JSON.parse(data) as { id: number; method?: string };\n        sentMessages.push(msg);\n        if (msg.method === 'thread/resume') {\n          setTimeout(() => {\n            const handler = (mockWs as any)._messageHandlers?.[0];\n            handler?.({ data: JSON.stringify({ id: msg.id, result: {} }) });\n          }, 0);\n        }\n      },\n      addEventListener: (event: string, handler: unknown) => {\n        if (event === 'message') {\n          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];\n          (mockWs as any)._messageHandlers.push(handler);\n        }\n      },\n      removeEventListener: (_event: string, handler: unknown) => {\n        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;\n        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);\n      },\n    } as unknown as WebSocket;\n\n    const provider = new AppServerProvider({\n      providerId: 'gpt-5.4' as any,\n      modelId: 'gpt-5.4',\n      process: {} as any,\n    });\n    await (provider as any).resumeThread(mockWs, 'task-1', 'thread-1', 'system instructions');\n\n    const threadResume = sentMessages.find((m: any) => m.method === 'thread/resume') as any;\n    expect(threadResume).toBeDefined();\n    expect(threadResume.params.config).toEqual({ web_search: 'disabled' });\n    expect(threadResume.params.developerInstructions).toBe('system instructions');\n    expect(threadResume.params.instructions).toBeUndefined();\n  });\n});\n\ndescribe('turn text emission', () => {\n  it('streams assistant deltas immediately for tool-calling turns', async () => {\n    const tokens: string[] = [];\n    const statuses: string[] = [];\n    const mockWs = {\n      send: (data: string) => {\n        const msg = JSON.parse(data) as { id: number; method?: string };\n        if (msg.method === 'turn/start') {\n          setTimeout(() => {\n            const handlers = (mockWs as any)._messageHandlers ?? [];\n            for (const handler of handlers) {\n              handler({ data: JSON.stringify({ method: 'item/agentMessage/delta', params: { delta: 'Checking the page before I click.' } }) });\n              handler({ data: JSON.stringify({\n                method: 'item/started',\n                params: {\n                  item: {\n                    id: 'tool-1',\n                    type: 'mcpToolCall',\n                    server: 'v2-tools',\n                    tool: 'browser__click',\n                    arguments: { selector: '#submit' },\n                  },\n                },\n              }) });\n              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });\n            }\n          }, 0);\n        }\n      },\n      addEventListener: (event: string, handler: unknown) => {\n        if (event === 'message') {\n          (mockWs as any).\n...[file truncated]",
+              "truncated": true,
+              "startLine": 1,
+              "endLine": 260,
+              "totalLines": 471,
+              "chunkCount": 4,
+              "source": "indexed-window"
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532890823,
+          "completedAt": 1776532890823,
+          "error": null
+        },
+        {
+          "id": "tool_mo4ltbl5_9dy07d",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.read",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+            "startLine": 1,
+            "endLine": 220
+          },
+          "output": {
+            "summary": "Read 6020 characters from indexed file window",
+            "data": {
+              "path": "/home/dp/Desktop/v2workspace/docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "relativePath": "docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "content": "# Codex App-Server Provider Historical Implementation Plan\n\n> Status note: this document is historical and partially stale. It records the original rollout plan, not a line-by-line description of the current code. The current implementation in `src/main/agent/AppServerBackedProvider.ts`, `src/main/agent/AppServerProvider.ts`, `src/main/agent/AppServerProcess.ts`, `src/main/agent/V2ToolBridge.ts`, and `src/main/agent/AgentModelService.ts` is the source of truth.\n\n> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.\n\n**Original goal:** Replace the per-turn `codex exec` spawn loop with a persistent `codex app-server` WebSocket connection, giving real token streaming, session continuity, and lower latency.\n\n**Architecture (current code):** `V2ToolBridge` runs an in-process localhost HTTP server around `agentToolExecutor`; `AppServerProcess` manages the `codex app-server` child process and rewrites the managed `~/.codex/config.toml` MCP entry; `src/main/agent/v2-mcp-shim.js` bridges Codex MCP stdio to `V2ToolBridge` and watches the tool-context file for `notifications/tools/list_changed`; `AppServerProvider` handles the WebSocket thread/turn protocol, while `AppServerBackedProvider` owns bridge/process lifecycle and is the provider shape that `AgentModelService` instantiates for the primary provider path.\n\n**Tech Stack:** Node.js `http` + `net` (no external deps for the shim), `ws` for WebSocket client, Electron `app.getPath('userData')` for thread persistence, existing `agentToolExecutor` / `chatKnowledgeStore` / `ConstraintValidator` unchanged.\n\n## Verified Current Implementation Reality\n\nChecked against code on 2026-04-18.\n\n- `AgentModelService` prewarms a shared `AppServerBackedProvider` for the primary provider instead of wiring `AppServerProvider` directly.\n- `AgentModelService.initializeAppServerProvider()` marks the primary provider as available only after `prewarm()` succeeds; on prewarm failure it records an error state instead of silently falling back to `CodexProvider`.\n- `AgentModelService.init()` currently calls `initializeAppServerProvider(PROVIDER_CONFIGS[0])` and `initializeHaikuProvider(PROVIDER_CONFIGS[1])`; the older `initializeCodexProvider()` method still exists in the file but is not called from startup.\n- `AgentModelService.createProviderInstance()` returns the shared prewarmed provider for the primary provider when available, otherwise creates a fresh `AppServerBackedProvider` instance for that task. It does not consult task kind or `resolvePrimaryProviderBackend()`.\n- `providerRouting.ts` contains `resolvePrimaryProviderBackend()` and `PrimaryProviderBackend = 'exec' | 'app-server'`, but that helper is not wired into primary-provider construction yet, so the backend switch described later in this doc is still only partially implemented.\n- `AppServerBackedProvider` lazily creates and owns `V2ToolBridge`, `AppServerProcess`, and a unique temp tool-context file, then delegates requests to `AppServerProvider`.\n- `AppServerProcess` rewrites `~/.codex/config.toml` to register the `v2-tools` MCP server, strips older managed bridge entries, starts `codex app-server --listen ws://127.0.0.1:0`, waits for `/readyz`, restarts the process with backoff after crashes, and clears the managed config block on stop.\n- `AppServerProvider` persists thread IDs in `codex-threads.json`, resumes threads by `taskId` when possible, falls back to `thread/start` when resume fails, writes the callable tool scope to the context file before each turn, starts/resumes threads with `approvalPolicy: 'never'`, `sandboxPolicy: { type: 'dangerFullAccess' }`, and `config: { web_search: 'disabled' }`, and sends `turn/interrupt` on abort.\n- `V2ToolBridge` exposes `agentToolExecutor` over localhost HTTP, translates tool names between `.` and `__`, enforces the per-turn allowed tool set from the context file, and records non-chat tool calls into `chatKnowledgeStore`.\n- `src/main/agent/v2-mcp-shim.js` is no longer just the minimal bridge sketched below; it also watches the context file and emits `notifications/tools/list_changed` so Codex can refresh callable tools mid-session.\n- `CodexProvider` still exists in the codebase, but the primary provider path is app-server-backed when initialization succeeds.\n\n## Known Conflicts Between This Plan And Current Code\n\n- The planned `CODEX_PROVIDER=exec` escape hatch is only partially landed. The routing helper exists in `providerRouting.ts`, but `AgentModelService` still initializes and instantiates the primary provider through `AppServerBackedProvider`, so current startup remains app-server first with an error state if prewarm fails.\n- The later sections that describe swapping to `CodexProvider` at startup via `CODEX_PROVIDER=exec` are historical design notes, not current behavior. Today there is no startup path in `AgentModelService.init()` that calls `initializeCodexProvider()` for the primary provider.\n- The \"File Map\" below is historical rollout intent. Several entries marked `Create` are now long-landed files, and the implementation also touched lifecycle and routing code outside the original narrow file list.\n- The step-by-step code snippets below should be treated as draft implementation notes only. They do not exactly match the current TypeScript or JavaScript sources, especially for `v2-mcp-shim.js`, `V2ToolBridge.ts`, `AppServerProcess.ts`, and the `AgentModelService` startup path.\n\n---\n\n## Historical File Map\n\n| Action | File | Responsibility |\n|---|---|---|\n| Create | `src/main/agent/v2-mcp-shim.js` | 39-line stdio↔HTTP bridge; spawned by codex as MCP server |\n| Create | `src/main/agent/V2ToolBridge.ts` | In-process localhost HTTP server wrapping agentToolExecutor |\n| Create | `src/main/agent/AppServerProcess.ts` | Manages `codex app-server` child process lifecycle |\n| Create | `src/main/ag\n...[file truncated]",
+              "truncated": true,
+              "startLine": 1,
+              "endLine": 220,
+              "totalLines": 1587,
+              "chunkCount": 4,
+              "source": "indexed-window"
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532890857,
+          "completedAt": 1776532890867,
+          "error": null
+        },
+        {
+          "id": "tool_mo4ltju2_ag3av9",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+            "query": "saveThreadRegistry(",
+            "limit": 20
+          },
+          "output": null,
+          "status": "failed",
+          "startedAt": 1776532901546,
+          "completedAt": 1776532901546,
+          "error": "ENOTDIR: not a directory, scandir '/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts'"
+        },
+        {
+          "id": "tool_mo4ltjub_eu8re4",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts",
+            "query": "threadRegistry",
+            "limit": 20
+          },
+          "output": null,
+          "status": "failed",
+          "startedAt": 1776532901555,
+          "completedAt": 1776532901555,
+          "error": "ENOTDIR: not a directory, scandir '/home/dp/Desktop/v2workspace/src/main/agent/AppServerProvider.ts'"
+        },
+        {
+          "id": "tool_mo4ltjuu_6kpdrd",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "filesystem.search",
+          "input": {
+            "path": "/home/dp/Desktop/v2workspace/src/main/agent/AppServerBackedProvider.ts",
+            "query": "thread",
+            "limit": 20
+          },
+          "output": null,
+          "status": "failed",
+          "startedAt": 1776532901574,
+          "completedAt": 1776532901574,
+          "error": "ENOTDIR: not a directory, scandir '/home/dp/Desktop/v2workspace/src/main/agent/AppServerBackedProvider.ts'"
+        },
+        {
+          "id": "tool_mo4ltoz1_qymfze",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "terminal.exec",
+          "input": {
+            "command": "rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts",
+            "cwd": "/home/dp/Desktop/v2workspace",
+            "maxOutputChars": 12000
+          },
+          "output": {
+            "summary": "Executed command: rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts (exit 0)",
+            "data": {
+              "command": "rg -n \"THREAD_FILE|saveThreadRegistry|threadRegistry\\[|threadId\" src/main/agent/AppServerProvider.ts",
+              "exitCode": 0,
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "durationMs": 15,
+              "output": "34:const THREAD_FILE = 'codex-threads.json';\n45:type ThreadEntry = { threadId: string; savedAt: number };\n52:    return path.join(app.getPath('userData'), THREAD_FILE);\n54:    return path.join(os.tmpdir(), THREAD_FILE);\n79:export function saveThreadRegistry(registry: ThreadRegistry): void {\n242:    const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);\n263:        threadId,\n347:    const existing = this.threadRegistry[taskId];\n350:        return await this.resumeThread(ws, taskId, existing.threadId, systemPrompt);\n353:        delete this.threadRegistry[taskId];\n354:        saveThreadRegistry(this.threadRegistry);\n384:          const threadId = thread?.id;\n385:          if (!threadId) {\n389:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\n390:          saveThreadRegistry(this.threadRegistry);\n391:          resolve(threadId);\n421:    threadId: string,\n443:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\n444:          saveThreadRegistry(this.threadRegistry);\n445:          resolve(threadId);\n462:          threadId,\n478:      threadId: string;\n494:    const { threadId, task, request, currentTools, toolCatalog } = params;\n521:          params: { threadId },\n726:          threadId,\n",
+              "filesystemCacheInvalidated": true,
+              "followUp": "If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search."
+            },
+            "validation": {
+              "status": "VALID",
+              "constraints": [
+                {
+                  "name": "exit_code",
+                  "status": "PASS",
+                  "observed": "0",
+                  "expected": "0"
+                }
+              ],
+              "summary": "All constraints passed."
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532908205,
+          "completedAt": 1776532908224,
+          "error": null
+        },
+        {
+          "id": "tool_mo4ltp05_cavlwt",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "terminal.exec",
+          "input": {
+            "command": "rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+            "cwd": "/home/dp/Desktop/v2workspace",
+            "maxOutputChars": 12000
+          },
+          "output": {
+            "summary": "Executed command: rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md (exit 0)",
+            "data": {
+              "command": "rg -n \"AppServerProvider|codex-threads\\.json|thread IDs|thread registry\" docs/superpowers/plans/2026-04-13-codex-app-server-provider.md",
+              "exitCode": 0,
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "durationMs": 15,
+              "output": "3:> Status note: this document is historical and partially stale. It records the original rollout plan, not a line-by-line description of the current code. The current implementation in `src/main/agent/AppServerBackedProvider.ts`, `src/main/agent/AppServerProvider.ts`, `src/main/agent/AppServerProcess.ts`, `src/main/agent/V2ToolBridge.ts`, and `src/main/agent/AgentModelService.ts` is the source of truth.\n9:**Architecture (current code):** `V2ToolBridge` runs an in-process localhost HTTP server around `agentToolExecutor`; `AppServerProcess` manages the `codex app-server` child process and rewrites the managed `~/.codex/config.toml` MCP entry; `src/main/agent/v2-mcp-shim.js` bridges Codex MCP stdio to `V2ToolBridge` and watches the tool-context file for `notifications/tools/list_changed`; `AppServerProvider` handles the WebSocket thread/turn protocol, while `AppServerBackedProvider` owns bridge/process lifecycle and is the provider shape that `AgentModelService` instantiates for the primary provider path.\n17:- `AgentModelService` prewarms a shared `AppServerBackedProvider` for the primary provider instead of wiring `AppServerProvider` directly.\n18:- `AgentModelService.initializeAppServerProvider()` marks the primary provider as available only after `prewarm()` succeeds; on prewarm failure it records an error state instead of silently falling back to `CodexProvider`.\n19:- `AgentModelService.init()` currently calls `initializeAppServerProvider(PROVIDER_CONFIGS[0])` and `initializeHaikuProvider(PROVIDER_CONFIGS[1])`; the older `initializeCodexProvider()` method still exists in the file but is not called from startup.\n22:- `AppServerBackedProvider` lazily creates and owns `V2ToolBridge`, `AppServerProcess`, and a unique temp tool-context file, then delegates requests to `AppServerProvider`.\n24:- `AppServerProvider` persists thread IDs in `codex-threads.json`, resumes threads by `taskId` when possible, falls back to `thread/start` when resume fails, writes the callable tool scope to the context file before each turn, starts/resumes threads with `approvalPolicy: 'never'`, `sandboxPolicy: { type: 'dangerFullAccess' }`, and `config: { web_search: 'disabled' }`, and sends `turn/interrupt` on abort.\n45:| Create | `src/main/agent/AppServerProvider.ts` | AgentProvider WebSocket implementation for the app-server turn loop |\n46:| Create | `src/main/agent/AppServerBackedProvider.ts` | Lifecycle wrapper that owns bridge/process startup and delegates to `AppServerProvider` |\n152:V2ToolBridge wraps `agentToolExecutor` behind a localhost HTTP server. It reads tool context (runId, agentId, taskId, mode) from a temp JSON file written by AppServerProvider before each turn. Tool names use `__` as separator instead of `.` to comply with MCP naming rules (e.g. `filesystem__list`).\n715:## Task 4: AppServerProvider — AgentProvider WebSocket implementation\n718:- Create: `src/main/agent/AppServerProvider.ts`\n719:- Create: `src/main/agent/AppServerProvider.test.ts`\n721:AppServerProvider implements `AgentProvider`. It maintains a thread registry (`Map<taskId, threadId>`), persisted to `userData/codex-threads.json`. Each `invoke()` does: write context file → thread/start or thread/resume → turn/start → accumulate streaming events → build AgentProviderResult.\n728:// src/main/agent/AppServerProvider.test.ts\n729:import { AppServerProvider, loadThreadRegistry, saveThreadRegistry, pruneExpiredEntries } from './AppServerProvider';\n733:describe('thread registry persistence helpers', () => {\n758:  // These are internal to AppServerProvider but we test via the provider's behavior indirectly.\n771:npx jest src/main/agent/AppServerProvider.test.ts --no-coverage\n774:Expected: FAIL — `AppServerProvider`, `loadThreadRegistry`, `saveThreadRegistry`, `pruneExpiredEntries` not found.\n776:- [ ] **Step 3: Implement AppServerProvider**\n779:// src/main/agent/AppServerProvider.ts\n801:const THREAD_FILE = 'codex-threads.json';\n844:    console.error('AppServerProvider: failed to persist thread registry:', err);\n852:// ─── AppServerProvider ────────────────────────────────────────────────────────\n854:type AppServerProviderOptions = {\n860:export class AppServerProvider implements AgentProvider {\n871:  constructor(private readonly options: AppServerProviderOptions) {\n904:      throw new Error('AppServerProvider WebSocket is not connected. Wait for connect() to complete.');\n1328:npx jest src/main/agent/AppServerProvider.test.ts --no-coverage\n1336:git add src/main/agent/AppServerProvider.ts src/main/agent/AppServerProvider.test.ts\n1337:git commit -m \"feat(codex): add AppServerProvider WebSocket AgentProvider with thread persistence\"\n1347:Replace `initializeCodexProvider` with `initializeAppServerProvider`. The new method:\n1352:5. Creates `AppServerProvider`, calls `provider.connect(wsPort)`.\n1355:Also update `createProviderInstance()` to return an `AppServerProvider` for the primary provider.\n1369:import { AppServerProvider } from './AppServerProvider';\n1390:    void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);\n1403:private async initializeAppServerProvider(config: { id: ProviderId; label: string; modelId: string }): Promise<void> {\n1435:    const provider = new AppServerProvider({\n1463:private appServerProvider: AppServerProvider | null = null;\n1466:Then inside `initializeAppServerProvider`, after creating the provider and before `this.providers.set(...)`:\n1510:git commit -m \"feat(codex): wire AppServerProvider into AgentModelService startup\"\n1577:| AppServerProvider: thread/start + thread/resume with fallback | Task 4 |\n1578:| AppServerProvider: token streaming via `item/agentMessage/delta` | Task 4 |\n1579:| AppServerProvider: onItem + onStatus for mcpToolCall events | Task 4 |\n1580:| AppServerProvider: tool pack expansion (resolveToolPackExpansion + resolveAutoExpandedToolPack) | Task 4 |\n1581:| AppServerProvider: turn/interrupt on abort | Task 4 |\n1582:| AppServerProvider: usage from `thread/tokenUsage/updated` | Task 4 |\n1583:| Thread persistence: `userData/codex-threads.json`, 7-day eviction | Task 4 |\n1584:| AgentModelService: V2ToolBridge → AppServerProcess → AppServerProvider startup | Task 5 |\n",
+              "filesystemCacheInvalidated": true,
+              "followUp": "If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search."
+            },
+            "validation": {
+              "status": "INVALID",
+              "constraints": [
+                {
+                  "name": "exit_code",
+                  "status": "PASS",
+                  "observed": "0",
+                  "expected": "0"
+                },
+                {
+                  "name": "output_error_signals",
+                  "status": "FAIL",
+                  "observed": "output contains error signals: \\bnot found\\b",
+                  "expected": "no error signals in output"
+                }
+              ],
+              "summary": "VALIDATION FAILED. output_error_signals: FAIL — output contains error signals: \\bnot found\\b"
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532908245,
+          "completedAt": 1776532908260,
+          "error": null
+        },
+        {
+          "id": "tool_mo4ltp12_22cay6",
+          "runId": "run_mo4lszcb_pz71j7",
+          "agentId": "gpt-5.4",
+          "toolName": "terminal.exec",
+          "input": {
+            "command": "rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent",
+            "cwd": "/home/dp/Desktop/v2workspace",
+            "maxOutputChars": 12000
+          },
+          "output": {
+            "summary": "Executed command: rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent (exit 0)",
+            "data": {
+              "command": "rg -n \"threadId|codex-threads\\.json|saveThreadRegistry|loadThreadRegistry\" src/main/agent",
+              "exitCode": 0,
+              "cwd": "/home/dp/Desktop/v2workspace",
+              "durationMs": 20,
+              "output": "src/main/agent/AppServerProvider.ts:34:const THREAD_FILE = 'codex-threads.json';\nsrc/main/agent/AppServerProvider.ts:45:type ThreadEntry = { threadId: string; savedAt: number };\nsrc/main/agent/AppServerProvider.ts:68:export function loadThreadRegistry(): ThreadRegistry {\nsrc/main/agent/AppServerProvider.ts:79:export function saveThreadRegistry(registry: ThreadRegistry): void {\nsrc/main/agent/AppServerProvider.ts:146:  private threadRegistry: ThreadRegistry = loadThreadRegistry();\nsrc/main/agent/AppServerProvider.ts:242:    const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);\nsrc/main/agent/AppServerProvider.ts:263:        threadId,\nsrc/main/agent/AppServerProvider.ts:350:        return await this.resumeThread(ws, taskId, existing.threadId, systemPrompt);\nsrc/main/agent/AppServerProvider.ts:354:        saveThreadRegistry(this.threadRegistry);\nsrc/main/agent/AppServerProvider.ts:384:          const threadId = thread?.id;\nsrc/main/agent/AppServerProvider.ts:385:          if (!threadId) {\nsrc/main/agent/AppServerProvider.ts:389:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\nsrc/main/agent/AppServerProvider.ts:390:          saveThreadRegistry(this.threadRegistry);\nsrc/main/agent/AppServerProvider.ts:391:          resolve(threadId);\nsrc/main/agent/AppServerProvider.ts:421:    threadId: string,\nsrc/main/agent/AppServerProvider.ts:443:          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };\nsrc/main/agent/AppServerProvider.ts:444:          saveThreadRegistry(this.threadRegistry);\nsrc/main/agent/AppServerProvider.ts:445:          resolve(threadId);\nsrc/main/agent/AppServerProvider.ts:462:          threadId,\nsrc/main/agent/AppServerProvider.ts:478:      threadId: string;\nsrc/main/agent/AppServerProvider.ts:494:    const { threadId, task, request, currentTools, toolCatalog } = params;\nsrc/main/agent/AppServerProvider.ts:521:          params: { threadId },\nsrc/main/agent/AppServerProvider.ts:726:          threadId,\nsrc/main/agent/AppServerProvider.test.ts:12:        'task-old': { threadId: 'thread-old', savedAt: now - SEVEN_DAYS_MS - 1 },\nsrc/main/agent/AppServerProvider.test.ts:13:        'task-new': { threadId: 'thread-new', savedAt: now - 1000 },\nsrc/main/agent/AppServerProvider.test.ts:23:        'task-boundary': { threadId: 'thread-b', savedAt: now - SEVEN_DAYS_MS },\nsrc/main/agent/AppServerProvider.test.ts:166:      threadId: 'thread-1',\nsrc/main/agent/AppServerProvider.test.ts:237:      threadId: 'thread-1',\nsrc/main/agent/AppServerProvider.test.ts:304:      threadId: 'thread-1',\nsrc/main/agent/AppServerProvider.test.ts:361:      threadId: 'thread-1',\nsrc/main/agent/discoverabilityAuditFixtures.ts:109:    expectedAnswerIncludes: ['AppServerProvider', 'codex-threads.json'],\n",
+              "filesystemCacheInvalidated": true,
+              "followUp": "If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search."
+            },
+            "validation": {
+              "status": "VALID",
+              "constraints": [
+                {
+                  "name": "exit_code",
+                  "status": "PASS",
+                  "observed": "0",
+                  "expected": "0"
+                }
+              ],
+              "summary": "All constraints passed."
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532908278,
+          "completedAt": 1776532908298,
+          "error": null
+        }
+      ]
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "gpt-5.4",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "output": "benchmark timeout after 60000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    }
+  ]
+}

@@ -16,9 +16,21 @@ import type {
   BrowserOperationKind,
 } from '../../shared/types/browserOperationLedger';
 import type { BrowserContextService } from './browserContext';
+import {
+  buildTargetDescriptor,
+  isReplaySupportedOperation,
+  validateOperationOutcome,
+} from './browserDeterministicExecution';
+import {
+  decideBrowserExecution,
+  finalizeBrowserExecutionDecision,
+} from './browserExecutionPolicy';
 import { getBrowserOperationContext } from './browserOperationContext';
 import { browserContextManager } from './browserContextManager';
 import { browserOperationLedger } from './browserOperationLedger';
+import type { BrowserOperationExecutionMeta } from './browserOperationReplayStore';
+import { browserOperationReplayStore } from './browserOperationReplayStore';
+import { normalizeNavigationTarget } from './navigationTarget';
 
 export type { BrowserOperationKind } from '../../shared/types/browserOperationLedger';
 
@@ -77,6 +89,7 @@ export type BrowserOperationInput = {
     kind: K;
     payload: BrowserOperationPayloadMap[K];
     context?: BrowserOperationExecutionContext & BrowserOperationContextId;
+    meta?: BrowserOperationExecutionMeta;
   };
 }[BrowserOperationKind];
 
@@ -84,6 +97,28 @@ export type BrowserOperationResult = {
   summary: string;
   data: Record<string, unknown>;
 };
+
+function currentSearchYear(): number {
+  return new Date().getFullYear();
+}
+
+function hasExplicitYear(query: string): boolean {
+  return /\b(?:19|20)\d{2}\b/.test(query);
+}
+
+function isFreshnessSensitiveSearchQuery(query: string): boolean {
+  const normalized = query.toLowerCase();
+  return /\b(latest|current|today|recent|newest|up[- ]?to[- ]?date|breaking|news|release(?: notes?)?|pricing|price|cost|version|docs?|documentation|policy|policies|law|laws|regulation|regulations|guidance|schedule|scores?)\b/.test(normalized);
+}
+
+function prepareSearchEngineQuery(query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed) return trimmed;
+  if (hasExplicitYear(trimmed) || !isFreshnessSensitiveSearchQuery(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} ${currentSearchYear()}`;
+}
 
 function getDebugNavigateDelayMs(): number {
   const raw = process.env.V2_DEBUG_NAVIGATE_DELAY_MS;
@@ -154,6 +189,7 @@ export function executeBrowserOperation<K extends BrowserOperationKind>(
     kind: K;
     payload: BrowserOperationPayloadMap[K];
     context?: BrowserOperationExecutionContext & BrowserOperationContextId;
+    meta?: BrowserOperationExecutionMeta;
   },
 ): Promise<BrowserOperationResult>;
 export async function executeBrowserOperation(
@@ -167,21 +203,55 @@ export async function executeBrowserOperation(
   const browser = browserContext.service;
   requireBrowserRuntime(browser);
   const browserState = browser.getState();
+  const deterministicInput = isReplaySupportedOperation(input.kind)
+    ? {
+      kind: input.kind,
+      payload: input.payload as any,
+      contextId: browserContext.id,
+      tabId: resolveOperationTabId(browserState, input.payload as Record<string, unknown>, operationContext),
+    }
+    : null;
+  const builtTarget = input.meta?.targetDescriptor
+    ? {
+      descriptor: input.meta.targetDescriptor,
+      preflightValidation: input.meta.preflightValidation || null,
+      resolvedSelector: input.meta.targetDescriptor.evidence.selector,
+    }
+    : deterministicInput
+      ? await buildTargetDescriptor(browser, deterministicInput)
+      : { descriptor: null, preflightValidation: null, resolvedSelector: null };
+  const decision = decideBrowserExecution({
+    kind: input.kind,
+    replayOfOperationId: input.meta?.replayOfOperationId ?? null,
+    strictness: input.meta?.strictness,
+    preflightValidation: builtTarget.preflightValidation,
+    supportsDeterministicExecution: Boolean(deterministicInput),
+  });
   const ledgerEntry = browserOperationLedger.start({
     kind: input.kind,
     payload: input.payload as Record<string, unknown>,
     contextId: browserContext.id,
     context: operationContext,
     state: browserState,
+    targetDescriptor: builtTarget.descriptor,
+    replayOfOperationId: input.meta?.replayOfOperationId ?? null,
+    decision,
   });
-  browser.beginOperationNetworkScope({
-    operationId: ledgerEntry.operationId,
-    contextId: browserContext.id,
-    kind: input.kind,
-    tabId: resolveOperationTabId(browserState, input.payload as Record<string, unknown>, operationContext),
-  });
+  let startedNetworkScope = false;
 
   try {
+    if (decision.selectedMode === 'abort') {
+      throw new Error(decision.reasonSummary);
+    }
+
+    browser.beginOperationNetworkScope({
+      operationId: ledgerEntry.operationId,
+      contextId: browserContext.id,
+      kind: input.kind,
+      tabId: resolveOperationTabId(browserState, input.payload as Record<string, unknown>, operationContext),
+    });
+    startedNetworkScope = true;
+
     let result: BrowserOperationResult;
 
     switch (input.kind) {
@@ -190,7 +260,10 @@ export async function executeBrowserOperation(
         break;
 
       case 'browser.search-web':
-        result = await executeNavigation(browser, input.payload.query);
+        result = await executeNavigation(
+          browser,
+          normalizeNavigationTarget(prepareSearchEngineQuery(input.payload.query), { searchEngine: 'duckduckgo' }).url,
+        );
         break;
 
       case 'browser.back': {
@@ -605,12 +678,54 @@ export async function executeBrowserOperation(
         throw new Error(`Unknown browser operation kind: ${String((input as { kind: string }).kind)}`);
     }
 
+    const shouldRunDeterministicValidation = (
+      decision.selectedMode === 'deterministic_execute' || decision.selectedMode === 'deterministic_replay'
+    ) && input.meta?.validationMode !== 'none';
+    const validation = deterministicInput && builtTarget.descriptor && shouldRunDeterministicValidation
+      ? await validateOperationOutcome(
+        browser,
+        deterministicInput,
+        builtTarget.descriptor,
+        result,
+        builtTarget.preflightValidation,
+      )
+      : builtTarget.preflightValidation;
     const networkCapture = browser.completeOperationNetworkScope(ledgerEntry.operationId);
-    browserOperationLedger.complete(ledgerEntry.operationId, result, networkCapture || undefined);
+    browserOperationLedger.complete(
+      ledgerEntry.operationId,
+      result,
+      networkCapture || undefined,
+      validation || undefined,
+      finalizeBrowserExecutionDecision(decision, {
+        finalStatus: 'completed',
+        preflightValidation: builtTarget.preflightValidation,
+      }),
+    );
+    if (isReplaySupportedOperation(input.kind) && builtTarget.descriptor) {
+      browserOperationReplayStore.save(ledgerEntry.operationId, {
+        kind: input.kind,
+        payload: input.payload as any,
+        context: {
+          ...operationContext,
+          contextId: browserContext.id,
+        },
+      }, builtTarget.descriptor);
+    }
     return result;
   } catch (error) {
-    const networkCapture = browser.completeOperationNetworkScope(ledgerEntry.operationId);
-    browserOperationLedger.fail(ledgerEntry.operationId, error, networkCapture || undefined);
+    const networkCapture = startedNetworkScope
+      ? browser.completeOperationNetworkScope(ledgerEntry.operationId)
+      : null;
+    browserOperationLedger.fail(
+      ledgerEntry.operationId,
+      error,
+      networkCapture || undefined,
+      builtTarget.preflightValidation || undefined,
+      finalizeBrowserExecutionDecision(decision, {
+        finalStatus: decision.selectedMode === 'abort' ? 'aborted' : 'failed',
+        preflightValidation: builtTarget.preflightValidation,
+      }),
+    );
     throw error;
   }
 }

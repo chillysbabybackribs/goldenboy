@@ -258,6 +258,33 @@ function checkBrowserCreateTab(result: AgentToolResult): ConstraintVerdict | nul
   };
 }
 
+function normalizeBrowserUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.search = '';
+    parsed.hash = '';
+    if (parsed.pathname.endsWith('/') && parsed.pathname !== '/') {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return rawUrl.trim().replace(/\/$/, '') || null;
+  }
+}
+
+function isRetainedHomepageTab(entry: unknown, homepage: string): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const navigation = (entry as Record<string, unknown>).navigation;
+  if (!navigation || typeof navigation !== 'object') return false;
+
+  const navigationRecord = navigation as Record<string, unknown>;
+  const currentUrlValue = navigationRecord.url;
+  const currentUrl = typeof currentUrlValue === 'string' ? currentUrlValue : '';
+  const normalizedCurrent = normalizeBrowserUrl(currentUrl);
+  const normalizedHomepage = normalizeBrowserUrl(homepage);
+  return !!normalizedCurrent && !!normalizedHomepage && normalizedCurrent === normalizedHomepage;
+}
+
 function checkBrowserClosedTabs(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
   const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
   const requested = [
@@ -280,13 +307,21 @@ function checkBrowserClosedTabs(result: AgentToolResult, input: unknown): Constr
     tabs.some((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).id === tabId),
   );
 
+  const homepage = typeof result.data.homepage === 'string' ? result.data.homepage : '';
+  const retainedLastTabIsAcceptable = survivors.length === 1
+    && tabs.length === 1
+    && !!homepage
+    && isRetainedHomepageTab(tabs[0], homepage);
+
   return {
     name: 'tab_closed',
-    status: survivors.length === 0 ? 'PASS' : 'FAIL',
+    status: survivors.length === 0 || retainedLastTabIsAcceptable ? 'PASS' : 'FAIL',
     observed: survivors.length === 0
       ? `requested tabs are absent: ${requested.join(', ')}`
+      : retainedLastTabIsAcceptable
+        ? `browser retained the final requested tab as the homepage: ${homepage}`
       : `tabs still present after close: ${survivors.join(', ')}`,
-    expected: `tabs absent: ${requested.join(', ')}`,
+    expected: `tabs absent: ${requested.join(', ')}${homepage ? `, or one retained homepage tab at ${homepage}` : ''}`,
   };
 }
 

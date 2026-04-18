@@ -15,7 +15,6 @@ export const browserAdvancedToolPack: ToolPackManifest = {
     'browser.drag',
     'browser.hover',
     'browser.hit_test',
-    'browser.evaluate_js',
     'browser.get_console_events',
     'browser.get_network_events',
     'browser.get_dialogs',

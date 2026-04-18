@@ -28,17 +28,15 @@ describe('source validation policy', () => {
       tools: [],
     });
 
-    expect(prompt).toContain('## Source Validation');
-    expect(prompt).toContain('never fabricate citations');
-    expect(prompt).toContain('## Constraint Ledger');
-    expect(prompt).toContain('single source of truth');
-    expect(prompt).toContain('Before marking any result as valid');
-    expect(prompt).toContain('## Physical Task Completion');
-    expect(prompt).toContain('perform the real action');
-    expect(prompt).toContain('## Workspace Root');
-    expect(prompt).toContain('/home/dp/Desktop/v2workspace');
+    expect(prompt).toContain('# V2 Agent Contract');
+    expect(prompt).toContain('## Runtime Identity');
+    expect(prompt).toContain("You are the user's persistent V2 workspace agent");
+    expect(prompt).toContain('## Execution Guardrails');
+    expect(prompt).toContain('use tools to do the work');
+    expect(prompt).toContain('Workspace root: /home/dp/Desktop/v2workspace');
     expect(prompt).toContain('## Operating Rules');
     expect(prompt).toContain('## Result Validation Discipline');
+    expect(prompt).toContain('## Runtime Identity');
     expect(prompt).toContain('Current date/time:');
     expect(prompt).toContain('authoritative current date/time context');
     expect(prompt).not.toContain('## Current Integration State');
@@ -56,7 +54,7 @@ describe('source validation policy', () => {
       tools: [],
     });
 
-    expect(prompt).toContain('## Source Validation');
+    expect(prompt).toContain('## Execution Guardrails');
     expect(prompt).toContain('## Strict Source Validation Protocol');
     expect(prompt).toContain('Validation thresholds:');
     expect(prompt).toContain('Search exhaustion:');

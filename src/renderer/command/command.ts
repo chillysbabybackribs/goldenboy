@@ -1,5 +1,8 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
 import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID, ProviderId, InvocationAttachment, ImageInvocationAttachment } from '../../shared/types/model.js';
+import type { PersistedTurnProcessEntry, TaskMemoryEntry } from '../../shared/types/model.js';
+import type { AppState, TaskRecord } from '../../shared/types/appState.js';
+import type { ArtifactRecord } from '../../shared/types/artifacts.js';
 import type { DocumentImportRequest, DocumentInvocationAttachment } from '../../shared/types/attachments.js';
 import {
   appendCodexItemProgress as appendCodexItemProgressInternal,
@@ -9,6 +12,7 @@ import {
   appendToken as appendTokenInternal,
   createLiveRunCard as createLiveRunCardInternal,
   getLiveRunCard,
+  migrateBufferedOutputToThoughts as migrateBufferedOutputToThoughtsInternal,
   markCancelling as markCancellingInternal,
   replaceWithError as replaceWithErrorInternal,
   replaceWithResult as replaceWithResultInternal,
@@ -35,6 +39,11 @@ const logsCloseBtn = document.getElementById('logsCloseBtn')!;
 const chatThread = document.getElementById('chatThread')!;
 const chatInner = document.getElementById('chatInner')!;
 const chatEmptyState = document.getElementById('chatEmptyState')!;
+const turnNav = document.getElementById('turnNav') as HTMLDivElement;
+const turnNavMeta = document.getElementById('turnNavMeta') as HTMLSpanElement;
+const turnPrevBtn = document.getElementById('turnPrevBtn') as HTMLButtonElement;
+const turnNextBtn = document.getElementById('turnNextBtn') as HTMLButtonElement;
+const turnReuseBtn = document.getElementById('turnReuseBtn') as HTMLButtonElement;
 const chatScrollTopBtn = document.getElementById('chatScrollTopBtn') as HTMLButtonElement;
 const chatScrollBottomBtn = document.getElementById('chatScrollBottomBtn') as HTMLButtonElement;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
@@ -52,6 +61,17 @@ const historyOverlay = document.getElementById('historyOverlay')!;
 const historyList = document.getElementById('historyList')!;
 const historyNewBtn = document.getElementById('historyNewBtn')!;
 const historyCloseBtn = document.getElementById('historyCloseBtn')!;
+const artifactSidebar = document.getElementById('artifactSidebar') as HTMLDivElement;
+const artifactSidebarToggle = document.getElementById('artifactSidebarToggle') as HTMLButtonElement;
+const artifactList = document.getElementById('artifactList')!;
+const activeArtifactCard = document.getElementById('activeArtifactCard') as HTMLDivElement;
+const activeArtifactEmpty = document.getElementById('activeArtifactEmpty') as HTMLDivElement;
+const activeArtifactBody = document.getElementById('activeArtifactBody') as HTMLDivElement;
+const activeArtifactTitle = document.getElementById('activeArtifactTitle') as HTMLSpanElement;
+const activeArtifactFormat = document.getElementById('activeArtifactFormat') as HTMLSpanElement;
+const activeArtifactMeta = document.getElementById('activeArtifactMeta') as HTMLDivElement;
+const activeArtifactOpenBtn = document.getElementById('activeArtifactOpenBtn') as HTMLButtonElement;
+const activeArtifactDeleteBtn = document.getElementById('activeArtifactDeleteBtn') as HTMLButtonElement;
 
 // Token usage — displayed in status bar
 const tokenStatusLabel = document.getElementById('tokenStatusLabel')!;
@@ -77,6 +97,17 @@ type ProviderRuntimeView = {
   model?: string;
   sessionId?: string;
   errorDetail?: string | null;
+};
+type ConversationTurn = {
+  index: number;
+  promptEntry: TaskMemoryEntry | null;
+  resultEntries: TaskMemoryEntry[];
+  promptText: string;
+  responseText: string;
+  processEntries: PersistedTurnProcessEntry[];
+  attachments: InvocationAttachment[];
+  createdAt: number;
+  anchorEl: HTMLElement | null;
 };
 
 const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
@@ -106,12 +137,18 @@ let lastAgentResponseText = '';
 let chatCopyFeedbackTimer: number | null = null;
 let chatZoom = 1;
 let runningTaskId: string | null = null;
+let historyOpen = false;
+let renderedTurns: ConversationTurn[] = [];
+let selectedTurnIndex = -1;
+let artifactSidebarCollapsed = false;
 
 const CHAT_ZOOM_STORAGE_KEY = 'command-center-chat-zoom';
-const CHAT_ZOOM_DEFAULT = 1;
+const CHAT_ZOOM_BASELINE = 1.6;
+const CHAT_ZOOM_DEFAULT = CHAT_ZOOM_BASELINE;
 const CHAT_ZOOM_MIN = 0.8;
-const CHAT_ZOOM_MAX = 1.6;
-const CHAT_ZOOM_STEP = 0.1;
+const CHAT_ZOOM_MAX = 2.6;
+const CHAT_ZOOM_STEP = 0.16;
+const ARTIFACT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'command-center-artifact-sidebar-collapsed';
 
 function isSelectableOwner(value: string): value is SelectableOwner {
   return SELECTABLE_OWNERS.includes(value as SelectableOwner);
@@ -123,6 +160,10 @@ function isExplicitSelectableOwner(value: string): value is ExplicitSelectableOw
 
 function getProviderRuntime(state: any, owner: ExplicitSelectableOwner): ProviderRuntimeView | null {
   return (state?.providers?.[owner] as ProviderRuntimeView | undefined) ?? null;
+}
+
+function getLastState(): AppState | null {
+  return ((window as any).__lastState as AppState | undefined) ?? null;
 }
 
 function canSelectOwner(state: any, owner: ExplicitSelectableOwner): boolean {
@@ -205,13 +246,17 @@ function clampChatZoom(value: number): number {
 }
 
 function roundChatZoom(value: number): number {
-  return Math.round(value * 10) / 10;
+  return Math.round(value * 100) / 100;
+}
+
+function getChatZoomPercent(value: number): number {
+  return Math.round((value / CHAT_ZOOM_BASELINE) * 100);
 }
 
 function syncChatZoomControls(): void {
   chatZoomOutBtn.disabled = chatZoom <= CHAT_ZOOM_MIN;
   chatZoomInBtn.disabled = chatZoom >= CHAT_ZOOM_MAX;
-  const percent = Math.round(chatZoom * 100);
+  const percent = getChatZoomPercent(chatZoom);
   chatZoomResetBtn.textContent = `${percent}%`;
   chatZoomResetBtn.setAttribute('title', `Reset chat zoom (${percent}%)`);
   chatZoomResetBtn.setAttribute('aria-label', `Reset chat zoom (${percent}%)`);
@@ -250,6 +295,40 @@ function initializeChatZoom(): void {
     // Ignore storage failures in restricted renderer environments.
   }
   setChatZoom(CHAT_ZOOM_DEFAULT, false);
+}
+
+function syncArtifactSidebarToggle(): void {
+  artifactSidebar.classList.toggle('collapsed', artifactSidebarCollapsed);
+  artifactSidebarToggle.classList.toggle('collapsed', artifactSidebarCollapsed);
+  artifactSidebarToggle.setAttribute('aria-expanded', artifactSidebarCollapsed ? 'false' : 'true');
+  artifactSidebarToggle.setAttribute('aria-label', artifactSidebarCollapsed ? 'Expand artifact sidebar' : 'Collapse artifact sidebar');
+  artifactSidebarToggle.setAttribute('title', artifactSidebarCollapsed ? 'Expand artifact sidebar' : 'Collapse artifact sidebar');
+  const icon = artifactSidebarToggle.querySelector<HTMLElement>('.cc-sidebar-toggle-icon');
+  if (icon) icon.textContent = artifactSidebarCollapsed ? '⟩' : '⟨';
+}
+
+function setArtifactSidebarCollapsed(collapsed: boolean, persist = true): void {
+  artifactSidebarCollapsed = collapsed;
+  syncArtifactSidebarToggle();
+  if (!persist) return;
+  try {
+    window.localStorage.setItem(ARTIFACT_SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false');
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+}
+
+function initializeArtifactSidebar(): void {
+  try {
+    const stored = window.localStorage.getItem(ARTIFACT_SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (stored === 'true' || stored === 'false') {
+      setArtifactSidebarCollapsed(stored === 'true', false);
+      return;
+    }
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+  setArtifactSidebarCollapsed(false, false);
 }
 
 // ─── Log Rendering ─────────────────────────────────────────────────────────
@@ -593,15 +672,15 @@ function formatAttachmentSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function appendUserTextMessage(text: string): void {
-  const bubble = document.createElement('div');
-  bubble.className = 'chat-msg chat-msg-user';
-  bubble.textContent = text;
-  chatInner.appendChild(bubble);
+function createUserTextMessage(text: string, className = 'chat-msg chat-msg-user'): HTMLDivElement {
+  const message = document.createElement('div');
+  message.className = className;
+  message.textContent = text;
+  return message;
 }
 
-function appendUserAttachmentMessage(imageDataUrls: string[], documents: DocumentAttachmentPreview[]): void {
-  if (imageDataUrls.length === 0 && documents.length === 0) return;
+function createUserAttachmentMessage(imageDataUrls: string[], documents: DocumentAttachmentPreview[]): HTMLDivElement | null {
+  if (imageDataUrls.length === 0 && documents.length === 0) return null;
 
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-user-attachments';
@@ -669,14 +748,30 @@ function appendUserAttachmentMessage(imageDataUrls: string[], documents: Documen
     el.appendChild(docContainer);
   }
 
-  chatInner.appendChild(el);
+  return el;
+}
+
+function appendUserAttachmentMessage(imageDataUrls: string[], documents: DocumentAttachmentPreview[]): void {
+  const el = createUserAttachmentMessage(imageDataUrls, documents);
+  if (el) chatInner.appendChild(el);
+}
+
+function appendUserMessageToContainer(
+  container: HTMLElement,
+  text: string,
+  imageDataUrls: string[] = [],
+  documents: DocumentAttachmentPreview[] = [],
+  textClassName = 'chat-msg chat-msg-user',
+): void {
+  const hasText = Boolean(text.trim());
+  if (hasText) container.appendChild(createUserTextMessage(text, textClassName));
+  const attachmentEl = createUserAttachmentMessage(imageDataUrls, documents);
+  if (attachmentEl) container.appendChild(attachmentEl);
 }
 
 function appendUserMessage(text: string, imageDataUrls: string[] = [], documents: DocumentAttachmentPreview[] = []): void {
   if (chatEmptyState.parentNode) chatEmptyState.remove();
-  const hasText = Boolean(text.trim());
-  if (hasText) appendUserTextMessage(text);
-  appendUserAttachmentMessage(imageDataUrls, documents);
+  appendUserMessageToContainer(chatInner, text, imageDataUrls, documents);
   scheduleChatScrollToBottom(true);
 }
 
@@ -712,10 +807,17 @@ function getTaskMemoryAttachments(entry: TaskMemoryEntry): InvocationAttachment[
   return attachments;
 }
 
+function getTaskMemoryProcessEntries(entry: TaskMemoryEntry): PersistedTurnProcessEntry[] {
+  return Array.isArray(entry.metadata?.processEntries)
+    ? entry.metadata.processEntries as PersistedTurnProcessEntry[]
+    : [];
+}
+
 function clearChatThread(): void {
   chatInner.innerHTML = '';
   chatInner.appendChild(chatEmptyState);
   updateLastAgentResponseText('');
+  resetTurnNavigator();
 }
 
 function updateLastAgentResponseText(nextText: string): void {
@@ -774,8 +876,8 @@ async function copyLastAgentResponse(): Promise<void> {
   getWorkspaceAPI()?.addLog('error', 'system', 'Failed to copy last agent response');
 }
 
-function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
-  createLiveRunCardInternal(taskId, _provider, chatInner, {
+function createLiveRunCard(taskId: string, _provider: string, prompt: string | undefined, container: HTMLElement = chatInner): void {
+  createLiveRunCardInternal(taskId, _provider, container, {
     renderMarkdown,
     updateLastAgentResponseText,
     scheduleChatScrollToBottom,
@@ -794,6 +896,10 @@ function appendThought(taskId: string, text: string): void {
   appendThoughtInternal(taskId, text);
 }
 
+function migrateBufferedOutputToThoughts(taskId: string): void {
+  migrateBufferedOutputToThoughtsInternal(taskId);
+}
+
 function appendToolActivity(taskId: string, kind: 'call' | 'result', text: string): void {
   appendToolActivityInternal(taskId, kind, text);
 }
@@ -804,33 +910,286 @@ function appendCodexItemProgress(taskId: string, progressData: string, item?: un
 
 function replaceWithResult(taskId: string, result: any, provider?: string): void {
   replaceWithResultInternal(taskId, result, provider);
+  renderTaskArtifactLinks(getLastState(), taskId);
 }
 
 function replaceWithError(taskId: string, error: string): void {
   replaceWithErrorInternal(taskId, error);
 }
 
-function appendMemoryEntry(entry: TaskMemoryEntry): void {
-  if (!shouldShowMemoryEntry(entry)) return;
-
-  if (entry.kind === 'user_prompt') return;
-
-  if (entry.kind !== 'model_result') return;
-
-  if (chatEmptyState.parentNode) chatEmptyState.remove();
-  updateLastAgentResponseText(entry.text);
-
+function createModelResultMessage(text: string): HTMLDivElement {
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-model chat-msg-done';
-  el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
-  chatInner.appendChild(el);
-  scheduleChatScrollToBottom(true);
+  el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(text)}</div>`;
+  return el;
+}
+
+function createHistoricalProcessStream(entries: PersistedTurnProcessEntry[]): HTMLDivElement | null {
+  const normalized = entries
+    .map((entry) => ({
+      kind: entry.kind === 'thought' ? 'thought' : 'tool',
+      text: typeof entry.text === 'string' ? entry.text.trim() : '',
+    }))
+    .filter((entry) => entry.text.length > 0);
+  if (normalized.length === 0) return null;
+
+  const stream = document.createElement('div');
+  stream.className = 'chat-stream chat-stream-history';
+
+  for (const entry of normalized) {
+    if (entry.kind === 'tool') {
+      const details = document.createElement('details');
+      details.className = 'chat-tool-card chat-tool-card-done';
+
+      const summary = document.createElement('summary');
+      summary.className = 'chat-tool-card-summary';
+      summary.innerHTML = `<span class="chat-tool-card-label">${escapeHtml(entry.text)}</span>`;
+
+      const body = document.createElement('div');
+      body.className = 'chat-tool-card-body';
+
+      const bodyText = document.createElement('div');
+      bodyText.className = 'chat-tool-card-text';
+      bodyText.textContent = entry.text;
+      body.appendChild(bodyText);
+
+      details.append(summary, body);
+      stream.appendChild(details);
+      continue;
+    }
+
+    const line = document.createElement('div');
+    line.className = 'chat-thought-line';
+    line.innerHTML = escapeHtml(entry.text)
+      .replace(/\n/g, '<br>')
+      .replace(/\*\*([^*]+)\*\*/g, '<span class="key">$1</span>')
+      .replace(/`([^`]+)`/g, '<span class="key">$1</span>');
+    stream.appendChild(line);
+  }
+
+  return stream;
+}
+
+function buildConversationTurns(entries: TaskMemoryEntry[]): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+  let current: ConversationTurn | null = null;
+
+  const pushCurrent = (): void => {
+    if (!current) return;
+    if (!current.promptEntry && current.resultEntries.length === 0) return;
+    current.index = turns.length;
+    current.responseText = current.resultEntries.map((entry) => entry.text.trim()).filter(Boolean).join('\n\n');
+    current.processEntries = current.resultEntries.flatMap((entry) => getTaskMemoryProcessEntries(entry));
+    turns.push(current);
+    current = null;
+  };
+
+  for (const entry of entries) {
+    if (!shouldShowMemoryEntry(entry)) continue;
+
+    if (entry.kind === 'user_prompt') {
+      pushCurrent();
+      current = {
+        index: turns.length,
+        promptEntry: entry,
+        resultEntries: [],
+        promptText: entry.text.trim(),
+        responseText: '',
+        processEntries: [],
+        attachments: getTaskMemoryAttachments(entry),
+        createdAt: entry.createdAt,
+        anchorEl: null,
+      };
+      continue;
+    }
+
+    if (entry.kind !== 'model_result') continue;
+
+    if (!current) {
+      current = {
+        index: turns.length,
+        promptEntry: null,
+        resultEntries: [],
+        promptText: '',
+        responseText: '',
+        processEntries: [],
+        attachments: [],
+        createdAt: entry.createdAt,
+        anchorEl: null,
+      };
+    }
+    current.resultEntries.push(entry);
+  }
+
+  pushCurrent();
+  return turns;
+}
+
+function defaultSelectedTurnIndex(turns: ConversationTurn[]): number {
+  if (turns.length === 0) return -1;
+  return turns.length - 1;
+}
+
+function resetTurnNavigator(): void {
+  renderedTurns = [];
+  selectedTurnIndex = -1;
+  turnNav.hidden = true;
+  turnNavMeta.textContent = '';
+  turnPrevBtn.disabled = true;
+  turnNextBtn.disabled = true;
+  turnReuseBtn.disabled = true;
+}
+
+function syncRenderedTurnVisibility(): void {
+  for (const turn of renderedTurns) {
+    if (!turn.anchorEl) continue;
+    const isSelected = turn.index === selectedTurnIndex;
+    turn.anchorEl.classList.toggle('is-selected', isSelected);
+    turn.anchorEl.classList.toggle('chat-turn-hidden', !isSelected);
+  }
+}
+
+function renderTurnNavigator(): void {
+  if (renderedTurns.length === 0 || selectedTurnIndex < 0 || selectedTurnIndex >= renderedTurns.length) {
+    resetTurnNavigator();
+    return;
+  }
+
+  const turn = renderedTurns[selectedTurnIndex];
+  turnNav.hidden = renderedTurns.length <= 1;
+  turnNavMeta.textContent = renderedTurns.length > 1
+    ? `Turn ${selectedTurnIndex + 1} of ${renderedTurns.length} · ${formatHistoryDate(turn.createdAt)}`
+    : '';
+  turnPrevBtn.disabled = selectedTurnIndex <= 0;
+  turnNextBtn.disabled = selectedTurnIndex >= renderedTurns.length - 1;
+  turnReuseBtn.disabled = !turn.promptText.trim();
+  syncRenderedTurnVisibility();
+}
+
+function selectTurn(index: number, options: { scroll?: boolean } = {}): void {
+  if (index < 0 || index >= renderedTurns.length) return;
+  selectedTurnIndex = index;
+  renderTurnNavigator();
+  if (options.scroll) {
+    renderedTurns[index].anchorEl?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+  }
+}
+
+function registerRenderedTurn(turn: ConversationTurn, anchorEl: HTMLElement): void {
+  turn.anchorEl = anchorEl;
+  turn.index = renderedTurns.length;
+  anchorEl.dataset.turnIndex = String(turn.index);
+  renderedTurns.push(turn);
+}
+
+function createTurnContainer(): HTMLDivElement {
+  if (chatEmptyState.parentNode) chatEmptyState.remove();
+  const container = document.createElement('div');
+  container.className = 'chat-turn';
+  chatInner.appendChild(container);
+  return container;
+}
+
+function syncLiveTurnAnchorLayout(container: HTMLElement): void {
+  if (!container.classList.contains('chat-turn-live')) return;
+
+  const promptEl = container.querySelector(':scope > .chat-msg-user') as HTMLElement | null;
+  const attachmentEl = container.querySelector(':scope > .chat-msg-user-attachments') as HTMLElement | null;
+
+  const promptHeight = promptEl?.offsetHeight ?? 0;
+  const attachmentsHeight = attachmentEl?.offsetHeight ?? 0;
+  const anchorHeight = promptHeight + (attachmentsHeight > 0 ? attachmentsHeight + 12 : 0);
+  container.style.setProperty('--cc-live-prompt-height', `${promptHeight}px`);
+  container.style.setProperty('--cc-live-anchor-height', `${Math.max(anchorHeight, 72)}px`);
+}
+
+function renderHistoricalTurn(turn: ConversationTurn): void {
+  const container = createTurnContainer();
+  container.classList.add('chat-turn-history');
+
+  if (turn.promptText || turn.attachments.length > 0) {
+    appendUserMessageToContainer(
+      container,
+      turn.promptText,
+      getAttachmentImageDataUrls(turn.attachments),
+      getAttachmentDocumentPreviews(turn.attachments),
+      'chat-msg chat-msg-user chat-msg-user-memory',
+    );
+  }
+
+  const processStream = createHistoricalProcessStream(turn.processEntries);
+  if (processStream) {
+    container.appendChild(processStream);
+  }
+
+  if (turn.responseText) {
+    container.appendChild(createModelResultMessage(turn.responseText));
+    updateLastAgentResponseText(turn.responseText);
+  }
+
+  registerRenderedTurn(turn, container);
+}
+
+function renderConversationTurns(turns: ConversationTurn[], taskId: string | null): void {
+  renderedTurns = [];
+
+  if (turns.length === 0) {
+    resetTurnNavigator();
+    return;
+  }
+
+  const state = getLastState();
+  const activeTask = taskId ? findTaskById(state, taskId) : null;
+  const isRunning = Boolean(taskId && activeTask?.status === 'running');
+  let liveTurn: ConversationTurn | null = null;
+  let historicalTurns = turns;
+
+  if (isRunning) {
+    const candidate = turns[turns.length - 1];
+    if (candidate && candidate.resultEntries.length === 0 && candidate.promptEntry) {
+      liveTurn = candidate;
+      historicalTurns = turns.slice(0, -1);
+    }
+  }
+
+  for (const turn of historicalTurns) {
+    renderHistoricalTurn(turn);
+  }
+
+  if (liveTurn && taskId) {
+    const container = createTurnContainer();
+    container.classList.add('chat-turn-live');
+    if (liveTurn.promptText || liveTurn.attachments.length > 0) {
+      appendUserMessageToContainer(
+        container,
+        liveTurn.promptText,
+        getAttachmentImageDataUrls(liveTurn.attachments),
+        getAttachmentDocumentPreviews(liveTurn.attachments),
+        'chat-msg chat-msg-user chat-msg-user-memory',
+      );
+      syncLiveTurnAnchorLayout(container);
+    }
+    createLiveRunCard(taskId, activeTask?.owner || 'system', undefined, container);
+    registerRenderedTurn(liveTurn, container);
+  }
+
+  if (renderedTurns.length === 0) {
+    resetTurnNavigator();
+    return;
+  }
+
+  selectedTurnIndex = defaultSelectedTurnIndex(renderedTurns);
+  renderTurnNavigator();
 }
 
 async function refreshTaskConversation(taskId: string | null): Promise<void> {
   if (!taskId) {
     renderedTaskMemoryKey = null;
     clearChatThread();
+    renderTaskArtifactLinks(getLastState(), null);
     return;
   }
 
@@ -852,22 +1211,10 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
   clearChatThread();
 
   const state = (window as any).__lastState;
-  const activeTask = state?.tasks?.find((task: any) => task.id === taskId) || null;
-  const latestUserPrompt = [...memory.entries]
-    .reverse()
-    .find((entry) => entry.kind === 'user_prompt' && shouldShowMemoryEntry(entry));
-
-  if (activeTask?.status === 'running') {
-    createLiveRunCard(
-      taskId,
-      activeTask.owner || 'system',
-      latestUserPrompt?.text?.trim() || undefined,
-    );
-  }
-
-  for (const entry of memory.entries) {
-    appendMemoryEntry(entry);
-  }
+  const turns = buildConversationTurns(memory.entries);
+  renderConversationTurns(turns, taskId);
+  renderTaskArtifactLinks(state, taskId);
+  scheduleChatScrollToBottom(true);
 }
 
 // ─── Chat Submission ───────────────────────────────────────────────────────
@@ -970,11 +1317,14 @@ async function submitChat(): Promise<void> {
 
   const modelApi = getModelAPI();
   if (!modelApi?.invoke) {
-    appendUserMessage(prompt, imageDataUrls, pendingDocumentPreviews);
+    const container = createTurnContainer();
+    container.classList.add('chat-turn-live');
+    appendUserMessageToContainer(container, prompt, imageDataUrls, pendingDocumentPreviews);
+    syncLiveTurnAnchorLayout(container);
     chatInput.value = '';
     clearAttachments();
     const disabledTaskId = `model-disabled-${chatCounter++}`;
-    createLiveRunCard(disabledTaskId, 'system');
+    createLiveRunCard(disabledTaskId, 'system', undefined, container);
     replaceWithError(disabledTaskId, 'Model integration is not enabled in this v2 browser build.');
     getWorkspaceAPI()?.addLog('warn', 'system', 'Model integration is not enabled in this v2 browser build.');
     chatInput.focus();
@@ -1022,12 +1372,28 @@ async function submitChat(): Promise<void> {
       : undefined;
 
     chatInput.value = '';
-    appendUserMessage(prompt, imageDataUrls, documentAttachments);
+    const container = createTurnContainer();
+    container.classList.add('chat-turn-live');
+    appendUserMessageToContainer(container, prompt, imageDataUrls, documentAttachments);
+    syncLiveTurnAnchorLayout(container);
+    const liveTurn: ConversationTurn = {
+      index: renderedTurns.length,
+      promptEntry: null,
+      resultEntries: [],
+      promptText: prompt,
+      responseText: '',
+      processEntries: [],
+      attachments: pendingAttachments,
+      createdAt: Date.now(),
+      anchorEl: null,
+    };
+    registerRenderedTurn(liveTurn, container);
+    selectTurn(liveTurn.index);
     clearAttachments();
     chatStopBtn.hidden = false;
 
     runningTaskId = taskId;
-    createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
+    createLiveRunCard(taskId, resolvedOwner, undefined, container);
 
     const result = await modelApi.invoke(taskId, effectivePrompt, resolvedOwner, invokeOptions);
     replaceWithResult(taskId, result, result?.providerId || resolvedOwner);
@@ -1083,9 +1449,7 @@ chatEmptyState.addEventListener('click', (e: MouseEvent) => {
   if (!prompt) return;
   chatInput.value = prompt;
   chatInput.focus();
-  // Auto-resize the textarea in case the prompt is longer than one line
-  chatInput.style.height = 'auto';
-  chatInput.style.height = `${chatInput.scrollHeight}px`;
+  autosizeChatInput();
 });
 
 // Paste images directly into the textarea
@@ -1125,6 +1489,30 @@ window.addEventListener('keydown', (event: KeyboardEvent) => {
   }
 });
 
+function autosizeChatInput(): void {
+  chatInput.style.height = 'auto';
+  chatInput.style.height = `${chatInput.scrollHeight}px`;
+}
+
+turnPrevBtn.addEventListener('click', () => {
+  if (selectedTurnIndex <= 0) return;
+  selectTurn(selectedTurnIndex - 1, { scroll: true });
+});
+
+turnNextBtn.addEventListener('click', () => {
+  if (selectedTurnIndex >= renderedTurns.length - 1) return;
+  selectTurn(selectedTurnIndex + 1, { scroll: true });
+});
+
+turnReuseBtn.addEventListener('click', () => {
+  if (selectedTurnIndex < 0) return;
+  const prompt = renderedTurns[selectedTurnIndex]?.promptText?.trim();
+  if (!prompt) return;
+  chatInput.value = prompt;
+  autosizeChatInput();
+  chatInput.focus();
+});
+
 // ─── Chat History ─────────────────────────────────────────────────────────
 
 function formatHistoryDate(timestamp: number): string {
@@ -1141,20 +1529,246 @@ function formatHistoryDate(timestamp: number): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function openHistoryPopup(): void {
-  const state = (window as any).__lastState;
-  const tasks: any[] = state?.tasks || [];
-  const activeId = state?.activeTaskId || null;
+function findTaskById(state: AppState | null, taskId: string | null): TaskRecord | null {
+  if (!state || !taskId) return null;
+  return state.tasks.find((task) => task.id === taskId) ?? null;
+}
+
+function findArtifactById(state: AppState | null, artifactId: string | null): ArtifactRecord | null {
+  if (!state || !artifactId) return null;
+  return state.artifacts.find((artifact) => artifact.id === artifactId) ?? null;
+}
+
+function getSortedArtifacts(state: AppState | null): ArtifactRecord[] {
+  if (!state) return [];
+  return [...state.artifacts].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function getTaskArtifacts(state: AppState | null, taskId: string | null): ArtifactRecord[] {
+  const task = findTaskById(state, taskId);
+  if (!task) return [];
+  return task.artifactIds
+    .map((artifactId) => findArtifactById(state, artifactId))
+    .filter((artifact): artifact is ArtifactRecord => Boolean(artifact));
+}
+
+function createArtifactLabel(artifact: ArtifactRecord): string {
+  return `${artifact.title} (${artifact.format})`;
+}
+
+function setHistoryOpen(open: boolean): void {
+  if (open && artifactSidebarCollapsed) {
+    setArtifactSidebarCollapsed(false);
+  }
+  historyOpen = open;
+  historyOverlay.hidden = !open;
+  chatHistoryBtn.classList.toggle('active', open);
+  chatHistoryBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+async function selectArtifact(artifactId: string | null): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+  try {
+    await workspaceAPI.artifacts.setActive(artifactId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void workspaceAPI.addLog('error', 'system', `Failed to select artifact: ${message}`);
+  }
+}
+
+async function openArtifactInDocumentWindow(artifactId: string): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+
+  const state = getLastState();
+  const artifact = findArtifactById(state, artifactId);
+  if (!artifact) return;
+
+  try {
+    await workspaceAPI.document.openArtifact(artifactId);
+    await workspaceAPI.addLog('info', 'system', `Opened document window for artifact "${artifact.title}"`, state?.activeTaskId || undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void workspaceAPI.addLog('error', 'system', `Failed to open artifact document window: ${message}`);
+  }
+}
+
+async function deleteArtifact(artifactId: string): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+
+  const state = getLastState();
+  const artifact = findArtifactById(state, artifactId);
+  if (!artifact) return;
+  if (!window.confirm(`Delete artifact "${artifact.title}"? This removes its managed file and registry entry.`)) {
+    return;
+  }
+
+  try {
+    await workspaceAPI.artifacts.delete(artifactId, 'user');
+    await workspaceAPI.addLog('info', 'system', `Deleted artifact "${artifact.title}"`, state?.activeTaskId || undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void workspaceAPI.addLog('error', 'system', `Failed to delete artifact: ${message}`);
+  }
+}
+
+function renderActiveArtifact(state: AppState | null): void {
+  const activeArtifact = findArtifactById(state, state?.activeArtifactId ?? null);
+  activeArtifactEmpty.hidden = Boolean(activeArtifact);
+  activeArtifactBody.hidden = !activeArtifact;
+  activeArtifactCard.classList.toggle('has-active-artifact', Boolean(activeArtifact));
+
+  if (!activeArtifact) {
+    activeArtifactTitle.textContent = '';
+    activeArtifactFormat.textContent = '';
+    activeArtifactMeta.textContent = '';
+    activeArtifactOpenBtn.disabled = true;
+    activeArtifactDeleteBtn.disabled = true;
+    return;
+  }
+
+  activeArtifactTitle.textContent = activeArtifact.title;
+  activeArtifactFormat.textContent = activeArtifact.format;
+  activeArtifactMeta.textContent = `Updated ${formatHistoryDate(activeArtifact.updatedAt)} · ${activeArtifact.status} · active artifact`;
+  activeArtifactOpenBtn.disabled = false;
+  activeArtifactOpenBtn.textContent = 'Open Window';
+  activeArtifactOpenBtn.title = 'Open in Document window';
+  activeArtifactOpenBtn.setAttribute('aria-label', `Open ${activeArtifact.title} in Document window`);
+  activeArtifactOpenBtn.onclick = () => { void openArtifactInDocumentWindow(activeArtifact.id); };
+  activeArtifactDeleteBtn.disabled = false;
+  activeArtifactDeleteBtn.textContent = 'Delete';
+  activeArtifactDeleteBtn.title = 'Delete artifact';
+  activeArtifactDeleteBtn.setAttribute('aria-label', `Delete ${activeArtifact.title}`);
+  activeArtifactDeleteBtn.onclick = () => { void deleteArtifact(activeArtifact.id); };
+}
+
+function renderArtifactList(state: AppState | null): void {
+  const artifacts = getSortedArtifacts(state);
+  artifactList.innerHTML = '';
+
+  if (artifacts.length === 0) {
+    artifactList.innerHTML = '<div class="cc-artifact-empty">No artifacts yet. Artifacts created through tasks will appear here.</div>';
+    return;
+  }
+
+  for (const artifact of artifacts) {
+    const item = document.createElement('div');
+    item.className = 'cc-artifact-item' + (artifact.id === state?.activeArtifactId ? ' active' : '');
+    item.setAttribute('role', 'button');
+    item.tabIndex = 0;
+    item.title = artifact.id === state?.activeArtifactId ? 'Selected as active artifact' : 'Select as active artifact';
+
+    const main = document.createElement('div');
+    main.className = 'cc-artifact-item-main';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'cc-artifact-item-title-row';
+    if (artifact.id === state?.activeArtifactId) {
+      const dot = document.createElement('span');
+      dot.className = 'cc-artifact-active-dot';
+      titleRow.appendChild(dot);
+    }
+
+    const title = document.createElement('span');
+    title.className = 'cc-artifact-item-title';
+    title.textContent = artifact.title;
+    titleRow.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'cc-artifact-item-meta';
+    meta.innerHTML =
+      `<span>${escapeHtml(artifact.format)}</span>` +
+      `<span>${escapeHtml(formatHistoryDate(artifact.updatedAt))}</span>` +
+      `<span class="cc-artifact-status">${escapeHtml(artifact.status)}</span>`;
+
+    main.append(titleRow, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'cc-artifact-item-actions';
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'cc-artifact-open-btn';
+    openBtn.type = 'button';
+    openBtn.textContent = 'Open Window';
+    openBtn.title = 'Open in Document window';
+    openBtn.setAttribute('aria-label', `Open ${artifact.title} in Document window`);
+    openBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void openArtifactInDocumentWindow(artifact.id);
+    });
+    actions.appendChild(openBtn);
+
+    const handleSelect = () => { void selectArtifact(artifact.id); };
+    item.addEventListener('click', handleSelect);
+    item.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        handleSelect();
+      }
+    });
+
+    item.append(main, actions);
+    artifactList.appendChild(item);
+  }
+}
+
+function renderTaskArtifactLinks(state: AppState | null, taskId: string | null): void {
+  const existing = chatInner.querySelector<HTMLElement>('.cc-task-artifact-links');
+  const linkedArtifacts = getTaskArtifacts(state, taskId);
+
+  if (!taskId || linkedArtifacts.length === 0) {
+    existing?.remove();
+    return;
+  }
+
+  const container = existing ?? document.createElement('div');
+  container.className = 'cc-task-artifact-links';
+  container.innerHTML = '';
+
+  const label = document.createElement('div');
+  label.className = 'cc-task-artifact-links-label';
+  label.textContent = 'Task Artifacts';
+
+  const row = document.createElement('div');
+  row.className = 'cc-task-artifact-links-row';
+
+  for (const artifact of linkedArtifacts) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cc-task-artifact-link' + (artifact.id === state?.activeArtifactId ? ' active' : '');
+    button.title = createArtifactLabel(artifact);
+    button.setAttribute('aria-label', `Select active artifact ${createArtifactLabel(artifact)}`);
+    button.addEventListener('click', () => { void selectArtifact(artifact.id); });
+
+    const title = document.createElement('span');
+    title.className = 'cc-task-artifact-link-title';
+    title.textContent = artifact.title;
+
+    const format = document.createElement('span');
+    format.className = 'cc-task-artifact-link-format';
+    format.textContent = artifact.format;
+
+    button.append(title, format);
+    row.appendChild(button);
+  }
+
+  container.append(label, row);
+  chatInner.appendChild(container);
+}
+
+function renderHistoryPanel(state: AppState | null): void {
+  const tasks = state?.tasks ?? [];
+  const activeId = state?.activeTaskId ?? null;
 
   historyList.innerHTML = '';
 
   if (tasks.length === 0) {
     historyList.innerHTML = '<div class="cc-history-empty">No conversations yet.</div>';
-    historyOverlay.hidden = false;
     return;
   }
 
-  // Sort newest first
   const sorted = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);
 
   for (const task of sorted) {
@@ -1186,16 +1800,19 @@ function openHistoryPopup(): void {
     item.append(title, date, deleteBtn);
     item.addEventListener('click', () => {
       switchToTask(task.id);
-      historyOverlay.hidden = true;
+      setHistoryOpen(false);
     });
     historyList.appendChild(item);
   }
+}
 
-  historyOverlay.hidden = false;
+function openHistoryPopup(): void {
+  renderHistoryPanel(getLastState());
+  setHistoryOpen(true);
 }
 
 function closeHistoryPopup(): void {
-  historyOverlay.hidden = true;
+  setHistoryOpen(false);
   chatInput.focus();
 }
 
@@ -1207,7 +1824,7 @@ async function deleteHistoryTask(taskId: string): Promise<void> {
     await workspaceAPI.deleteTask(taskId);
     const nextState = await workspaceAPI.getState();
     renderState(nextState);
-    if (!historyOverlay.hidden) openHistoryPopup();
+    if (historyOpen) openHistoryPopup();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     void workspaceAPI.addLog('error', 'system', `Failed to delete chat: ${message}`);
@@ -1218,7 +1835,7 @@ async function startNewChat(): Promise<void> {
   const workspaceAPI = getWorkspaceAPI();
   if (!workspaceAPI) return;
 
-  historyOverlay.hidden = true;
+  setHistoryOpen(false);
 
   // Clear active task — will show empty state
   await workspaceAPI.setActiveTask(null);
@@ -1244,22 +1861,25 @@ chatHistoryBtn.addEventListener('click', (e: MouseEvent) => {
     openHistoryPopup();
   }
 });
+artifactSidebarToggle.addEventListener('click', () => {
+  const nextCollapsed = !artifactSidebarCollapsed;
+  if (nextCollapsed && historyOpen) {
+    setHistoryOpen(false);
+  }
+  setArtifactSidebarCollapsed(nextCollapsed);
+});
 historyCloseBtn.addEventListener('click', closeHistoryPopup);
 historyNewBtn.addEventListener('click', () => { void startNewChat(); });
 chatNewBtn.addEventListener('click', () => { void startNewChat(); });
 
-// Close on outside click
-document.addEventListener('click', (e: MouseEvent) => {
-  if (historyOverlay.hidden) return;
-  const target = e.target as Node;
-  if (!historyOverlay.contains(target) && !chatHistoryBtn.contains(target)) {
-    closeHistoryPopup();
-  }
-});
-
 // Close on Escape
 window.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (e.key === 'Escape' && !historyOverlay.hidden) {
+  if (e.key === 'Escape' && logsOpen) {
+    e.preventDefault();
+    setLogsOpen(false);
+    return;
+  }
+  if (e.key === 'Escape' && historyOpen) {
     e.preventDefault();
     closeHistoryPopup();
   }
@@ -1293,9 +1913,15 @@ function renderState(state: any): void {
   syncModelToggleState(state);
   const active = state.tasks.find((t: any) => t.id === state.activeTaskId);
   renderLogs(state.logs);
+  renderActiveArtifact(state);
+  renderArtifactList(state);
+  renderHistoryPanel(state);
+  renderTaskArtifactLinks(state, state.activeTaskId);
 
   taskCount.textContent = `tasks: ${state.tasks.length}`;
   updateTokenUsageDisplay(state);
+  taskSummary.hidden = !active;
+  taskSummary.textContent = active ? `${active.title} · ${active.status}` : '';
 
   const activeProviderId = active?.owner && active.owner !== 'user'
     ? active.owner
@@ -1335,7 +1961,11 @@ if (commandWindowAPI && modelApi?.onProgress) {
     }
     if (progress.type === 'status') {
       const text = String(progress.data || '');
-      if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
+      if (text === 'thought-migrate') {
+        migrateBufferedOutputToThoughts(progress.taskId);
+      } else if (text.startsWith('thought:')) {
+        appendThought(progress.taskId, text.slice('thought:'.length));
+      } else if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
         appendToolStatusInternal(progress.taskId, text);
       } else if (text.startsWith('Calling ')) {
         appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
@@ -1453,6 +2083,7 @@ attachPreviewList.addEventListener('click', (e: MouseEvent) => {
 setLogsOpen(false);
 initializeChatZoom();
 initializeModelToggle();
+initializeArtifactSidebar();
 
 if (!commandWindowAPI) {
   console.error('[command] workspaceAPI is not available; command controls are disabled.');

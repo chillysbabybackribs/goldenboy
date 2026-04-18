@@ -5,13 +5,16 @@ import type { CodexItem } from '../../shared/types/model';
 import { DEFAULT_HAIKU_CONFIG } from '../../shared/types/model';
 import { AgentProvider, AgentProviderRequest, AgentProviderResult } from './AgentTypes';
 import {
+  applyAutoExpandedToolPack,
+  applyRuntimeToolExpansion,
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
   executeProviderToolCallWithEvents,
+  formatAutoExpandedToolPackLines,
+  formatQueuedExpansionLines,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
-  resolveToolPackExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
+import { createRequestToolBindingStore } from './toolBindingScope';
 
 function loadEnvValue(key: string): string | null {
   if (process.env[key]) return process.env[key] || null;
@@ -152,8 +155,8 @@ export class HaikuProvider implements AgentProvider {
       },
     ];
 
-    let currentTools = [...request.tools];
-    const toolCatalog = request.toolCatalog?.length ? request.toolCatalog : request.tools;
+    const toolCatalog = request.toolCatalog;
+    const toolBindingStore = createRequestToolBindingStore(request);
 
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
     let finalOutput = '';
@@ -162,14 +165,16 @@ export class HaikuProvider implements AgentProvider {
       if (this.aborted) {
         throw new Error('Task cancelled by user.');
       }
+      const callableTools = toolBindingStore.beginTurn();
 
       let turnTextBuffer = '';
-      const tools: Anthropic.Messages.Tool[] = currentTools.map(tool => ({
+      const turnTextChunks: string[] = [];
+      const tools: Anthropic.Messages.Tool[] = callableTools.map(tool => ({
         name: toAnthropicToolName(tool.name),
         description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
         input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,
       }));
-      const allowedToolNames = new Set(currentTools.map(tool => tool.name));
+      const allowedToolNames = new Set(callableTools.map(tool => tool.name));
 
       const stream = this.client.messages.stream({
         model: this.modelId as Anthropic.Messages.MessageCreateParams['model'],
@@ -189,6 +194,7 @@ export class HaikuProvider implements AgentProvider {
 
       stream.on('text', (text) => {
         turnTextBuffer += text;
+        turnTextChunks.push(text);
       });
 
       let response: Anthropic.Messages.Message;
@@ -213,39 +219,33 @@ export class HaikuProvider implements AgentProvider {
         (block): block is Anthropic.Messages.ToolUseBlock => block.type === 'tool_use',
       );
 
+      if (toolUses.length > 0 && turnTextBuffer.trim()) {
+        request.onStatus?.('thought-migrate');
+      }
+
       if (toolUses.length === 0) {
-        const autoExpansion = resolveAutoExpandedToolPack(finalOutput, currentTools, toolCatalog);
+        const autoExpansion = applyAutoExpandedToolPack({
+          message: finalOutput,
+          toolCatalog,
+          toolBindingStore,
+        });
         if (autoExpansion) {
-          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
           messages.push({
             role: 'assistant',
             content: response.content as Anthropic.Messages.ContentBlockParam[],
           });
-          const expandedToolNames = autoExpansion.scope === 'all'
-            ? ['all eligible tools']
-            : autoExpansion.tools;
           messages.push({
             role: 'user',
-            content: [
-              `Host auto-expanded tool pack "${autoExpansion.pack}".`,
-              `Reason: ${autoExpansion.reason}`,
-              `Description: ${autoExpansion.description}`,
-              `Expanded tools: ${expandedToolNames.join(', ')}`,
-              'Continue with the expanded tool scope instead of stopping if more work is still needed.',
-            ].join('\n'),
+            content: formatAutoExpandedToolPackLines(autoExpansion, { continueInstruction: true }).join('\n'),
           });
           request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
           continue;
         }
 
-        if (request.onToken && turnTextBuffer) {
-          request.onToken(turnTextBuffer);
+        for (const chunk of turnTextChunks) {
+          request.onToken?.(chunk);
         }
         break;
-      }
-
-      if (request.onStatus && turnTextBuffer.trim()) {
-        request.onStatus(turnTextBuffer.trim());
       }
 
       messages.push({
@@ -276,24 +276,22 @@ export class HaikuProvider implements AgentProvider {
           toolName: v2ToolName as any,
           toolInput: toolUse.input,
           itemId: `haiku-tool-${turn + 1}-${index + 1}-${Date.now()}`,
+          currentTools: callableTools,
         });
         completedItems.set(execution.completedItem.id, execution.completedItem);
 
         if (execution.ok) {
-          const expansion = resolveToolPackExpansion(request, v2ToolName as any, execution.result);
+          const expansion = applyRuntimeToolExpansion({
+            request,
+            toolBindingStore,
+            toolName: v2ToolName as any,
+            result: execution.result,
+          });
           if (expansion) {
-            currentTools = mergeExpandedTools(currentTools, toolCatalog, expansion);
-            const expandedToolNames = expansion.scope === 'all'
-              ? ['all eligible tools']
-              : expansion.tools;
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: [
-                `Loaded tool pack "${expansion.pack}".`,
-                `Description: ${expansion.description}`,
-                `Expanded tools: ${expandedToolNames.join(', ')}`,
-              ].join('\n'),
+              content: formatQueuedExpansionLines(expansion, { style: 'haiku' }).join('\n'),
             });
             continue;
           }
@@ -318,12 +316,11 @@ export class HaikuProvider implements AgentProvider {
         role: 'user',
         content: toolResults,
       });
-
       reachedToolTurnLimit = turn === maxToolTurns - 1;
     }
 
     if (reachedToolTurnLimit) {
-      const tools: Anthropic.Messages.Tool[] = currentTools.map(tool => ({
+      const tools: Anthropic.Messages.Tool[] = toolBindingStore.beginTurn().map(tool => ({
         name: toAnthropicToolName(tool.name),
         description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
         input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,

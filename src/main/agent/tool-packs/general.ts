@@ -25,5 +25,5 @@ export const generalToolPack: ToolPackManifest = {
     'chat.read_last',
     'browser.research_search',
   ],
-  relatedPackIds: ['implementation', 'research'],
+  relatedPackIds: ['implementation', 'research', 'artifacts'],
 };

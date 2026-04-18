@@ -13,6 +13,7 @@ import { browserService } from '../browser/BrowserService';
 const windows: Map<PhysicalWindowRole, BrowserWindow> = new Map();
 const roleByWebContentsId: Map<number, PhysicalWindowRole> = new Map();
 const WINDOW_BACKGROUND_COLOR = '#000000';
+const STARTUP_WINDOW_ROLES: PhysicalWindowRole[] = ['command', 'execution'];
 
 function getRendererPath(role: PhysicalWindowRole): string {
   return path.join(__dirname, '..', '..', '..', 'renderer', role, 'index.html');
@@ -45,14 +46,21 @@ function validateBounds(bounds: WindowBounds): WindowBounds {
   };
 }
 
-function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
+function createRoleWindow(role: PhysicalWindowRole, options?: { showOnReady?: boolean }): BrowserWindow {
+  const existing = windows.get(role);
+  if (existing && !existing.isDestroyed()) {
+    return existing;
+  }
+
   const state = appStateStore.getState();
   const winState = state.windows[role];
   const bounds = validateBounds(winState.bounds);
+  const showOnReady = options?.showOnReady ?? STARTUP_WINDOW_ROLES.includes(role);
 
   const titleMap: Record<PhysicalWindowRole, string> = {
     command: 'V2 Workspace - Command Center',
     execution: 'V2 Workspace - Execution',
+    document: 'V2 Workspace - Documents',
   };
 
   const win = new BrowserWindow({
@@ -83,8 +91,10 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
   win.loadFile(getRendererPath(role));
 
   win.once('ready-to-show', () => {
-    win.show();
-    appStateStore.dispatch({ type: ActionType.SET_WINDOW_VISIBLE, role, isVisible: true });
+    if (showOnReady) {
+      win.show();
+      appStateStore.dispatch({ type: ActionType.SET_WINDOW_VISIBLE, role, isVisible: true });
+    }
 
     // Initialize browser surface when execution window is ready
     if (role === 'execution' && !browserService.isCreated()) {
@@ -141,9 +151,13 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
 }
 
 export function createAllWindows(): void {
-  for (const role of PHYSICAL_WINDOW_ROLES) {
-    createRoleWindow(role);
+  for (const role of STARTUP_WINDOW_ROLES) {
+    createRoleWindow(role, { showOnReady: true });
   }
+}
+
+export function ensureWindow(role: PhysicalWindowRole, options?: { showOnReady?: boolean }): BrowserWindow {
+  return createRoleWindow(role, options);
 }
 
 export function getWindowByRole(role: PhysicalWindowRole): BrowserWindow | undefined {
@@ -156,7 +170,9 @@ export function getRoleByWebContentsId(webContentsId: number): PhysicalWindowRol
 }
 
 export function showAllWindows(): void {
-  for (const [role, win] of windows) {
+  for (const role of STARTUP_WINDOW_ROLES) {
+    const win = windows.get(role);
+    if (!win) continue;
     if (!win.isDestroyed()) {
       win.show();
       appStateStore.dispatch({ type: ActionType.SET_WINDOW_VISIBLE, role, isVisible: true });
@@ -164,11 +180,20 @@ export function showAllWindows(): void {
   }
 }
 
-export function focusWindow(role: PhysicalWindowRole): void {
-  const win = windows.get(role);
+export function focusWindow(role: PhysicalWindowRole, options?: { fullScreen?: boolean; maximize?: boolean }): void {
+  const win = ensureWindow(role, { showOnReady: false });
   if (win && !win.isDestroyed()) {
+    if (options?.fullScreen) {
+      win.setFullScreen(true);
+    } else if (win.isFullScreen()) {
+      win.setFullScreen(false);
+    }
+    if (options?.maximize) {
+      win.maximize();
+    }
     win.show();
     win.focus();
+    appStateStore.dispatch({ type: ActionType.SET_WINDOW_VISIBLE, role, isVisible: true });
   }
 }
 

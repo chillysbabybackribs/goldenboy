@@ -1,26 +1,52 @@
-# Codex App-Server Provider Implementation Plan
+# Codex App-Server Provider Historical Implementation Plan
+
+> Status note: this document is historical and partially stale. It records the original rollout plan, not a line-by-line description of the current code. The current implementation in `src/main/agent/AppServerBackedProvider.ts`, `src/main/agent/AppServerProvider.ts`, `src/main/agent/AppServerProcess.ts`, `src/main/agent/V2ToolBridge.ts`, and `src/main/agent/AgentModelService.ts` is the source of truth.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the per-turn `codex exec` spawn loop with a persistent `codex app-server` WebSocket connection, giving real token streaming, session continuity, and dramatically lower latency.
+**Original goal:** Replace the per-turn `codex exec` spawn loop with a persistent `codex app-server` WebSocket connection, giving real token streaming, session continuity, and lower latency.
 
-**Architecture:** V2ToolBridge runs an in-process localhost HTTP server wrapping `agentToolExecutor`; AppServerProcess manages the `codex app-server` child process and writes the MCP config; a 39-line stdio shim bridges codex's MCP protocol to V2ToolBridge; AppServerProvider drives the WebSocket turn loop and is the drop-in replacement for CodexProvider.
+**Architecture (current code):** `V2ToolBridge` runs an in-process localhost HTTP server around `agentToolExecutor`; `AppServerProcess` manages the `codex app-server` child process and rewrites the managed `~/.codex/config.toml` MCP entry; `src/main/agent/v2-mcp-shim.js` bridges Codex MCP stdio to `V2ToolBridge` and watches the tool-context file for `notifications/tools/list_changed`; `AppServerProvider` handles the WebSocket thread/turn protocol, while `AppServerBackedProvider` owns bridge/process lifecycle and is the provider shape that `AgentModelService` instantiates for the primary provider path.
 
 **Tech Stack:** Node.js `http` + `net` (no external deps for the shim), `ws` for WebSocket client, Electron `app.getPath('userData')` for thread persistence, existing `agentToolExecutor` / `chatKnowledgeStore` / `ConstraintValidator` unchanged.
 
+## Verified Current Implementation Reality
+
+Checked against code on 2026-04-18.
+
+- `AgentModelService` prewarms a shared `AppServerBackedProvider` for the primary provider instead of wiring `AppServerProvider` directly.
+- `AgentModelService.initializeAppServerProvider()` marks the primary provider as available only after `prewarm()` succeeds; on prewarm failure it records an error state instead of silently falling back to `CodexProvider`.
+- `AgentModelService.init()` currently calls `initializeAppServerProvider(PROVIDER_CONFIGS[0])` and `initializeHaikuProvider(PROVIDER_CONFIGS[1])`; the older `initializeCodexProvider()` method still exists in the file but is not called from startup.
+- `AgentModelService.createProviderInstance()` returns the shared prewarmed provider for the primary provider when available, otherwise creates a fresh `AppServerBackedProvider` instance for that task. It does not consult task kind or `resolvePrimaryProviderBackend()`.
+- `providerRouting.ts` contains `resolvePrimaryProviderBackend()` and `PrimaryProviderBackend = 'exec' | 'app-server'`, but that helper is not wired into primary-provider construction yet, so the backend switch described later in this doc is still only partially implemented.
+- `AppServerBackedProvider` lazily creates and owns `V2ToolBridge`, `AppServerProcess`, and a unique temp tool-context file, then delegates requests to `AppServerProvider`.
+- `AppServerProcess` rewrites `~/.codex/config.toml` to register the `v2-tools` MCP server, strips older managed bridge entries, starts `codex app-server --listen ws://127.0.0.1:0`, waits for `/readyz`, restarts the process with backoff after crashes, and clears the managed config block on stop.
+- `AppServerProvider` persists thread IDs in `codex-threads.json`, resumes threads by `taskId` when possible, falls back to `thread/start` when resume fails, writes the callable tool scope to the context file before each turn, starts/resumes threads with `approvalPolicy: 'never'`, `sandboxPolicy: { type: 'dangerFullAccess' }`, and `config: { web_search: 'disabled' }`, and sends `turn/interrupt` on abort.
+- `V2ToolBridge` exposes `agentToolExecutor` over localhost HTTP, translates tool names between `.` and `__`, enforces the per-turn allowed tool set from the context file, and records non-chat tool calls into `chatKnowledgeStore`.
+- `src/main/agent/v2-mcp-shim.js` is no longer just the minimal bridge sketched below; it also watches the context file and emits `notifications/tools/list_changed` so Codex can refresh callable tools mid-session.
+- `CodexProvider` still exists in the codebase, but the primary provider path is app-server-backed when initialization succeeds.
+
+## Known Conflicts Between This Plan And Current Code
+
+- The planned `CODEX_PROVIDER=exec` escape hatch is only partially landed. The routing helper exists in `providerRouting.ts`, but `AgentModelService` still initializes and instantiates the primary provider through `AppServerBackedProvider`, so current startup remains app-server first with an error state if prewarm fails.
+- The later sections that describe swapping to `CodexProvider` at startup via `CODEX_PROVIDER=exec` are historical design notes, not current behavior. Today there is no startup path in `AgentModelService.init()` that calls `initializeCodexProvider()` for the primary provider.
+- The "File Map" below is historical rollout intent. Several entries marked `Create` are now long-landed files, and the implementation also touched lifecycle and routing code outside the original narrow file list.
+- The step-by-step code snippets below should be treated as draft implementation notes only. They do not exactly match the current TypeScript or JavaScript sources, especially for `v2-mcp-shim.js`, `V2ToolBridge.ts`, `AppServerProcess.ts`, and the `AgentModelService` startup path.
+
 ---
 
-## File Map
+## Historical File Map
 
 | Action | File | Responsibility |
 |---|---|---|
 | Create | `src/main/agent/v2-mcp-shim.js` | 39-line stdio↔HTTP bridge; spawned by codex as MCP server |
 | Create | `src/main/agent/V2ToolBridge.ts` | In-process localhost HTTP server wrapping agentToolExecutor |
 | Create | `src/main/agent/AppServerProcess.ts` | Manages `codex app-server` child process lifecycle |
-| Create | `src/main/agent/AppServerProvider.ts` | AgentProvider WebSocket implementation; replaces CodexProvider |
-| Modify | `src/main/agent/AgentModelService.ts` | Startup: wire V2ToolBridge + AppServerProcess + AppServerProvider |
+| Create | `src/main/agent/AppServerProvider.ts` | AgentProvider WebSocket implementation for the app-server turn loop |
+| Create | `src/main/agent/AppServerBackedProvider.ts` | Lifecycle wrapper that owns bridge/process startup and delegates to `AppServerProvider` |
+| Modify | `src/main/agent/AgentModelService.ts` | Prewarm and reuse a shared `AppServerBackedProvider` for the primary provider |
 
-**Do not touch:** AgentRuntime, AgentTypes, AgentToolExecutor, ConstraintValidator, providerToolRuntime, toolPacks, HaikuProvider, providerRouting, chatKnowledgeStore, all tool definitions, shared/types/model.ts.
+**Historical note:** Everything after this point is retained as implementation history. Do not rely on later sections for exact runtime behavior without checking the code. In particular, later references to `CODEX_PROVIDER=exec` startup routing, exact file contents, or commit-by-commit task steps are historical rollout notes rather than current source-of-truth behavior.
 
 ---
 

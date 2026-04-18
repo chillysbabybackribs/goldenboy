@@ -18,7 +18,6 @@ export const orchestrationToolPack: ToolPackManifest = {
   tools: [
     'subagent.spawn',
     'subagent.wait',
-    'subagent.message',
     'subagent.cancel',
     'subagent.list',
     'filesystem.search',

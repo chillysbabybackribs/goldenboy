@@ -72,7 +72,9 @@ function buildRequest(): AgentProviderRequest {
     taskId: 'task-1',
     systemPrompt: 'system',
     task: 'task',
-    tools: [],
+    promptTools: [],
+    toolCatalog: [],
+    toolBindings: [],
   };
 }
 
@@ -109,6 +111,22 @@ describe('AppServerBackedProvider', () => {
     expect(connectMock).toHaveBeenCalledWith(4321);
     expect(invokeMock).toHaveBeenCalledTimes(2);
     expect(invokeMock).toHaveBeenCalledWith(request);
+  });
+
+  it('supports prewarming the delegate before the first invoke', async () => {
+    const provider = new AppServerBackedProvider({
+      providerId: 'gpt-5.4',
+      modelId: 'gpt-5.4',
+      process: {} as any,
+      wsPort: 4321,
+    });
+
+    await provider.prewarm();
+    await provider.invoke(buildRequest());
+
+    expect(constructorSpy).toHaveBeenCalledTimes(1);
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
   it('forwards abort to the connected delegate', async () => {
@@ -166,6 +184,28 @@ describe('AppServerBackedProvider', () => {
     expect(processStartMock).toHaveBeenCalledTimes(1);
     expect(processWaitUntilReadyMock).toHaveBeenCalledTimes(1);
     expect(connectMock).toHaveBeenCalledWith(8765);
+  });
+
+  it('clears the cached connect promise after a failed prewarm so a later retry can succeed', async () => {
+    connectMock
+      .mockImplementationOnce(async () => {
+        throw new Error('connect failed');
+      })
+      .mockImplementationOnce(async () => {});
+
+    const provider = new AppServerBackedProvider({
+      providerId: 'gpt-5.4',
+      modelId: 'gpt-5.4',
+      process: {} as any,
+      wsPort: 4321,
+    });
+
+    await expect(provider.prewarm()).rejects.toThrow('connect failed');
+    await provider.invoke(buildRequest());
+
+    expect(constructorSpy).toHaveBeenCalledTimes(2);
+    expect(connectMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
   it('disposes owned bridge and process resources after use', async () => {

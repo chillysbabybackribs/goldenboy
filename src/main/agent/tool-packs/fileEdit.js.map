@@ -1,0 +1,1 @@
+{"version":3,"file":"fileEdit.js","sourceRoot":"","sources":["fileEdit.ts"],"names":[],"mappings":";;;AAEa,QAAA,gBAAgB,GAAqB;IAChD,EAAE,EAAE,WAAW;IACf,WAAW,EAAE,mCAAmC;IAChD,KAAK,EAAE;QACL,iBAAiB;QACjB,mBAAmB;QACnB,iBAAiB;QACjB,kBAAkB;QAClB,kBAAkB;QAClB,mBAAmB;QACnB,kBAAkB;QAClB,iBAAiB;KAClB;IACD,cAAc,EAAE,CAAC,gBAAgB,EAAE,OAAO,EAAE,YAAY,CAAC;CAC1D,CAAC"}

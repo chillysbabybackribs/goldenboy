@@ -11,6 +11,7 @@ import { ActionType } from '../state/actions';
 import { terminalService } from '../terminal/TerminalService';
 import { browserService } from '../browser/BrowserService';
 import { getRecentBrowserOperationLedgerEntries } from '../browser/browserOperationLedger';
+import { replayBrowserOperation } from '../browser/browserOperationReplay';
 import { surfaceActionRouter } from '../actions/SurfaceActionRouter';
 import { SurfaceActionInput } from '../../shared/actions/surfaceActionTypes';
 import { DiskCache } from '../context/diskCache';
@@ -18,6 +19,8 @@ import { PageExtractor } from '../context/pageExtractor';
 import { agentModelService } from '../agent/AgentModelService';
 import { agentToolExecutor } from '../agent/AgentToolExecutor';
 import { documentAttachmentStore } from '../attachments/DocumentAttachmentStore';
+import { registerArtifactIpc } from './registerArtifactIpc';
+import { registerDocumentIpc } from './registerDocumentIpc';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import * as path from 'path';
 import * as os from 'os';
@@ -57,6 +60,9 @@ function safeHandle<TEventArgs extends unknown[], TResult>(
 }
 
 export function registerIpc(): void {
+  registerArtifactIpc(safeHandle);
+  registerDocumentIpc(safeHandle);
+
   safeOn('browser:prompt-open-sync', (event, payload: { message?: string; defaultPrompt?: string; url?: string }) => {
     event.returnValue = browserService.openPromptDialogFallback({
       webContentsId: event.sender.id,
@@ -85,6 +91,7 @@ export function registerIpc(): void {
       title,
       status: 'queued',
       owner: 'user',
+      artifactIds: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -192,10 +199,6 @@ export function registerIpc(): void {
     terminalService.resize(cols, rows);
   });
 
-  safeHandle(IPC_CHANNELS.TERMINAL_CAPTURE_SCROLLBACK, () => {
-    return terminalService.captureScrollback();
-  });
-
   // ── Browser runtime IPC handlers ─────────────────────────────────────
 
   safeHandle(IPC_CHANNELS.BROWSER_GET_STATE, () => {
@@ -241,6 +244,9 @@ export function registerIpc(): void {
   });
   safeHandle(IPC_CHANNELS.BROWSER_GET_OPERATION_LEDGER, (_event, limit?: number) => {
     return getRecentBrowserOperationLedgerEntries(limit);
+  });
+  safeHandle(IPC_CHANNELS.BROWSER_REPLAY_OPERATION, (_event, request: { sourceOperationId: string; contextId?: string | null; validationMode?: 'none' | 'basic'; strictness?: 'strict' | 'best-effort' }) => {
+    return replayBrowserOperation(request);
   });
   safeHandle(IPC_CHANNELS.BROWSER_RECORD_FINDING, (_event, input: { taskId: string; tabId?: string; title: string; summary: string; severity?: 'info' | 'warning' | 'critical'; evidence?: string[]; snapshotId?: string | null }) => {
     return browserService.recordTabFinding(input);
@@ -293,8 +299,6 @@ export function registerIpc(): void {
   safeHandle(IPC_CHANNELS.BROWSER_LOAD_EXTENSION, async (_event, extPath: string) => { return browserService.loadExtension(extPath); });
   safeHandle(IPC_CHANNELS.BROWSER_REMOVE_EXTENSION, async (_event, extensionId: string) => { browserService.removeExtension(extensionId); });
   safeHandle(IPC_CHANNELS.BROWSER_GET_EXTENSIONS, () => { return browserService.getExtensions(); });
-  safeHandle(IPC_CHANNELS.BROWSER_SPLIT_TAB, (_event, tabId?: string) => { return browserService.splitTab(tabId); });
-  safeHandle(IPC_CHANNELS.BROWSER_CLEAR_SPLIT_VIEW, () => { return browserService.clearSplitView(); });
 
   // Downloads
   safeHandle(IPC_CHANNELS.BROWSER_GET_DOWNLOADS, () => { return browserService.getDownloads(); });
@@ -328,18 +332,20 @@ export function registerIpc(): void {
     return agentModelService.resolve(prompt, explicitOwner, options);
   });
 
-  safeHandle(IPC_CHANNELS.MODEL_HANDOFF, () => {
-    throw new Error('Model handoff is not implemented in the v2 agent runtime yet.');
-  });
-
   safeHandle(
     IPC_CHANNELS.MODEL_RUN_INTENT_PROGRAM,
     async (_event, taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }) => {
+      const toolCatalog = agentToolExecutor.list().map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      }));
       return agentToolExecutor.execute('browser.run_intent_program', input, {
         runId: generateId('run'),
         agentId: agentModelService.resolve('browser intent program'),
         mode: 'unrestricted-dev',
         taskId,
+        toolCatalog,
       });
     },
   );

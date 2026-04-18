@@ -25,13 +25,25 @@ export function looksLikeComplexResearchPrompt(prompt: string): boolean {
   return comparisonIntent || investigationIntent || multiFacetIntent || longPrompt;
 }
 
-export function buildBackgroundResearchSynthesisTask(): string {
-  return [
+export function buildBackgroundResearchSynthesisTask(options?: {
+  groundedEvidenceReasoning?: boolean;
+}): string {
+  const instructions = [
     `Refine the existing browser-grounded answer using only the provided context.`,
     `Do not use tools, do not ask follow-up questions, and do not introduce facts that are not present in the provided browser evidence.`,
     `If the fast answer is already sufficient and you cannot materially improve it, reply with exactly ${NO_MATERIAL_RESEARCH_UPDATE}.`,
     `Otherwise, return a tighter final answer that improves synthesis, comparison, or clarity while preserving the same factual limits.`,
-  ].join(' ');
+  ];
+
+  if (options?.groundedEvidenceReasoning) {
+    instructions.push(
+      'Preserve the grounded evidence reasoning signals in the provided context.',
+      'High-confidence claims may be stated directly, medium-confidence claims should stay lightly qualified, and low-confidence or single-source claims must remain clearly labeled.',
+      'If the context shows conflicting evidence, present the disagreement explicitly and do not merge it into one resolved statement.',
+    );
+  }
+
+  return instructions.join(' ');
 }
 
 export function buildBackgroundResearchSynthesisContext(input: {
@@ -39,6 +51,7 @@ export function buildBackgroundResearchSynthesisContext(input: {
   fastAnswer: string;
   threadSummary: string | null;
   evidenceTranscript: string;
+  groundedResearchContext?: string | null;
 }): string {
   const sections = [
     '## Original Request',
@@ -50,6 +63,10 @@ export function buildBackgroundResearchSynthesisContext(input: {
 
   if (input.threadSummary?.trim()) {
     sections.push('', '## Thread Summary', input.threadSummary.trim());
+  }
+
+  if (input.groundedResearchContext?.trim()) {
+    sections.push('', '## Grounded Evidence Reasoning', input.groundedResearchContext.trim());
   }
 
   sections.push('', '## Browser Evidence Transcript', input.evidenceTranscript.trim());

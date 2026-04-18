@@ -181,6 +181,11 @@ export type InvocationProgress = {
   timestamp: number;
 };
 
+export type PersistedTurnProcessEntry = {
+  kind: 'thought' | 'tool';
+  text: string;
+};
+
 export type InvocationResult = {
   taskId: string;
   providerId: ProviderId;
@@ -190,6 +195,8 @@ export type InvocationResult = {
   error?: string;
   usage: { inputTokens: number; outputTokens: number; durationMs: number };
   codexItems?: CodexItem[];
+  processEntries?: PersistedTurnProcessEntry[];
+  runId?: string;
 };
 
 // ─── Handoff Types ────────────────────────────────────────────────────────
@@ -245,6 +252,125 @@ export function createEmptyTaskMemoryRecord(taskId: string): TaskMemoryRecord {
     entries: [],
   };
 }
+
+// ─── Shared Runtime Ledger ───────────────────────────────────────────────
+
+export type RuntimeLedgerEventKind =
+  | 'task_status'
+  | 'provider_switch'
+  | 'artifact'
+  | 'tool'
+  | 'browser'
+  | 'subagent'
+  | 'user_prompt'
+  | 'model_result'
+  | 'browser_finding'
+  | 'handoff'
+  | 'claim'
+  | 'evidence'
+  | 'critique'
+  | 'verification';
+
+export type RuntimeLedgerEventScope = 'task' | 'global';
+
+export type RuntimeLedgerEventSource =
+  | 'agent-service'
+  | 'task-memory'
+  | 'browser'
+  | 'subagent'
+  | 'system';
+
+export type RuntimeLedgerEvent = {
+  id: string;
+  taskId: string | null;
+  runId?: string;
+  providerId?: ProviderId;
+  timestamp: number;
+  kind: RuntimeLedgerEventKind;
+  scope: RuntimeLedgerEventScope;
+  summary: string;
+  source: RuntimeLedgerEventSource;
+  metadata?: Record<string, unknown>;
+};
+
+export type RuntimeTaskAwareness = {
+  taskId: string;
+  taskTitle: string | null;
+  lastUpdatedAt: number | null;
+  activeProviderId: ProviderId | null;
+  taskStatus: 'queued' | 'running' | 'completed' | 'failed' | null;
+  latestUserPrompt: string | null;
+  latestModelResult: string | null;
+  latestBrowserFinding: string | null;
+  activeArtifactLabel: string | null;
+  activeBrowserTabLabel: string | null;
+  activeSubagentLabels: string[];
+  openIssues: string[];
+  evidence: string[];
+  decisions: string[];
+  recentEvents: RuntimeLedgerEvent[];
+};
+
+export type RuntimeRunSnapshot = {
+  runId: string;
+  taskId: string | null;
+  providerId: ProviderId | null;
+  status: 'running' | 'completed' | 'failed' | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  latestToolCallLabel: string | null;
+  latestToolStatus: 'running' | 'completed' | 'failed' | null;
+  latestToolSummary: string | null;
+};
+
+export type RuntimeArtifactSnapshot = {
+  artifactId: string;
+  taskId: string | null;
+  title: string;
+  format: string;
+  status: string;
+  isActive: boolean;
+  lastUpdatedAt: number;
+  lastAction: string | null;
+  lastSummary: string | null;
+};
+
+export type RuntimeBrowserTabSnapshot = {
+  tabId: string;
+  taskId: string | null;
+  title: string | null;
+  url: string | null;
+  isActive: boolean;
+  isLoading: boolean | null;
+  lastUpdatedAt: number;
+  lastAction: string | null;
+  lastSummary: string | null;
+};
+
+export type RuntimeDecisionSnapshot = {
+  taskId: string | null;
+  summary: string;
+  sourceKind: 'verification' | 'handoff';
+  timestamp: number;
+  providerId: ProviderId | null;
+};
+
+export type RuntimeEvidenceSnapshot = {
+  taskId: string | null;
+  summary: string;
+  sourceKind: 'evidence' | 'browser_finding';
+  timestamp: number;
+  providerId: ProviderId | null;
+};
+
+export type RuntimeTaskEntitySnapshot = {
+  taskId: string;
+  currentRun: RuntimeRunSnapshot | null;
+  artifacts: RuntimeArtifactSnapshot[];
+  browserTabs: RuntimeBrowserTabSnapshot[];
+  decisions: RuntimeDecisionSnapshot[];
+  evidence: RuntimeEvidenceSnapshot[];
+};
 
 // ─── Routing Types ────────────────────────────────────────────────────────
 

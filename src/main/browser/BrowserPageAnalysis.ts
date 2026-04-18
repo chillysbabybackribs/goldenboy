@@ -41,6 +41,46 @@ export type PageEvidence = {
   activeSurfaceLabel: string;
 };
 
+const SEARCH_RESULT_CONTAINER_SELECTORS = [
+  '[data-sokoban-container]',
+  '[data-hveid]',
+  '.g',
+  '.MjjYud',
+  '.tF2Cxc',
+  '.yuRUbf',
+  '.Ww4FFb',
+  '.b_algo',
+  '.b_ans',
+  '[data-testid="result"]',
+  '.result',
+  '.result__body',
+  '.results_links',
+  'article',
+];
+
+const SUPPRESSED_SEARCH_RESULT_REGION_SELECTORS = [
+  'header',
+  'nav',
+  'footer',
+  'aside',
+  '[role="navigation"]',
+  '[role="dialog"]',
+  '[aria-modal="true"]',
+];
+
+const SEARCH_ENGINE_UTILITY_HOSTS = new Set([
+  'support.google.com',
+  'policies.google.com',
+  'accounts.google.com',
+  'myaccount.google.com',
+  'consent.google.com',
+  'support.microsoft.com',
+  'account.microsoft.com',
+]);
+
+const SEARCH_ENGINE_UTILITY_PATH_RE = /^\/(?:$|search(?:\/|$)|preferences(?:\/|$)|advanced_search(?:\/|$)|setprefs(?:\/|$)|sorry(?:\/|$)|imgres(?:\/|$)|support(?:\/|$)|webhp(?:\/|$)|history(?:\/|$)|policies(?:\/|$)|privacy(?:\/|$)|terms(?:\/|$)|about(?:\/|$)|account(?:\/|$)|consent(?:\/|$)|settings(?:\/|$)|help(?:\/|$))/i;
+const SUPPRESSED_SEARCH_RESULT_SELECTOR_RE = /(^|>|\s)(header|nav|footer|aside)(?=$|[.#:\s>])/i;
+
 type Deps = {
   resolveEntry: ResolveEntry;
   getTabs: () => TabInfo[];
@@ -63,8 +103,12 @@ export class BrowserPageAnalysis {
   async extractSearchResults(tabId?: string, limit: number = 10): Promise<SearchResultCandidate[]> {
     const entry = this.deps.resolveEntry(tabId);
     if (!entry) return [];
+    const resultContainerSelectors = JSON.stringify(SEARCH_RESULT_CONTAINER_SELECTORS);
+    const suppressedRegionSelectors = JSON.stringify(SUPPRESSED_SEARCH_RESULT_REGION_SELECTORS);
     const { result, error } = await this.deps.executeInPage(`
       (() => {
+        const RESULT_CONTAINER_SELECTORS = ${resultContainerSelectors};
+        const SUPPRESSED_REGION_SELECTORS = ${suppressedRegionSelectors};
         const isVisible = (el) => {
           if (!(el instanceof HTMLElement)) return false;
           const style = window.getComputedStyle(el);
@@ -90,6 +134,12 @@ export class BrowserPageAnalysis {
         const normalizeUrl = (href) => {
           try { return new URL(href, location.href).href; } catch { return ''; }
         };
+        const resultContainerSelector = RESULT_CONTAINER_SELECTORS.join(', ');
+        const suppressedRegionSelector = SUPPRESSED_REGION_SELECTORS.join(', ');
+        const isSuppressedRegion = (el) => {
+          if (!(el instanceof Element) || !suppressedRegionSelector) return false;
+          return Boolean(el.closest(suppressedRegionSelector));
+        };
         const skipUrl = (url) => {
           if (!url) return true;
           try {
@@ -103,39 +153,49 @@ export class BrowserPageAnalysis {
           }
         };
         const anchors = Array.from(document.querySelectorAll('a[href]'))
-          .filter(el => el instanceof HTMLAnchorElement && isVisible(el));
+          .filter(el => el instanceof HTMLAnchorElement && isVisible(el) && !isSuppressedRegion(el));
         const seen = new Set();
         const scored = anchors.map((anchor) => {
           const url = normalizeUrl(anchor.getAttribute('href') || '');
           const title = (anchor.querySelector('h3')?.textContent || anchor.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 180);
-          const container = anchor.closest('article, [data-sokoban-container], [data-hveid], .g, .MjjYud, .tF2Cxc, .yuRUbf, .Ww4FFb, main > div, li');
+          const container = anchor.closest(resultContainerSelector);
           const snippet = ((container instanceof HTMLElement ? container.innerText : anchor.textContent) || '')
             .replace(/\\s+/g, ' ')
             .trim()
             .slice(0, 280);
+          const heading = anchor.querySelector('h3, h2') || container?.querySelector?.('h3, h2');
+          const likelySearchResult = Boolean(
+            heading
+            || container
+            || (anchor.closest('main') && title.length >= 24 && snippet.length >= 80)
+          );
           let score = 0;
-          if (anchor.querySelector('h3')) score += 4;
+          if (heading) score += 4;
           if (container) score += 2;
           if (title.length > 12) score += 2;
           if (snippet.length > title.length + 20) score += 1;
+          if (likelySearchResult) score += 3;
           if (url && !skipUrl(url)) score += 2;
-          const source = anchor.querySelector('h3') || container ? 'search' : 'generic';
-          return { url, title, snippet, selector: cssPath(anchor), score, source };
+          const source = likelySearchResult ? 'search' : 'generic';
+          return { url, title, snippet, selector: cssPath(anchor), score, source, likelySearchResult };
         })
-        .filter(item => item.url && !skipUrl(item.url) && item.title)
+        .filter(item => item.url && !skipUrl(item.url) && item.title && item.likelySearchResult)
         .filter(item => {
           if (seen.has(item.url)) return false;
           seen.add(item.url);
           return true;
         })
         .sort((a, b) => b.score - a.score)
-        .slice(0, ${Math.max(1, Math.floor(limit))})
-        .map((item, index) => ({ index, ...item }));
+        .slice(0, ${Math.max(1, Math.floor(limit)) * 4})
+        .map((item, index) => ({ index, url: item.url, title: item.title, snippet: item.snippet, selector: item.selector, source: item.source }));
         return scored;
       })()
     `, entry.id);
     if (error || !Array.isArray(result)) return [];
-    return result as SearchResultCandidate[];
+    return filterSearchResultCandidates(result as SearchResultCandidate[], {
+      limit,
+      searchOrigin: safeOrigin(entry.info.navigation?.url),
+    });
   }
 
   // ─── Open Search Results Tabs ───────────────────────────────────────────
@@ -417,4 +477,81 @@ export class BrowserPageAnalysis {
 
     return items;
   }
+}
+
+function filterSearchResultCandidates(
+  candidates: SearchResultCandidate[],
+  input: { limit: number; searchOrigin?: string },
+): SearchResultCandidate[] {
+  const seen = new Set<string>();
+  return candidates
+    .map(candidate => ({
+      ...candidate,
+      url: normalizeSearchResultUrl(candidate.url),
+      title: normalizeSearchResultText(candidate.title, 180),
+      snippet: normalizeSearchResultText(candidate.snippet, 280),
+    }))
+    .filter(candidate => candidate.url && candidate.title)
+    .filter(candidate => !shouldSkipSearchResultCandidate(candidate, input.searchOrigin))
+    .filter(candidate => {
+      if (seen.has(candidate.url)) return false;
+      seen.add(candidate.url);
+      return true;
+    })
+    .slice(0, Math.max(1, Math.floor(input.limit)))
+    .map((candidate, index) => ({ ...candidate, index }));
+}
+
+function normalizeSearchResultUrl(rawUrl: string): string {
+  const parsed = safeParseUrl(rawUrl);
+  if (!parsed) return '';
+  if (/google\.[^/]+$/i.test(parsed.hostname) && parsed.pathname === '/url') {
+    const redirect = parsed.searchParams.get('q') || parsed.searchParams.get('url');
+    const normalizedRedirect = normalizeHttpUrl(redirect || '');
+    if (normalizedRedirect) return normalizedRedirect;
+  }
+  if (/duckduckgo\.com$/i.test(parsed.hostname) && /^\/l(?:\/|\.js$)/i.test(parsed.pathname)) {
+    const redirect = parsed.searchParams.get('uddg');
+    const normalizedRedirect = normalizeHttpUrl(redirect || '');
+    if (normalizedRedirect) return normalizedRedirect;
+  }
+  return parsed.href;
+}
+
+function shouldSkipSearchResultCandidate(
+  candidate: SearchResultCandidate,
+  searchOrigin?: string,
+): boolean {
+  const parsed = safeParseUrl(candidate.url);
+  if (!parsed || !/^https?:$/i.test(parsed.protocol)) return true;
+  if (candidate.selector && SUPPRESSED_SEARCH_RESULT_SELECTOR_RE.test(candidate.selector)) return true;
+  if (searchOrigin && parsed.origin === searchOrigin && SEARCH_ENGINE_UTILITY_PATH_RE.test(parsed.pathname)) return true;
+  if (candidate.source !== 'search') {
+    if (SEARCH_ENGINE_UTILITY_HOSTS.has(parsed.hostname.toLowerCase())) return true;
+    if (/google\.[^/]+$/i.test(parsed.hostname) && SEARCH_ENGINE_UTILITY_PATH_RE.test(parsed.pathname)) return true;
+  }
+  return false;
+}
+
+function normalizeSearchResultText(value: string, maxLength: number): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function safeOrigin(rawUrl: string | null | undefined): string | undefined {
+  const parsed = safeParseUrl(rawUrl || '');
+  return parsed?.origin;
+}
+
+function safeParseUrl(rawUrl: string): URL | null {
+  try {
+    return new URL(rawUrl);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHttpUrl(rawUrl: string): string | null {
+  const parsed = safeParseUrl(rawUrl);
+  if (!parsed || !/^https?:$/i.test(parsed.protocol)) return null;
+  return parsed.href;
 }

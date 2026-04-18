@@ -1,6 +1,14 @@
 import path from 'node:path';
 import type { BrowserState, BrowserJavaScriptDialog } from '../../shared/types/browser';
 import type {
+  BrowserExecutionDecision,
+  BrowserExecutionDecisionResult,
+} from '../../shared/types/browserExecution';
+import type {
+  BrowserTargetDescriptor,
+  BrowserTargetValidationResult,
+} from '../../shared/types/browserDeterministic';
+import type {
   BrowserOperationExecutionContext,
   BrowserOperationKind,
   BrowserOperationLedgerContext,
@@ -31,6 +39,9 @@ type BrowserOperationLedgerStartInput = {
   contextId: string;
   context?: BrowserOperationExecutionContext;
   state: BrowserState;
+  targetDescriptor?: BrowserTargetDescriptor | null;
+  replayOfOperationId?: string | null;
+  decision?: BrowserExecutionDecision | null;
 };
 
 function compactWhitespace(value: string): string {
@@ -226,6 +237,34 @@ function cloneEntry(entry: BrowserOperationLedgerEntry): BrowserOperationLedgerE
         statusCodes: [...entry.network.statusCodes],
       }
       : null,
+    targetDescriptor: entry.targetDescriptor
+      ? {
+        ...entry.targetDescriptor,
+        evidence: { ...entry.targetDescriptor.evidence },
+      }
+      : null,
+    validation: entry.validation
+      ? {
+        ...entry.validation,
+        evidenceUsed: [...entry.validation.evidenceUsed],
+        expected: { ...entry.validation.expected },
+        observed: { ...entry.validation.observed },
+      }
+      : null,
+    replayOfOperationId: entry.replayOfOperationId,
+    decision: entry.decision
+      ? {
+        ...entry.decision,
+        evidence: [...entry.decision.evidence],
+        network: { ...entry.decision.network },
+      }
+      : null,
+    decisionResult: entry.decisionResult
+      ? {
+        ...entry.decisionResult,
+        attemptedModes: [...entry.decisionResult.attemptedModes],
+      }
+      : null,
   };
 }
 
@@ -250,6 +289,18 @@ export class BrowserOperationLedger {
       completedAt: null,
       related: createEmptyReferences(),
       network: null,
+      targetDescriptor: input.targetDescriptor ? {
+        ...input.targetDescriptor,
+        evidence: { ...input.targetDescriptor.evidence },
+      } : null,
+      validation: null,
+      replayOfOperationId: input.replayOfOperationId ?? null,
+      decision: input.decision ? {
+        ...input.decision,
+        evidence: [...input.decision.evidence],
+        network: { ...input.decision.network },
+      } : null,
+      decisionResult: null,
     };
 
     this.entries.push(entry);
@@ -264,6 +315,8 @@ export class BrowserOperationLedger {
     operationId: string,
     result: BrowserOperationResultLike,
     networkCapture?: BrowserOperationNetworkCapture,
+    validation?: BrowserTargetValidationResult | null,
+    decisionResult?: BrowserExecutionDecisionResult | null,
   ): void {
     this.update(operationId, (entry) => ({
       ...entry,
@@ -277,6 +330,16 @@ export class BrowserOperationLedger {
         networkCapture ? { networkEventIds: networkCapture.eventIds } : undefined,
       ),
       network: networkCapture?.summary || entry.network,
+      validation: validation ? {
+        ...validation,
+        evidenceUsed: [...validation.evidenceUsed],
+        expected: { ...validation.expected },
+        observed: { ...validation.observed },
+      } : entry.validation,
+      decisionResult: decisionResult ? {
+        ...decisionResult,
+        attemptedModes: [...decisionResult.attemptedModes],
+      } : entry.decisionResult,
     }));
   }
 
@@ -284,6 +347,8 @@ export class BrowserOperationLedger {
     operationId: string,
     error: unknown,
     networkCapture?: BrowserOperationNetworkCapture,
+    validation?: BrowserTargetValidationResult | null,
+    decisionResult?: BrowserExecutionDecisionResult | null,
   ): void {
     this.update(operationId, (entry) => ({
       ...entry,
@@ -296,6 +361,16 @@ export class BrowserOperationLedger {
         networkCapture ? { networkEventIds: networkCapture.eventIds } : undefined,
       ),
       network: networkCapture?.summary || entry.network,
+      validation: validation ? {
+        ...validation,
+        evidenceUsed: [...validation.evidenceUsed],
+        expected: { ...validation.expected },
+        observed: { ...validation.observed },
+      } : entry.validation,
+      decisionResult: decisionResult ? {
+        ...decisionResult,
+        attemptedModes: [...decisionResult.attemptedModes],
+      } : entry.decisionResult,
     }));
   }
 

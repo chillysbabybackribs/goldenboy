@@ -54,7 +54,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
   return [
     {
       name: 'terminal.exec',
-      description: 'Execute a shell command in the shared terminal and wait for completion. Use this for real external actions such as git, gh, package managers, CLIs, tests, builds, deployment commands, and local automation. Prefer non-interactive commands.',
+      description: 'Execute a shell command and wait for completion. Uses an isolated non-interactive shell so shared terminal pager/editor state does not contaminate verification or automation commands.',
       inputSchema: {
         type: 'object',
         required: ['command'],
@@ -70,25 +70,22 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
         const command = requireString(obj, 'command');
         if (command.length > 4000) throw new Error('Command is too long');
 
-        const session = ensureSession();
         const cwd = optionalString(obj, 'cwd');
         const timeoutMs = Math.min(Math.max(optionalNumber(obj, 'timeoutMs', 30_000), 1_000), 180_000);
         const maxOutputChars = Math.min(Math.max(optionalNumber(obj, 'maxOutputChars', 12_000), 1_000), 64_000);
-        const effectiveCommand = commandWithCwd(command, cwd);
 
-        const result = await terminalService.executeCommand(effectiveCommand, timeoutMs);
+        const result = await terminalService.executeCommandIsolated(command, { cwd, timeoutMs });
         invalidateFilesystemViewsFromTerminal();
 
-        if (!result) {
-          const output = terminalService.getRecentOutput(80);
+        if (result.timedOut) {
           return {
-            summary: `Command still running or timed out after ${timeoutMs}ms: ${command}`,
+            summary: `Command timed out after ${timeoutMs}ms: ${command}`,
             data: {
               command,
-              cwd: terminalService.getCwd() || session.cwd,
+              cwd: result.cwd,
               timedOut: true,
-              output: compactOutput(output, maxOutputChars),
-              session,
+              durationMs: result.durationMs,
+              output: compactOutput(result.output, maxOutputChars),
               filesystemCacheInvalidated: true,
               followUp: 'If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.',
             },
@@ -100,10 +97,9 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
           data: {
             command,
             exitCode: result.exitCode,
-            cwd: result.cwd || terminalService.getCwd() || session.cwd,
+            cwd: result.cwd,
             durationMs: result.durationMs,
             output: compactOutput(result.output, maxOutputChars),
-            sessionId: session.id,
             filesystemCacheInvalidated: true,
             followUp: 'If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.',
           },

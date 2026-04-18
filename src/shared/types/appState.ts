@@ -2,6 +2,7 @@ import { PhysicalWindowRole, SurfaceRole, LogSourceRole } from './windowRoles';
 import { TerminalSessionState, createDefaultTerminalState, TerminalCommandState, createDefaultTerminalCommandState } from './terminal';
 import { BrowserState, createDefaultBrowserState } from './browser';
 import { SurfaceActionRecord } from '../actions/surfaceActionTypes';
+import { ArtifactRecord } from './artifacts';
 import {
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
@@ -28,6 +29,7 @@ export type TaskRecord = {
   title: string;
   status: TaskStatus;
   owner: ModelOwner;
+  artifactIds: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -70,6 +72,8 @@ export type AppState = {
   executionSplit: ExecutionSplitState;
   tasks: TaskRecord[];
   activeTaskId: string | null;
+  artifacts: ArtifactRecord[];
+  activeArtifactId: string | null;
   logs: LogRecord[];
   browser: SurfaceExecutionState;
   terminal: SurfaceExecutionState;
@@ -96,10 +100,13 @@ export function createDefaultAppState(): AppState {
     windows: {
       command: createDefaultWindowState('command'),
       execution: createDefaultWindowState('execution'),
+      document: createDefaultWindowState('document'),
     },
     executionSplit: { preset: 'balanced', ratio: 0.5 },
     tasks: [],
     activeTaskId: null,
+    artifacts: [],
+    activeArtifactId: null,
     logs: [],
     browser: { status: 'idle', lastUpdatedAt: null, detail: '' },
     terminal: { status: 'idle', lastUpdatedAt: null, detail: '' },

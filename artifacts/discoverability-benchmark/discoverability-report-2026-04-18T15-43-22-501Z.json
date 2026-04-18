@@ -1,0 +1,1001 @@
+{
+  "generatedAt": "2026-04-18T15:43:22.501Z",
+  "providers": [
+    "gpt-5.4",
+    "haiku"
+  ],
+  "scenarios": [
+    "local-config-lookup",
+    "tests-infer-behavior"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  Correct  Grounded  MinPath\n----------------------------------------------------------------------------------------\ngpt-5.4      2          1        1        0        0%         100%     50%       50%\nhaiku        2          2        0        0        0%         100%     100%      100%\n\n## gpt-5.4\n- local-config-lookup: strong_pass | asked=false | coverage=1.00 | failures=none\n- tests-infer-behavior: soft_pass | asked=false | coverage=0.00 | failures=none\n\n## haiku\n- local-config-lookup: strong_pass | asked=false | coverage=1.00 | failures=none\n- tests-infer-behavior: strong_pass | asked=false | coverage=1.00 | failures=none\n\nScenarios without any submitted runs: runtime-status-from-logs, cross-source-summary, stale-doc-vs-current-code, true-missing-information",
+  "runs": [
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526898378-uaswh0",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526898378-uaswh0",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "[src/main/agent/providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:9) is the file that defines the routing defaults.\n\nThe base default order is `gpt-5.4 -> haiku`:\n\n```ts\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\n`PRIMARY_PROVIDER_ID` and `HAIKU_PROVIDER_ID` are defined in [src/shared/types/model.ts](/home/dp/Desktop/v2workspace/src/shared/types/model.ts:7) as `gpt-5.4` and `haiku`.\n\nThere is one meaningful override to that default: `research` prefers `haiku -> gpt-5.4`. The other routed task kinds in that file use `gpt-5.4 -> haiku`.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "call_6AFxIKrsfyJmbxRo7Qb0NbKR",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.require_tools",
+            "arguments": {
+              "tools": [
+                "filesystem.search_file_cache",
+                "filesystem.read_file_chunk"
+              ],
+              "availability": "now",
+              "mode": "exact",
+              "onFailure": "continue"
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_6AFxIKrsfyJmbxRo7Qb0NbKR",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.require_tools",
+            "arguments": {
+              "tools": [
+                "filesystem.search_file_cache",
+                "filesystem.read_file_chunk"
+              ],
+              "availability": "now",
+              "mode": "exact",
+              "onFailure": "continue"
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Granted 2 exact tools for runtime invocation\",\"data\":{\"mode\":\"exact\",\"availability\":\"now\",\"requestedTools\":[\"filesystem.search_file_cache\",\"filesystem.read_file_chunk\"],\"grantedNow\":[\"filesystem.search_file_cache\",\"filesystem.read_file_chunk\"],\"alreadyCallable\":[],\"denied\":[],\"invocationTool\":\"runtime.invoke_tool\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_1TWecvhZINXdEcdf5mgANMeH",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.search_file_cache",
+              "input": "{\"query\":\"provider routing defaults preference order\", \"limit\": 10}"
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_1TWecvhZINXdEcdf5mgANMeH",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.search_file_cache",
+              "input": "{\"query\":\"provider routing defaults preference order\", \"limit\": 10}"
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Tool execution error: Invalid input for filesystem.search_file_cache: input must be an object; got string."
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_NZ9PFwF78Szr4LPFDF4WmFyL",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "provider routing defaults",
+              "limit": 20
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_NZ9PFwF78Szr4LPFDF4WmFyL",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace",
+              "query": "provider routing defaults",
+              "limit": 20
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Found 7 matches\",\"data\":{\"matches\":[{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityAuditFixtures.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/discoverabilityBenchmarkHarness.test.ts\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-33-688Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-27-41-468Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-29-58-344Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-30-33-056Z.json\",\"reason\":\"content\"},{\"path\":\"/home/dp/Desktop/v2workspace/artifacts/discoverability-benchmark/discoverability-report-2026-04-18T15-35-47-260Z.json\",\"reason\":\"content\"}]}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_ZDlUdZ64z13Pf8jZ9T2Ej64e",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+              "startLine": 1,
+              "endLine": 160,
+              "maxChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_ZDlUdZ64z13Pf8jZ9T2Ej64e",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+              "startLine": 1,
+              "endLine": 160,
+              "maxChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 3105 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts\",\"relativePath\":\"src/main/agent/providerRouting.ts\",\"content\":\"import {\\n  HAIKU_PROVIDER_ID,\\n  PRIMARY_PROVIDER_ID,\\n  type AgentTaskKind,\\n  type AgentTaskProfileOverride,\\n  type ProviderId,\\n} from '../../shared/types/model';\\nimport { buildTaskProfile } from './taskProfile';\\n\\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\\n\\nexport type PrimaryProviderBackend = 'exec' | 'app-server';\\n\\nexport type ProviderRoutingCapabilities = Partial<Record<ProviderId, {\\n  supportsV2ToolRuntime: boolean;\\n}>>;\\n\\nexport function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {\\n  return kind === 'orchestration'\\n    || kind === 'research'\\n    || kind === 'browser-automation'\\n    || kind === 'implementation'\\n    || kind === 'debug'\\n    || kind === 'review';\\n}\\n\\nexport function shouldPreferExecForTaskKind(taskKind: AgentTaskKind): boolean {\\n  return taskKind === 'implementation' || taskKind === 'debug' || taskKind === 'review';\\n}\\n\\nexport function resolvePrimaryProviderBackend(\\n  taskKind: AgentTaskKind,\\n  configuredMode = process.env.CODEX_PROVIDER,\\n  execAvailable = true,\\n): PrimaryProviderBackend {\\n  if (!execAvailable) return 'app-server';\\n  if (configuredMode === 'exec') return 'exec';\\n  return shouldPreferExecForTaskKind(taskKind) ? 'exec' : 'app-server';\\n}\\n\\nexport function providerSupportsPrompt(\\n  providerId: ProviderId,\\n  prompt: string,\\n  overrides?: AgentTaskProfileOverride,\\n  capabilities?: ProviderRoutingCapabilities,\\n): boolean {\\n  const profile = buildTaskProfile(prompt, overrides);\\n  if (!taskKindRequiresV2ToolRuntime(profile.kind)) return true;\\n  if (!capabilities) return true;\\n  return capabilities[providerId]?.supportsV2ToolRuntime === true;\\n}\\n\\nexport function pickProviderForPrompt(\\n  prompt: string,\\n  availableProviders: Iterable<ProviderId>,\\n  overrides?: AgentTaskProfileOverride,\\n  capabilities?: ProviderRoutingCapabilities,\\n): ProviderId | null {\\n  const available = new Set(\\n    Array.from(availableProviders).filter((providerId) => providerSupportsPrompt(\\n      providerId,\\n      prompt,\\n      overrides,\\n      capabilities,\\n    )),\\n  );\\n  const profile = buildTaskProfile(prompt, overrides);\\n\\n  if (available.size === 0) return null;\\n\\n  if (profile.kind === 'research') {\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n  }\\n\\n  if (profile.kind === 'browser-automation') {\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n  }\\n\\n  if (profile.kind === 'implementation') {\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n  }\\n\\n  if (\\n    profile.kind === 'orchestration'\\n    || profile.kind === 'review'\\n    || profile.kind === 'debug'\\n  ) {\\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\\n  }\\n\\n  for (const providerId of DEFAULT_PROVIDER_ORDER) {\\n    if (available.has(providerId)) return providerId;\\n  }\\n\\n  return null;\\n}\\n\",\"truncated\":false,\"startLine\":1,\"endLine\":160,\"totalLines\":101,\"chunkCount\":2,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_wSuOLHyo0GcOSQR3RlXqpfZV",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+              "startLine": 1,
+              "endLine": 80,
+              "maxChars": 4000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_wSuOLHyo0GcOSQR3RlXqpfZV",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+              "startLine": 1,
+              "endLine": 80,
+              "maxChars": 4000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 2405 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/shared/types/model.ts\",\"relativePath\":\"src/shared/types/model.ts\",\"content\":\"// ═══════════════════════════════════════════════════════════════════════════\\n// Model Layer Types — Provider registry, routing, handoff, Codex events\\n// ═══════════════════════════════════════════════════════════════════════════\\n\\n// ─── Provider Identity ────────────────────────────────────────────────────\\n\\nexport const PRIMARY_PROVIDER_ID = 'gpt-5.4' as const;\\nexport const HAIKU_PROVIDER_ID = 'haiku' as const;\\nexport const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;\\n\\nexport type ProviderId = typeof PROVIDER_IDS[number];\\nexport type LegacyProviderId = 'codex';\\nexport type AnyProviderId = ProviderId | LegacyProviderId;\\n\\nexport type ProviderKind = 'cli-process' | 'api-streaming';\\n\\nexport type ProviderStatus = 'available' | 'unavailable' | 'busy' | 'error';\\n\\nexport type ProviderCapability =\\n  | 'code-generation'\\n  | 'code-editing'\\n  | 'shell-execution'\\n  | 'repo-analysis'\\n  | 'chat'\\n  | 'summarization'\\n  | 'intent-parsing'\\n  | 'plan'\\n  | 'planning'\\n  | 'synthesis';\\n\\n// ─── Provider Definition (static, configured at startup) ──────────────────\\n\\nexport type ProviderDefinition = {\\n  id: ProviderId;\\n  displayName: string;\\n  kind: ProviderKind;\\n  capabilities: ProviderCapability[];\\n};\\n\\n// ─── Provider Metrics (from Codex /status) ────────────────────────────────\\n\\nexport type CodexStatusMetrics = {\\n  contextWindow?: { percentLeft: number; used: string; total: string };\\n  limit5h?: { percentLeft: number; resetsAt: string };\\n  limitWeekly?: { percentLeft: number; resetsAt: string };\\n  credits?: number;\\n};\\n\\n// ─── Provider Runtime (dynamic, changes per-request) ──────────────────────\\n\\nexport type ProviderRuntime = {\\n  id: ProviderId;\\n  status: ProviderStatus;\\n  activeTaskId: string | null;\\n  lastActivityAt: number | null;\\n  errorDetail: string | null;\\n  sessionId?: string;\\n  model?: string;\\n  metrics?: CodexStatusMetrics;\\n};\\n\\nexport function createDefaultProviderRuntime(id: ProviderId): ProviderRuntime {\\n  return {\\n    id,\\n    status: 'unavailable',\\n    activeTaskId: null,\\n    lastActivityAt: null,\\n    errorDetail: null,\\n  };\\n}\\n\\nexport function isProviderId(value: string): value is ProviderId {\\n  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;\\n}\\n\\nexport function isLegacyProviderId(value: string): value is LegacyProviderId {\\n  return value === 'codex';\\n}\\n\\n// ─── Task Ownership ───────────────────────────────────────────────────────\",\"truncated\":false,\"startLine\":1,\"endLine\":80,\"totalLines\":295,\"chunkCount\":1,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "call_HscCDzNUNDlVGb30O0ppIBnO",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts",
+              "startLine": 1,
+              "endLine": 180,
+              "maxChars": 12000
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_HscCDzNUNDlVGb30O0ppIBnO",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts",
+              "startLine": 1,
+              "endLine": 180,
+              "maxChars": 12000
+            },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read 2840 characters from indexed file window\",\"data\":{\"path\":\"/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts\",\"relativePath\":\"src/main/agent/providerRouting.test.ts\",\"content\":\"import { describe, expect, it } from 'vitest';\\nimport { pickProviderForPrompt } from './providerRouting';\\nimport { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/model';\\n\\ndescribe('provider routing', () => {\\n  const capabilities = {\\n    [PRIMARY_PROVIDER_ID]: { supportsV2ToolRuntime: true },\\n    [HAIKU_PROVIDER_ID]: { supportsV2ToolRuntime: true },\\n  } as const;\\n\\n  it('prefers haiku for research tasks when available', () => {\\n    expect(pickProviderForPrompt('Search online for the latest SEC guidance', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(HAIKU_PROVIDER_ID);\\n  });\\n\\n  it('routes implementation, debug, and review tasks to gpt-5.4 when available', () => {\\n    expect(pickProviderForPrompt('Patch this TypeScript file and run the local build', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Debug why the Electron app crashes on startup', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Review this PR diff and call out regressions', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n  });\\n\\n  it('falls back to the remaining available provider', () => {\\n    expect(pickProviderForPrompt('Search for the latest Electron release notes', [PRIMARY_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Help me think through a product naming idea', [HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(HAIKU_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Search online for the latest Electron release notes', [HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(HAIKU_PROVIDER_ID);\\n  });\\n\\n  it('routes repo-wide planning to gpt-5.4 and CI investigation to the debug path', () => {\\n    expect(pickProviderForPrompt('Plan a repo-wide migration strategy', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n    expect(pickProviderForPrompt('Investigate the failing CI and explain root cause', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))\\n      .toBe(PRIMARY_PROVIDER_ID);\\n  });\\n\\n  it('uses explicit task kind overrides ahead of prompt heuristics', () => {\\n    expect(pickProviderForPrompt(\\n      'Help me think through a product naming idea',\\n      [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID],\\n      { kind: 'implementation' },\\n      capabilities,\\n    )).toBe(PRIMARY_PROVIDER_ID);\\n\\n    expect(pickProviderForPrompt(\\n      'Patch this TypeScript file and run the local build',\\n      [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID],\\n      { kind: 'research' },\\n      capabilities,\\n    )).toBe(HAIKU_PROVIDER_ID);\\n  });\\n});\\n\",\"truncated\":false,\"startLine\":1,\"endLine\":180,\"totalLines\":57,\"chunkCount\":1,\"source\":\"indexed-window\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "gpt-5-4-final-1776526938138",
+            "type": "agent_message",
+            "text": "[src/main/agent/providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:9) is the file that defines the routing defaults.\n\nThe base default order is `gpt-5.4 -> haiku`:\n\n```ts\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\n`PRIMARY_PROVIDER_ID` and `HAIKU_PROVIDER_ID` are defined in [src/shared/types/model.ts](/home/dp/Desktop/v2workspace/src/shared/types/model.ts:7) as `gpt-5.4` and `haiku`.\n\nThere is one meaningful override to that default: `research` prefers `haiku -> gpt-5.4`. The other routed task kinds in that file use `gpt-5.4 -> haiku`."
+          }
+        ],
+        "usage": {
+          "inputTokens": 73545,
+          "outputTokens": 482,
+          "durationMs": 39405
+        },
+        "runId": "run_mo4i8vrt_er1631"
+      }
+    },
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-local-config-lookup-haiku-1776526938143-xij3kf",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-haiku-1776526938143-xij3kf",
+        "providerId": "haiku",
+        "success": true,
+        "output": "## Summary\n\n**File:** `src/main/agent/providerRouting.ts`\n\n**Default Provider Order:**\n\nThe **`DEFAULT_PROVIDER_ORDER`** constant defines the baseline preference:\n\n```typescript\n[PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID]\n```\n\n**Task-Specific Routing Overrides:**\n\nThe routing logic prioritizes different providers based on the task kind:\n\n1. **Research tasks** → Prefer `HAIKU_PROVIDER_ID`, fallback to `PRIMARY_PROVIDER_ID`\n2. **Browser-automation tasks** → Prefer `PRIMARY_PROVIDER_ID`, fallback to `HAIKU_PROVIDER_ID`\n3. **Implementation tasks** → Prefer `PRIMARY_PROVIDER_ID`, fallback to `HAIKU_PROVIDER_ID`\n4. **Orchestration, Review, Debug tasks** → Prefer `PRIMARY_PROVIDER_ID`, fallback to `HAIKU_PROVIDER_ID`\n5. **All other tasks** → Fall through to `DEFAULT_PROVIDER_ORDER` (PRIMARY → HAIKU)\n\nThe routing also validates that providers support V2 tool runtime capabilities for specific task kinds before selection.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "haiku-tool-1-1-1776526939892",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.search_file_cache",
+              "input": {
+                "query": "provider routing defaults preference order"
+              }
+            },
+            "result": {
+              "summary": "Invoked filesystem.search_file_cache: Found 10 cached file chunks",
+              "data": {
+                "tool": "filesystem.search_file_cache",
+                "invokedVia": "runtime.invoke_tool",
+                "result": {
+                  "summary": "Found 10 cached file chunks",
+                  "data": {
+                    "query": "provider routing defaults preference order",
+                    "results": [
+                      {
+                        "chunkId": "file_557905453dce679f_chunk_0",
+                        "fileId": "file_557905453dce679f",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                        "relativePath": "src/main/agent/providerRouting.ts",
+                        "language": "typescript",
+                        "startLine": 1,
+                        "endLine": 80,
+                        "snippet": "const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];",
+                        "score": 13,
+                        "tokenEstimate": 22
+                      },
+                      {
+                        "chunkId": "file_4afbf2bafe49e162_chunk_0",
+                        "fileId": "file_4afbf2bafe49e162",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts",
+                        "relativePath": "src/main/agent/providerRouting.test.ts",
+                        "language": "typescript",
+                        "startLine": 1,
+                        "endLine": 57,
+                        "snippet": "import { pickProviderForPrompt } from './providerRouting';",
+                        "score": 11,
+                        "tokenEstimate": 15
+                      },
+                      {
+                        "chunkId": "file_557905453dce679f_chunk_1",
+                        "fileId": "file_557905453dce679f",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                        "relativePath": "src/main/agent/providerRouting.ts",
+                        "language": "typescript",
+                        "startLine": 81,
+                        "endLine": 101,
+                        "snippet": "for (const providerId of DEFAULT_PROVIDER_ORDER) {",
+                        "score": 11,
+                        "tokenEstimate": 13
+                      },
+                      {
+                        "chunkId": "file_9af4a8a13c81b85f_chunk_0",
+                        "fileId": "file_9af4a8a13c81b85f",
+                        "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                        "relativePath": "src/shared/types/model.ts",
+                        "language": "typescript",
+                        "startLine": 1,
+                        "endLine": 80,
+                        "snippet": "export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;",
+                        "score": 3,
+                        "tokenEstimate": 20
+                      },
+                      {
+                        "chunkId": "file_1fd14270885b2435_chunk_3",
+                        "fileId": "file_1fd14270885b2435",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentTypes.ts",
+                        "relativePath": "src/main/agent/AgentTypes.ts",
+                        "language": "typescript",
+                        "startLine": 241,
+                        "endLine": 251,
+                        "snippet": "invoke(request: AgentProviderRequest): Promise<AgentProviderResult>;",
+                        "score": 2,
+                        "tokenEstimate": 17
+                      },
+                      {
+                        "chunkId": "file_9af4a8a13c81b85f_chunk_2",
+                        "fileId": "file_9af4a8a13c81b85f",
+                        "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                        "relativePath": "src/shared/types/model.ts",
+                        "language": "typescript",
+                        "startLine": 161,
+                        "endLine": 240,
+                        "snippet": "providerId: ProviderId;",
+                        "score": 2,
+                        "tokenEstimate": 6
+                      },
+                      {
+                        "chunkId": "file_c8f30c44dc0fab9a_chunk_0",
+                        "fileId": "file_c8f30c44dc0fab9a",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                        "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                        "language": "typescript",
+                        "startLine": 1,
+                        "endLine": 80,
+                        "snippet": "import { executeProviderToolCall } from './providerToolRuntime';",
+                        "score": 2,
+                        "tokenEstimate": 16
+                      },
+                      {
+                        "chunkId": "file_c8f30c44dc0fab9a_chunk_1",
+                        "fileId": "file_c8f30c44dc0fab9a",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                        "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                        "language": "typescript",
+                        "startLine": 81,
+                        "endLine": 160,
+                        "snippet": "providerId: PRIMARY_PROVIDER_ID,",
+                        "score": 2,
+                        "tokenEstimate": 8
+                      },
+                      {
+                        "chunkId": "file_c8f30c44dc0fab9a_chunk_5",
+                        "fileId": "file_c8f30c44dc0fab9a",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                        "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                        "language": "typescript",
+                        "startLine": 401,
+                        "endLine": 469,
+                        "snippet": "const provider = new SearchCatalogProvider();",
+                        "score": 2,
+                        "tokenEstimate": 12
+                      },
+                      {
+                        "chunkId": "file_1fd14270885b2435_chunk_2",
+                        "fileId": "file_1fd14270885b2435",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentTypes.ts",
+                        "relativePath": "src/main/agent/AgentTypes.ts",
+                        "language": "typescript",
+                        "startLine": 161,
+                        "endLine": 240,
+                        "snippet": "export type AgentProviderRequest = {",
+                        "score": 1,
+                        "tokenEstimate": 9
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-2-1-1776526942972",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.read_file_chunk",
+              "input": {
+                "chunkId": "file_557905453dce679f_chunk_0"
+              }
+            },
+            "result": {
+              "summary": "Invoked filesystem.read_file_chunk: Read cached file chunk src/main/agent/providerRouting.ts:1-80",
+              "data": {
+                "tool": "filesystem.read_file_chunk",
+                "invokedVia": "runtime.invoke_tool",
+                "result": {
+                  "summary": "Read cached file chunk src/main/agent/providerRouting.ts:1-80",
+                  "data": {
+                    "chunk": {
+                      "id": "file_557905453dce679f_chunk_0",
+                      "fileId": "file_557905453dce679f",
+                      "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                      "relativePath": "src/main/agent/providerRouting.ts",
+                      "language": "typescript",
+                      "startLine": 1,
+                      "endLine": 80,
+                      "ordinal": 0,
+                      "charCount": 2527,
+                      "tokenEstimate": 632,
+                      "contentHash": "1177b6198c9d84bd",
+                      "indexedAt": 1776525946727,
+                      "text": "import {\n  HAIKU_PROVIDER_ID,\n  PRIMARY_PROVIDER_ID,\n  type AgentTaskKind,\n  type AgentTaskProfileOverride,\n  type ProviderId,\n} from '../../shared/types/model';\nimport { buildTaskProfile } from './taskProfile';\n\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n\nexport type PrimaryProviderBackend = 'exec' | 'app-server';\n\nexport type ProviderRoutingCapabilities = Partial<Record<ProviderId, {\n  supportsV2ToolRuntime: boolean;\n}>>;\n\nexport function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {\n  return kind === 'orchestration'\n    || kind === 'research'\n    || kind === 'browser-automation'\n    || kind === 'implementation'\n    || kind === 'debug'\n    || kind === 'review';\n}\n\nexport function shouldPreferExecForTaskKind(taskKind: AgentTaskKind): boolean {\n  return taskKind === 'implementation' || taskKind === 'debug' || taskKind === 'review';\n}\n\nexport function resolvePrimaryProviderBackend(\n  taskKind: AgentTaskKind,\n  configuredMode = process.env.CODEX_PROVIDER,\n  execAvailable = true,\n): PrimaryProviderBackend {\n  if (!execAvailable) return 'app-server';\n  if (configuredMode === 'exec') return 'exec';\n  return shouldPreferExecForTaskKind(taskKind) ? 'exec' : 'app-server';\n}\n\nexport function providerSupportsPrompt(\n  providerId: ProviderId,\n  prompt: string,\n  overrides?: AgentTaskProfileOverride,\n  capabilities?: ProviderRoutingCapabilities,\n): boolean {\n  const profile = buildTaskProfile(prompt, overrides);\n  if (!taskKindRequiresV2ToolRuntime(profile.kind)) return true;\n  if (!capabilities) return true;\n  return capabilities[providerId]?.supportsV2ToolRuntime === true;\n}\n\nexport function pickProviderForPrompt(\n  prompt: string,\n  availableProviders: Iterable<ProviderId>,\n  overrides?: AgentTaskProfileOverride,\n  capabilities?: ProviderRoutingCapabilities,\n): ProviderId | null {\n  const available = new Set(\n    Array.from(availableProviders).filter((providerId) => providerSupportsPrompt(\n      providerId,\n      prompt,\n      overrides,\n      capabilities,\n    )),\n  );\n  const profile = buildTaskProfile(prompt, overrides);\n\n  if (available.size === 0) return null;\n\n  if (profile.kind === 'research') {\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n  }\n\n  if (profile.kind === 'browser-automation') {\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n  }\n"
+                    }
+                  }
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-3-1-1776526944845",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.read_file_chunk",
+              "input": {
+                "chunkId": "file_557905453dce679f_chunk_1"
+              }
+            },
+            "result": {
+              "summary": "Invoked filesystem.read_file_chunk: Read cached file chunk src/main/agent/providerRouting.ts:81-101",
+              "data": {
+                "tool": "filesystem.read_file_chunk",
+                "invokedVia": "runtime.invoke_tool",
+                "result": {
+                  "summary": "Read cached file chunk src/main/agent/providerRouting.ts:81-101",
+                  "data": {
+                    "chunk": {
+                      "id": "file_557905453dce679f_chunk_1",
+                      "fileId": "file_557905453dce679f",
+                      "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                      "relativePath": "src/main/agent/providerRouting.ts",
+                      "language": "typescript",
+                      "startLine": 81,
+                      "endLine": 101,
+                      "ordinal": 1,
+                      "charCount": 577,
+                      "tokenEstimate": 145,
+                      "contentHash": "1177b6198c9d84bd",
+                      "indexedAt": 1776525946727,
+                      "text": "  if (profile.kind === 'implementation') {\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n  }\n\n  if (\n    profile.kind === 'orchestration'\n    || profile.kind === 'review'\n    || profile.kind === 'debug'\n  ) {\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n  }\n\n  for (const providerId of DEFAULT_PROVIDER_ORDER) {\n    if (available.has(providerId)) return providerId;\n  }\n\n  return null;\n}\n"
+                    }
+                  }
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-final-1776526947316",
+            "type": "agent_message",
+            "text": "## Summary\n\n**File:** `src/main/agent/providerRouting.ts`\n\n**Default Provider Order:**\n\nThe **`DEFAULT_PROVIDER_ORDER`** constant defines the baseline preference:\n\n```typescript\n[PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID]\n```\n\n**Task-Specific Routing Overrides:**\n\nThe routing logic prioritizes different providers based on the task kind:\n\n1. **Research tasks** → Prefer `HAIKU_PROVIDER_ID`, fallback to `PRIMARY_PROVIDER_ID`\n2. **Browser-automation tasks** → Prefer `PRIMARY_PROVIDER_ID`, fallback to `HAIKU_PROVIDER_ID`\n3. **Implementation tasks** → Prefer `PRIMARY_PROVIDER_ID`, fallback to `HAIKU_PROVIDER_ID`\n4. **Orchestration, Review, Debug tasks** → Prefer `PRIMARY_PROVIDER_ID`, fallback to `HAIKU_PROVIDER_ID`\n5. **All other tasks** → Fall through to `DEFAULT_PROVIDER_ORDER` (PRIMARY → HAIKU)\n\nThe routing also validates that providers support V2 tool runtime capabilities for specific task kinds before selection."
+          }
+        ],
+        "usage": {
+          "inputTokens": 21868,
+          "outputTokens": 610,
+          "durationMs": 9160
+        },
+        "runId": "run_mo4i9qg8_kl1uoh"
+      }
+    },
+    {
+      "scenarioId": "tests-infer-behavior",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-tests-infer-behavior-gpt-5.4-1776526947317-d4kcch",
+      "prompt": "Determine how runtime failures are recorded by inspecting the tests instead of asking for expected behavior.",
+      "result": {
+        "taskId": "discoverability-live-tests-infer-behavior-gpt-5.4-1776526947317-d4kcch",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "Inspecting the repo tests for runtime failure behavior now. I’m locating the test coverage first, then I’ll read the relevant cases and extract the observed recording semantics from those assertions.I found the runtime-focused tests. Reading the `AgentRuntime` and sub-agent cases next to pull the exact assertions about how failures are persisted and surfaced.The direct failure-path assertion is in `AgentRuntime.test.ts`; I’m checking whether any other tests refine that contract before I summarize it.The tests pin this down directly.\n\nIn [AgentRuntime.test.ts](/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts:215), when a tool throws `command exploded`, `runtime.run(...)` rejects with that same error, and the failure is recorded in three places:\n\n- Chat knowledge gets a tool message containing `\"error\": \"command exploded\"` via `recordToolMessage(...)`.\n- The agent run store has a run for that task with `status: 'failed'` and `error: 'command exploded'`.\n- The run’s tool call list contains one `terminal.exec` entry with `status: 'failed'` and `error: 'command exploded'`.\n\nThere’s also a lower-level assertion in [providerToolRuntime.test.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerToolRuntime.test.ts:377): if a non-chat tool execution rejects, `executeProviderToolCall(...)` returns `{ ok: false, errorMessage: 'tool exploded' }` and still records a tool-memory entry containing `\"error\": \"tool exploded\"`.\n\nSo, based on tests, runtime failures are recorded as an error-bearing tool-memory record plus failed status on both the enclosing run and the specific tool call, and the error is rethrown to the caller.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "gpt-5-4-final-1776526986595",
+            "type": "agent_message",
+            "text": "Inspecting the repo tests for runtime failure behavior now. I’m locating the test coverage first, then I’ll read the relevant cases and extract the observed recording semantics from those assertions.I found the runtime-focused tests. Reading the `AgentRuntime` and sub-agent cases next to pull the exact assertions about how failures are persisted and surfaced.The direct failure-path assertion is in `AgentRuntime.test.ts`; I’m checking whether any other tests refine that contract before I summarize it.The tests pin this down directly.\n\nIn [AgentRuntime.test.ts](/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts:215), when a tool throws `command exploded`, `runtime.run(...)` rejects with that same error, and the failure is recorded in three places:\n\n- Chat knowledge gets a tool message containing `\"error\": \"command exploded\"` via `recordToolMessage(...)`.\n- The agent run store has a run for that task with `status: 'failed'` and `error: 'command exploded'`.\n- The run’s tool call list contains one `terminal.exec` entry with `status: 'failed'` and `error: 'command exploded'`.\n\nThere’s also a lower-level assertion in [providerToolRuntime.test.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerToolRuntime.test.ts:377): if a non-chat tool execution rejects, `executeProviderToolCall(...)` returns `{ ok: false, errorMessage: 'tool exploded' }` and still records a tool-memory entry containing `\"error\": \"tool exploded\"`.\n\nSo, based on tests, runtime failures are recorded as an error-bearing tool-memory record plus failed status on both the enclosing run and the specific tool call, and the error is rethrown to the caller."
+          }
+        ],
+        "usage": {
+          "inputTokens": 38344,
+          "outputTokens": 351,
+          "durationMs": 39274
+        },
+        "runId": "run_mo4i9xiv_76omcr"
+      }
+    },
+    {
+      "scenarioId": "tests-infer-behavior",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-tests-infer-behavior-haiku-1776526986597-guyyjx",
+      "prompt": "Determine how runtime failures are recorded by inspecting the tests instead of asking for expected behavior.",
+      "result": {
+        "taskId": "discoverability-live-tests-infer-behavior-haiku-1776526986597-guyyjx",
+        "providerId": "haiku",
+        "success": true,
+        "output": "Perfect! I now have the complete picture of how runtime failures are recorded. Let me provide a summary:\n\n## Runtime Failure Recording\n\nBased on the **AgentRuntime.test.ts** test file, here's how runtime failures are recorded:\n\n### Key Failure Recording Pattern (from test \"marks the runtime run as failed when the provider surfaces a tool failure\")\n\nWhen a runtime fails:\n\n1. **Chat Knowledge Store Records:**\n   - `recordToolMessageMock` is called with message type `'task-runtime-failure'`\n   - The message includes the error details: `expect.stringContaining('\\\"error\\\": \\\"command exploded\\\"')`\n   - Parameters: message type, message content, provider ID, and task ID\n\n2. **Agent Run Store Records:**\n   - The run record gets a `status: 'failed'`\n   - The run record gets an `error: 'command exploded'` field capturing the failure reason\n\n3. **Tool Call Records:**\n   - Each failed tool call is recorded with:\n     - `status: 'failed'`\n     - `error: 'command exploded'` (the exception message)\n     - Tool name, run ID, and other metadata\n\n### Code Evidence:\n```typescript\nexpect(recordToolMessageMock).toHaveBeenCalledWith(\n  'task-runtime-failure',  // message type indicates failure\n  expect.stringContaining('\\\"error\\\": \\\"command exploded\\\"'),\n  PRIMARY_PROVIDER_ID,\n  expect.any(String),\n);\n\nconst failedRun = agentRunStore.listRuns().find(run => ...);\nexpect(failedRun).toMatchObject({\n  status: 'failed',\n  error: 'command exploded',  // error stored at run level\n});\n\nexpect(toolCalls[0]).toMatchObject({\n  runId: failedRun!.id,\n  toolName: 'terminal.exec',\n  status: 'failed',\n  error: 'command exploded',  // error stored at tool call level\n});\n```\n\n### Summary\nRuntime failures are recorded at **three levels**:\n1. **Chat Knowledge**: Via `recordToolMessage` with `'task-runtime-failure'` type and error details\n2. **Run Record**: `status: 'failed'` + `error` field\n3. **Tool Call Record**: `status: 'failed'` + `error` field\n\nThis provides a hierarchical record of where failures occurred and why.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "haiku-tool-1-1-1776526987853",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.search_tools",
+            "arguments": {
+              "query": "filesystem.search_file_cache"
+            },
+            "result": {
+              "summary": "Found 5 tool matches for \"filesystem.search_file_cache\"",
+              "data": {
+                "query": "filesystem.search_file_cache",
+                "matches": [
+                  {
+                    "name": "filesystem.search_file_cache",
+                    "description": "Search indexed file chunks by query, optional path prefix, and language. Returns snippets and chunk ids for targeted reads.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "exact tool name match"
+                  },
+                  {
+                    "name": "filesystem.search",
+                    "description": "Fallback file path and text search under a local path. Prefer filesystem.search_file_cache for indexed source lookup when possible.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "implementation",
+                      "debug",
+                      "review",
+                      "orchestration",
+                      "general",
+                      "file-edit"
+                    ],
+                    "bindingState": "callable",
+                    "callableNow": true,
+                    "invokableNow": true,
+                    "invocationMethod": "direct",
+                    "availableNextTurn": false,
+                    "reason": "name matches \"filesystem\""
+                  },
+                  {
+                    "name": "filesystem.answer_from_cache",
+                    "description": "Answer a file/code question from cached file chunks with compact excerpts and source chunk ids. Prefer this before full file reads.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "name matches \"filesystem\""
+                  },
+                  {
+                    "name": "filesystem.file_cache_stats",
+                    "description": "Return file knowledge cache size, token estimate, and hit/miss counters.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "name matches \"filesystem\""
+                  },
+                  {
+                    "name": "filesystem.list_cached_files",
+                    "description": "List files currently indexed in the file knowledge cache.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "name matches \"filesystem\""
+                  }
+                ],
+                "tools": [
+                  "filesystem.search_file_cache",
+                  "filesystem.search",
+                  "filesystem.answer_from_cache",
+                  "filesystem.file_cache_stats",
+                  "filesystem.list_cached_files"
+                ],
+                "suggestedPackIds": [
+                  "file-cache",
+                  "implementation",
+                  "debug",
+                  "review",
+                  "orchestration",
+                  "general",
+                  "file-edit"
+                ],
+                "hydration": {
+                  "callableNow": [
+                    "filesystem.search"
+                  ],
+                  "invokableNow": [
+                    "filesystem.search_file_cache",
+                    "filesystem.search",
+                    "filesystem.answer_from_cache",
+                    "filesystem.file_cache_stats",
+                    "filesystem.list_cached_files"
+                  ],
+                  "availableNextTurn": [
+                    "filesystem.search_file_cache",
+                    "filesystem.answer_from_cache",
+                    "filesystem.file_cache_stats",
+                    "filesystem.list_cached_files"
+                  ],
+                  "failed": []
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-2-1-1776526992878",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "runtime failures test record",
+              "limit": 10
+            },
+            "result": {
+              "summary": "Found 10 cached file chunks",
+              "data": {
+                "query": "runtime failures test record",
+                "results": [
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_0",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "recordToolMessage: recordToolMessageMock,",
+                    "score": 10,
+                    "tokenEstimate": 11
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_1",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 81,
+                    "endLine": 160,
+                    "snippet": "const runtime = new AgentRuntime(provider);",
+                    "score": 10,
+                    "tokenEstimate": 11
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_2",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 161,
+                    "endLine": 240,
+                    "snippet": "const runtime = new AgentRuntime(new FailingToolLoopProvider());",
+                    "score": 10,
+                    "tokenEstimate": 16
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_3",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 241,
+                    "endLine": 320,
+                    "snippet": "const runtime = new AgentRuntime(provider);",
+                    "score": 10,
+                    "tokenEstimate": 11
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_4",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 321,
+                    "endLine": 400,
+                    "snippet": "const runtime = new AgentRuntime(provider);",
+                    "score": 10,
+                    "tokenEstimate": 11
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_5",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 401,
+                    "endLine": 469,
+                    "snippet": "['runtime.request_tool_pack', 'runtime.list_tool_packs', 'filesystem.read'],",
+                    "score": 10,
+                    "tokenEstimate": 19
+                  },
+                  {
+                    "chunkId": "file_4afbf2bafe49e162_chunk_0",
+                    "fileId": "file_4afbf2bafe49e162",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts",
+                    "relativePath": "src/main/agent/providerRouting.test.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 57,
+                    "snippet": "import { describe, expect, it } from 'vitest';",
+                    "score": 5,
+                    "tokenEstimate": 12
+                  },
+                  {
+                    "chunkId": "file_46e25c45ac7e5fab_chunk_0",
+                    "fileId": "file_46e25c45ac7e5fab",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRunStore.ts",
+                    "relativePath": "src/main/agent/AgentRunStore.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "import { AgentRunRecord, AgentRunStatus, AgentToolCallRecord, AgentToolName, AgentToolStatus } from './AgentTypes';",
+                    "score": 2,
+                    "tokenEstimate": 29
+                  },
+                  {
+                    "chunkId": "file_9af4a8a13c81b85f_chunk_0",
+                    "fileId": "file_9af4a8a13c81b85f",
+                    "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                    "relativePath": "src/shared/types/model.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "export function createDefaultProviderRuntime(id: ProviderId): ProviderRuntime {",
+                    "score": 2,
+                    "tokenEstimate": 20
+                  },
+                  {
+                    "chunkId": "file_9af4a8a13c81b85f_chunk_3",
+                    "fileId": "file_9af4a8a13c81b85f",
+                    "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                    "relativePath": "src/shared/types/model.ts",
+                    "language": "typescript",
+                    "startLine": 241,
+                    "endLine": 295,
+                    "snippet": "export function createEmptyTaskMemoryRecord(taskId: string): TaskMemoryRecord {",
+                    "score": 2,
+                    "tokenEstimate": 20
+                  }
+                ]
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-3-1-1776526994520",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "filesystem.answer_from_cache",
+            "arguments": {
+              "query": "how are runtime failures recorded in tests what assertions check failure state",
+              "pathPrefix": "src/main/agent/AgentRuntime.test.ts",
+              "limit": 10
+            },
+            "result": {
+              "summary": "Found 6 cached file sources",
+              "data": {
+                "query": "how are runtime failures recorded in tests what assertions check failure state",
+                "answer": "### src/main/agent/AgentRuntime.test.ts:161\n      onStatus: (status) => {\n        statusUpdates.push(status);\n      },\n    });\n\n    expect(provider.requests).toHaveLength(1);\n    expect(provider.requests[0].maxToolTurns).toBe(4);\n    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(['terminal.exec']);\n    expect(provider.requests[0].toolBindings).toEqual([\n      expect.objectContaining({\n        name: 'terminal.exec',\n        state: 'callable',\n      }),\n    ]);\n    expect(result.runId).toBeTruthy();\n    expect(result.output).toContain('\"summary\":\"Ran echo ok\"');\n    expect(result.output).toContain('STATUS: VALID');\n    expect(statusUpdates).toEqual(['tool-done:exit 0: ok']);\n    expect(recordToolMessageMock).toHaveBeenCalledWith(\n      'task-runtime-success',\n      expect.stringContaining('\"tool\": \"terminal.exec\"'),\n      PRIMARY_PROVIDER_ID,\n      expect.any(String),\n    );\n\n    const run = agentRunStore.getRun(result.runId!);\n    expect(run).toMatchObject({\n      id: result.runId,\n      status: 'completed',\n    });\n\n    const toolCalls = agentRunStore.listToolCalls(result.runId);\n    expect(toolCalls).toHaveLength(1);\n    expect(toolCalls[0]).toMatchObject({\n      runId: result.runId,\n      ag\n...[file truncated]\n\n### src/main/agent/AgentRuntime.test.ts:241\n      allowedTools: ['terminal.exec'],\n    })).rejects.toThrow('command exploded');\n\n    expect(recordToolMessageMock).toHaveBeenCalledWith(\n      'task-runtime-failure',\n      expect.stringContaining('\"error\": \"command exploded\"'),\n      PRIMARY_PROVIDER_ID,\n      expect.any(String),\n    );\n\n    const failedRun = agentRunStore.listRuns().find(run => run.task === 'Run the command and handle the failure.');\n    expect(failedRun).toBeTruthy();\n    expect(failedRun).toMatchObject({\n      status: 'failed',\n      error: 'command exploded',\n    });\n\n    const toolCalls = agentRunStore.listToolCalls(failedRun!.id);\n    expect(toolCalls).toHaveLength(1);\n    expect(toolCalls[0]).toMatchObject({\n      runId: failedRun!.id,\n      toolName: 'terminal.exec',\n      status: 'failed',\n      error: 'command exploded',\n    });\n  });\n\n  it('preflight-expands the tool scope before the first provider turn when the task clearly needs adjacent tools', async () => {\n    const browserTabsTool: AgentToolDefinition = {\n      name: 'browser.get_tabs',\n      description: 'Return open browser tabs',\n      inputSchema: {\n        type: 'object',\n        additionalProperties: false,\n        properties: {},\n      \n...[file truncated]\n\n### src/main/agent/AgentRuntime.test.ts:1\nimport { beforeEach, describe, expect, it, vi } from 'vitest';\nimport type { AgentProviderRequest, AgentToolDefinition } from './AgentTypes';\nimport { PRIMARY_PROVIDER_ID } from '../../shared/types/model';\n\nconst { dispatchMock, recordToolMessageMock } = vi.hoisted(() => ({\n  dispatchMock: vi.fn(),\n  recordToolMessageMock: vi.fn(),\n}));\n\nvi.mock('../state/appStateStore', () => ({\n  appStateStore: {\n    dispatch: dispatchMock,\n  },\n}));\n\nvi.mock('../chatKnowledge/ChatKnowledgeStore', () => ({\n  chatKnowledgeStore: {\n    recordToolMessage: recordToolMessageMock,\n  },\n}));\n\nimport { AgentRuntime, assertInitialBrowserScope } from './AgentRuntime';\nimport { agentCache } from './AgentCache';\nimport { agentRunStore } from './AgentRunStore';\nimport { agentToolExecutor } from './AgentToolExecutor';\nimport { executeProviderToolCall } from './providerToolRuntime';\nimport { createRuntimeToolDefinitions } from './tools/runtimeTools';\n\nclass SuccessfulToolLoopProvider {\n  requests: AgentProviderRequest[] = [];\n\n  async invoke(request: AgentProviderRequest) {\n    this.requests.push(request);\n\n    const execution = await executeProviderToolCall({\n      providerId: PRIMARY_PROVIDER_ID,\n      reques\n...[file truncated]\n\n### src/main/agent/AgentRuntime.test.ts:401\n        'browser.get_state',\n        'browser.get_tabs',\n        'browser.close_tab',\n        'browser.navigate',\n        'browser.click',\n        'browser.type',\n      ],\n      canSpawnSubagents: false,\n      maxToolTurns: 4,\n    });\n\n    expect(provider.requests).toHaveLength(1);\n    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([\n      'browser.create_tab',\n    ]));\n  });\n\n  it('hard-fails browser tasks when the initial tool scope exposes no browser tools', () => {\n    expect(() => assertInitialBrowserScope(\n      'Search the web for the latest browser tool issue and summarize it.',\n      ['runtime.request_tool_pack', 'runtime.list_tool_packs', 'filesystem.read'],\n    )).toThrow('Browser task blocked: initial MCP tool scope for research did not expose any browser.* tools.');\n  });\n\n  it('keeps a broader hydratable catalog than the current callable scope when configured', async () => {\n    agentToolExecutor.registerMany(createRuntimeToolDefinitions());\n    agentToolExecutor.register({\n      name: 'browser.close_tab',\n      description: 'Close one browser tab',\n      inputSchema: {\n        type: 'object',\n        additionalPro\n...[file truncated]\n\n### src/main/agent/AgentRuntime.test.ts:81\n\n    const execution = await executeProviderToolCall({\n      providerId: PRIMARY_PROVIDER_ID,\n      request,\n      toolName: 'runtime.search_tools',\n      toolInput: { query: 'close browser tab' },\n    });\n\n    if (!execution.ok) {\n      throw new Error(execution.errorMessage);\n    }\n\n    return {\n      output: execution.toolContent,\n      usage: {\n        inputTokens: 5,\n        outputTokens: 5,\n        durationMs: 5,\n      },\n    };\n  }\n}\n\ndescribe('AgentRuntime', () => {\n  beforeEach(() => {\n    dispatchMock.mockReset();\n    recordToolMessageMock.mockReset();\n    agentCache.clear();\n  });\n\n  it('runs the provider through the shared tool executor path with validation', async () => {\n    const tool: AgentToolDefinition<{ command: string }> = {\n      name: 'terminal.exec',\n      description: 'Run a terminal command',\n      inputSchema: {\n        type: 'object',\n        additionalProperties: false,\n        properties: {\n          command: { type: 'string' },\n        },\n        required: ['command'],\n      },\n      execute: async (input) => ({\n        summary: `Ran ${input.command}`,\n        data: {\n          output: 'ok',\n          exitCode: 0,\n        },\n      }),\n    };\n\n    const\n...[file truncated]\n\n### src/main/agent/AgentRuntime.test.ts:321\n  });\n\n  it('preflight-adds browser.create_tab for explicit multi-tab requests even when the baseline scope only has navigate', async () => {\n    const browserTools: AgentToolDefinition[] = [\n      {\n        name: 'browser.get_state',\n        description: 'Return current browser state',\n        inputSchema: { type: 'object', additionalProperties: false, properties: {} },\n        execute: async () => ({ summary: 'state', data: {} }),\n      },\n      {\n        name: 'browser.get_tabs',\n        description: 'Return open browser tabs',\n        inputSchema: { type: 'object', additionalProperties: false, properties: {} },\n        execute: async () => ({ summary: 'tabs', data: { tabs: [] } }),\n      },\n      {\n        name: 'browser.navigate',\n        description: 'Navigate the active tab',\n        inputSchema: {\n          type: 'object',\n          additionalProperties: false,\n          properties: { url: { type: 'string' } },\n          required: ['url'],\n        },\n        execute: async () => ({ summary: 'navigated', data: {} }),\n      },\n      {\n        name: 'browser.close_tab',\n        description: 'Close a tab',\n        inputSchema: { type: 'object', additionalProperties: false, prop\n...[file truncated]",
+                "sources": [
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_2",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 161,
+                    "endLine": 240,
+                    "snippet": "expect.stringContaining('\"tool\": \"terminal.exec\"'),",
+                    "score": 12,
+                    "tokenEstimate": 13
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_3",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 241,
+                    "endLine": 320,
+                    "snippet": "expect(provider.requests[0].toolBindings).toEqual(expect.arrayContaining([",
+                    "score": 12,
+                    "tokenEstimate": 19
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_0",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "import { AgentRuntime, assertInitialBrowserScope } from './AgentRuntime';",
+                    "score": 11,
+                    "tokenEstimate": 19
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_5",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 401,
+                    "endLine": 469,
+                    "snippet": "task: 'Inspect the runtime registry for an exact missing tool name.',",
+                    "score": 11,
+                    "tokenEstimate": 18
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_1",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 81,
+                    "endLine": 160,
+                    "snippet": "const tool: AgentToolDefinition<{ command: string }> = {",
+                    "score": 10,
+                    "tokenEstimate": 14
+                  },
+                  {
+                    "chunkId": "file_c8f30c44dc0fab9a_chunk_4",
+                    "fileId": "file_c8f30c44dc0fab9a",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                    "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                    "language": "typescript",
+                    "startLine": 321,
+                    "endLine": 400,
+                    "snippet": "const runtime = new AgentRuntime(provider);",
+                    "score": 10,
+                    "tokenEstimate": 11
+                  }
+                ],
+                "tokenEstimate": 1898
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-4-1-1776526996159",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+              "startLine": 161,
+              "endLine": 240
+            },
+            "result": {
+              "summary": "Read 2511 characters from indexed file window",
+              "data": {
+                "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                "content": "      onStatus: (status) => {\n        statusUpdates.push(status);\n      },\n    });\n\n    expect(provider.requests).toHaveLength(1);\n    expect(provider.requests[0].maxToolTurns).toBe(4);\n    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(['terminal.exec']);\n    expect(provider.requests[0].toolBindings).toEqual([\n      expect.objectContaining({\n        name: 'terminal.exec',\n        state: 'callable',\n      }),\n    ]);\n    expect(result.runId).toBeTruthy();\n    expect(result.output).toContain('\"summary\":\"Ran echo ok\"');\n    expect(result.output).toContain('STATUS: VALID');\n    expect(statusUpdates).toEqual(['tool-done:exit 0: ok']);\n    expect(recordToolMessageMock).toHaveBeenCalledWith(\n      'task-runtime-success',\n      expect.stringContaining('\"tool\": \"terminal.exec\"'),\n      PRIMARY_PROVIDER_ID,\n      expect.any(String),\n    );\n\n    const run = agentRunStore.getRun(result.runId!);\n    expect(run).toMatchObject({\n      id: result.runId,\n      status: 'completed',\n    });\n\n    const toolCalls = agentRunStore.listToolCalls(result.runId);\n    expect(toolCalls).toHaveLength(1);\n    expect(toolCalls[0]).toMatchObject({\n      runId: result.runId,\n      agentId: PRIMARY_PROVIDER_ID,\n      toolName: 'terminal.exec',\n      status: 'completed',\n    });\n    expect(toolCalls[0].output).toMatchObject({\n      summary: 'Ran echo ok',\n      validation: {\n        status: 'VALID',\n      },\n    });\n\n    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({\n      type: 'ADD_LOG',\n      log: expect.objectContaining({\n        message: expect.stringContaining('toolPayloadTokens='),\n      }),\n    }));\n  });\n\n  it('marks the runtime run as failed when the provider surfaces a tool failure', async () => {\n    const failingTool: AgentToolDefinition<{ command: string }> = {\n      name: 'terminal.exec',\n      description: 'Run a terminal command',\n      inputSchema: {\n        type: 'object',\n        additionalProperties: false,\n        properties: {\n          command: { type: 'string' },\n        },\n        required: ['command'],\n      },\n      execute: async () => {\n        throw new Error('command exploded');\n      },\n    };\n\n    agentToolExecutor.register(failingTool);\n\n    const runtime = new AgentRuntime(new FailingToolLoopProvider());\n    await expect(runtime.run({\n      mode: 'unrestricted-dev',\n      agentId: PRIMARY_PROVIDER_ID,\n      role: 'primary',\n      task: 'Run the command and handle the failure.',\n      taskId: 'task-runtime-failure',",
+                "truncated": false,
+                "startLine": 161,
+                "endLine": 240,
+                "totalLines": 469,
+                "chunkCount": 1,
+                "source": "indexed-window"
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-5-1-1776526997526",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "filesystem.read",
+            "arguments": {
+              "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+              "startLine": 240,
+              "endLine": 290
+            },
+            "result": {
+              "summary": "Read 1618 characters from indexed file window",
+              "data": {
+                "path": "/home/dp/Desktop/v2workspace/src/main/agent/AgentRuntime.test.ts",
+                "relativePath": "src/main/agent/AgentRuntime.test.ts",
+                "content": "      taskId: 'task-runtime-failure',\n      allowedTools: ['terminal.exec'],\n    })).rejects.toThrow('command exploded');\n\n    expect(recordToolMessageMock).toHaveBeenCalledWith(\n      'task-runtime-failure',\n      expect.stringContaining('\"error\": \"command exploded\"'),\n      PRIMARY_PROVIDER_ID,\n      expect.any(String),\n    );\n\n    const failedRun = agentRunStore.listRuns().find(run => run.task === 'Run the command and handle the failure.');\n    expect(failedRun).toBeTruthy();\n    expect(failedRun).toMatchObject({\n      status: 'failed',\n      error: 'command exploded',\n    });\n\n    const toolCalls = agentRunStore.listToolCalls(failedRun!.id);\n    expect(toolCalls).toHaveLength(1);\n    expect(toolCalls[0]).toMatchObject({\n      runId: failedRun!.id,\n      toolName: 'terminal.exec',\n      status: 'failed',\n      error: 'command exploded',\n    });\n  });\n\n  it('preflight-expands the tool scope before the first provider turn when the task clearly needs adjacent tools', async () => {\n    const browserTabsTool: AgentToolDefinition = {\n      name: 'browser.get_tabs',\n      description: 'Return open browser tabs',\n      inputSchema: {\n        type: 'object',\n        additionalProperties: false,\n        properties: {},\n      },\n      execute: async () => ({\n        summary: 'Read browser tabs',\n        data: { tabs: [{ id: 'tab-1' }] },\n      }),\n    };\n\n    agentToolExecutor.register(browserTabsTool);\n\n    const provider = {\n      requests: [] as AgentProviderRequest[],\n      async invoke(request: AgentProviderRequest) {\n        this.requests.push(request);\n        return {\n          output: 'ok',",
+                "truncated": false,
+                "startLine": 240,
+                "endLine": 290,
+                "totalLines": 469,
+                "chunkCount": 2,
+                "source": "indexed-window"
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-final-1776527002493",
+            "type": "agent_message",
+            "text": "Perfect! I now have the complete picture of how runtime failures are recorded. Let me provide a summary:\n\n## Runtime Failure Recording\n\nBased on the **AgentRuntime.test.ts** test file, here's how runtime failures are recorded:\n\n### Key Failure Recording Pattern (from test \"marks the runtime run as failed when the provider surfaces a tool failure\")\n\nWhen a runtime fails:\n\n1. **Chat Knowledge Store Records:**\n   - `recordToolMessageMock` is called with message type `'task-runtime-failure'`\n   - The message includes the error details: `expect.stringContaining('\\\"error\\\": \\\"command exploded\\\"')`\n   - Parameters: message type, message content, provider ID, and task ID\n\n2. **Agent Run Store Records:**\n   - The run record gets a `status: 'failed'`\n   - The run record gets an `error: 'command exploded'` field capturing the failure reason\n\n3. **Tool Call Records:**\n   - Each failed tool call is recorded with:\n     - `status: 'failed'`\n     - `error: 'command exploded'` (the exception message)\n     - Tool name, run ID, and other metadata\n\n### Code Evidence:\n```typescript\nexpect(recordToolMessageMock).toHaveBeenCalledWith(\n  'task-runtime-failure',  // message type indicates failure\n  expect.stringContaining('\\\"error\\\": \\\"command exploded\\\"'),\n  PRIMARY_PROVIDER_ID,\n  expect.any(String),\n);\n\nconst failedRun = agentRunStore.listRuns().find(run => ...);\nexpect(failedRun).toMatchObject({\n  status: 'failed',\n  error: 'command exploded',  // error stored at run level\n});\n\nexpect(toolCalls[0]).toMatchObject({\n  runId: failedRun!.id,\n  toolName: 'terminal.exec',\n  status: 'failed',\n  error: 'command exploded',  // error stored at tool call level\n});\n```\n\n### Summary\nRuntime failures are recorded at **three levels**:\n1. **Chat Knowledge**: Via `recordToolMessage` with `'task-runtime-failure'` type and error details\n2. **Run Record**: `status: 'failed'` + `error` field\n3. **Tool Call Record**: `status: 'failed'` + `error` field\n\nThis provides a hierarchical record of where failures occurred and why."
+          }
+        ],
+        "usage": {
+          "inputTokens": 24696,
+          "outputTokens": 1146,
+          "durationMs": 15893
+        },
+        "runId": "run_mo4iartz_4cnw9a"
+      }
+    }
+  ]
+}

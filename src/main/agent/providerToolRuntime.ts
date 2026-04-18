@@ -3,7 +3,10 @@ import type { AnyProviderId, CodexItem } from '../../shared/types/model';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import type { AgentProviderRequest, AgentToolName, AgentToolResult } from './AgentTypes';
-import { resolveRequestedToolPack } from './toolPacks';
+import { resolveAutoExpandedToolPack, resolveRequestedToolPack } from './toolPacks';
+import type { AgentToolBindingStore } from './toolBindingScope';
+import { listCallableRequestTools } from './toolBindingScope';
+import path from 'path';
 
 export const DEFAULT_PROVIDER_MAX_TOOL_TURNS = 20;
 export const MAX_PROVIDER_TOOL_TURNS = 40;
@@ -16,9 +19,10 @@ type ProviderToolCallItem = Extract<CodexItem, { type: 'mcp_tool_call' }>;
 
 type ExecuteProviderToolCallInput = {
   providerId: AnyProviderId;
-  request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus'>;
+  request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus' | 'promptTools' | 'toolCatalog' | 'toolBindings'>;
   toolName: AgentToolName;
   toolInput: unknown;
+  currentTools?: AgentProviderRequest['promptTools'];
 };
 
 type ProviderToolCallSuccess = {
@@ -60,6 +64,19 @@ export function normalizeProviderMaxToolTurns(requestedTurns?: number): number {
 export function describeProviderToolCall(toolName: string, input: unknown): string {
   const args = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
   switch (toolName) {
+    case 'artifact.list': return 'Artifacts: list';
+    case 'artifact.get': return `Artifacts: get ${args.artifactId || 'active artifact'}`;
+    case 'artifact.get_active': return 'Artifacts: get active';
+    case 'artifact.read': return `Artifacts: read ${args.artifactId || 'active artifact'}`;
+    case 'artifact.create': return `Artifacts: create ${args.title || 'artifact'}`;
+    case 'artifact.delete': return `Artifacts: delete ${args.artifactId || 'artifact'}`;
+    case 'artifact.replace_content': return `Artifacts: replace ${args.artifactId || 'active artifact'}`;
+    case 'artifact.append_content': return `Artifacts: append ${args.artifactId || 'active artifact'}`;
+    case 'runtime.search_tools': return `Runtime: search tools "${args.query || ''}"`;
+    case 'runtime.require_tools': return 'Runtime: require exact tools';
+    case 'runtime.invoke_tool': return `Runtime: invoke ${args.tool || args.name || 'tool'}`;
+    case 'runtime.request_tool_pack': return `Runtime: request pack ${args.pack || ''}`.trim();
+    case 'runtime.list_tool_packs': return 'Runtime: list tool packs';
     case 'browser.navigate': return `Browser: navigate ${args.url || 'page'}`;
     case 'browser.search_web': return `Browser: search "${args.query || ''}"`;
     case 'browser.research_search': return `Browser: research "${args.query || ''}"`;
@@ -77,7 +94,7 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'browser.hover': return `Browser: hover ${args.selector || 'element'}`;
     case 'browser.drag': return 'Browser: drag';
     case 'browser.hit_test': return `Browser: hit test ${args.selector || 'target'}`;
-    case 'browser.evaluate_js': return 'Browser: evaluate js';
+    case 'browser.evaluate_js': return 'Browser: unsafe js eval';
     case 'browser.run_intent_program': return 'Browser: run intent program';
     case 'browser.find_element': return `Browser: find ${args.selector || args.text || 'element'}`;
     case 'browser.click_text': return `Browser: click text "${args.text || ''}"`;
@@ -122,13 +139,12 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'terminal.write': return 'Terminal: write';
     case 'terminal.kill': return 'Terminal: kill';
     case 'subagent.spawn': return `Subagent: spawn ${args.role || args.task || 'worker'}`;
-    case 'subagent.message': return 'Subagent: message';
     case 'subagent.wait': return 'Subagent: wait';
     case 'subagent.cancel': return 'Subagent: cancel';
     case 'subagent.list': return 'Subagent: list';
     case 'runtime.request_tool_pack': return `Runtime: load tool pack ${args.pack || ''}`.trim();
     case 'runtime.list_tool_packs': return 'Runtime: list tool packs';
-    case 'runtime.haiku_browser_session': return `Runtime: Haiku browser session ${args.prompt || 'prompt'}`;
+    case 'runtime.search_tools': return `Runtime: search tools "${args.query || ''}"`.trim();
     default: {
       const short = toolName.replace(/^(browser|filesystem|terminal|subagent|chat)\./, '');
       return short.replace(/_/g, ' ');
@@ -136,15 +152,129 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
   }
 }
 
-export function resolveToolPackExpansion(
+export function resolveRuntimeToolExpansion(
   request: Pick<AgentProviderRequest, 'toolCatalog'>,
+  currentTools: AgentProviderRequest['promptTools'],
   toolName: AgentToolName,
   result: AgentToolResult,
 ): { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | null {
-  if (toolName !== 'runtime.request_tool_pack') return null;
-  const pack = typeof result.data.pack === 'string' ? result.data.pack : null;
-  if (!pack || !request.toolCatalog?.length) return null;
-  return resolveRequestedToolPack(pack, request.toolCatalog);
+  const currentToolNames = new Set(currentTools.map((tool) => tool.name));
+
+  if (toolName === 'runtime.request_tool_pack') {
+    const pack = typeof result.data.pack === 'string' ? result.data.pack : null;
+    if (!pack) return null;
+    const expansion = resolveRequestedToolPack(pack, request.toolCatalog);
+    if (!expansion) return null;
+    if (expansion.scope !== 'all' && !expansion.tools.some((name) => !currentToolNames.has(name))) {
+      return null;
+    }
+    return expansion;
+  }
+
+  if (toolName !== 'runtime.search_tools') return null;
+  const resultTools = Array.isArray(result.data.tools) ? result.data.tools : [];
+  const catalogNames = new Set(request.toolCatalog.map((tool) => tool.name));
+  const matched = resultTools
+    .filter((name): name is AgentToolName => typeof name === 'string' && catalogNames.has(name as AgentToolName));
+
+  const newMatches = matched.filter((name) => !currentToolNames.has(name));
+  if (newMatches.length === 0) return null;
+
+  return {
+    pack: 'tool-search',
+    description: `Loaded ${newMatches.length} searched tools`,
+    tools: newMatches,
+    scope: 'named',
+    relatedPackIds: [],
+  };
+}
+
+export function applyRuntimeToolExpansion(input: {
+  request: Pick<AgentProviderRequest, 'toolCatalog'>;
+  toolBindingStore: Pick<AgentToolBindingStore, 'getCallableTools' | 'queueTools'>;
+  toolName: AgentToolName;
+  result: AgentToolResult;
+}): { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | null {
+  const expansion = resolveRuntimeToolExpansion(
+    input.request,
+    input.toolBindingStore.getCallableTools(),
+    input.toolName,
+    input.result,
+  );
+  if (!expansion) return null;
+  input.toolBindingStore.queueTools(expansion.tools);
+  return expansion;
+}
+
+export function applyAutoExpandedToolPack(input: {
+  message: string;
+  toolCatalog: AgentProviderRequest['toolCatalog'];
+  toolBindingStore: Pick<AgentToolBindingStore, 'getCallableTools' | 'queueTools'>;
+}): { pack: string; reason: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | null {
+  const expansion = resolveAutoExpandedToolPack(
+    input.message,
+    input.toolBindingStore.getCallableTools(),
+    input.toolCatalog,
+  );
+  if (!expansion) return null;
+  input.toolBindingStore.queueTools(expansion.tools);
+  return expansion;
+}
+
+function expansionToolNames(
+  expansion: { scope: 'named' | 'all'; tools: AgentToolName[] },
+): string[] {
+  return expansion.scope === 'all'
+    ? ['all eligible tools']
+    : expansion.tools;
+}
+
+export function formatQueuedExpansionLines(
+  expansion: { pack: string; description: string; scope: 'named' | 'all'; tools: AgentToolName[] },
+  options?: { style?: 'codex' | 'haiku' },
+): string[] {
+  const expandedToolNames = expansionToolNames(expansion);
+  const headline = (options?.style ?? 'codex') === 'haiku'
+    ? (expansion.pack === 'tool-search'
+      ? 'Queued searched tools for the next turn.'
+      : `Queued tool pack "${expansion.pack}" for the next turn.`)
+    : (expansion.pack === 'tool-search'
+      ? 'Result: queued searched tools for the next turn'
+      : `Result: queued tool pack "${expansion.pack}" for the next turn`);
+
+  return [
+    headline,
+    `Description: ${expansion.description}`,
+    `Expanded tools: ${expandedToolNames.join(', ')}`,
+    'Callable now: none newly added in this turn',
+    `Callable next turn: ${expandedToolNames.join(', ')}`,
+  ];
+}
+
+export function formatAutoExpandedToolPackLines(
+  expansion: { pack: string; reason: string; description: string; scope: 'named' | 'all'; tools: AgentToolName[] },
+  options?: { includeCallableStatus?: boolean; continueInstruction?: boolean },
+): string[] {
+  const expandedToolNames = expansionToolNames(expansion);
+  const lines = [
+    `Host auto-expanded tool pack "${expansion.pack}".`,
+    `Reason: ${expansion.reason}`,
+    `Description: ${expansion.description}`,
+    `Expanded tools: ${expandedToolNames.join(', ')}`,
+  ];
+
+  if (options?.includeCallableStatus) {
+    lines.push(
+      'Callable now: none newly added in this turn',
+      `Callable next turn: ${expandedToolNames.join(', ')}`,
+    );
+  }
+
+  if (options?.continueInstruction) {
+    lines.push('Continue with the expanded tool scope instead of stopping if more work is still needed.');
+  }
+
+  return lines;
 }
 
 export function encodeToolInput(value: unknown): string {
@@ -180,11 +310,15 @@ export async function executeProviderToolCall(
   input: ExecuteProviderToolCallInput,
 ): Promise<ProviderToolCallExecution> {
   try {
+    const currentTools = input.currentTools ?? listCallableRequestTools(input.request);
+    const toolCatalog = input.request.toolCatalog;
     const result = await agentToolExecutor.execute(input.toolName, input.toolInput, {
       runId: input.request.runId,
       agentId: input.request.agentId,
       mode: input.request.mode,
       taskId: input.request.taskId,
+      toolNames: currentTools.map((tool) => tool.name),
+      toolCatalog,
       onProgress: input.request.onStatus,
     });
 
@@ -322,10 +456,129 @@ function describeProviderToolResult(result: unknown, isError: boolean): string {
     const msg = typeof result === 'string' ? result : '';
     return msg.length > 80 ? `error: ${msg.slice(0, 77)}...` : `error: ${msg || 'failed'}`;
   }
-  const data = (result && typeof result === 'object') ? result as Record<string, unknown> : {};
-  const summary = typeof data.summary === 'string' ? data.summary : null;
-  if (summary) {
-    return summary.length > 80 ? `${summary.slice(0, 77)}...` : summary;
+  const payload = (result && typeof result === 'object') ? result as Record<string, unknown> : {};
+  const summary = typeof payload.summary === 'string' ? payload.summary : null;
+  const data = (payload.data && typeof payload.data === 'object')
+    ? payload.data as Record<string, unknown>
+    : {};
+  const enriched = enrichToolSummary(summary, data);
+  if (enriched) {
+    return enriched.length > 120 ? `${enriched.slice(0, 117)}...` : enriched;
   }
   return 'done';
+}
+
+function enrichToolSummary(summary: string | null, data: Record<string, unknown>): string | null {
+  if (Array.isArray(data.entries)) {
+    const preview = data.entries
+      .slice(0, 3)
+      .map((entry) => {
+        if (entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string') {
+          return (entry as { name: string }).name;
+        }
+        return null;
+      })
+      .filter((value): value is string => Boolean(value));
+    if (preview.length > 0) {
+      return `${summary ?? `Listed ${data.entries.length} entries`} (${preview.join(', ')}${data.entries.length > preview.length ? ', ...' : ''})`;
+    }
+  }
+
+  if (Array.isArray(data.matches)) {
+    const preview = data.matches
+      .slice(0, 3)
+      .map((match) => {
+        if (match && typeof match === 'object' && typeof (match as { path?: unknown }).path === 'string') {
+          return path.basename((match as { path: string }).path);
+        }
+        return null;
+      })
+      .filter((value): value is string => Boolean(value));
+    if (preview.length > 0) {
+      return `${summary ?? `Found ${data.matches.length} matches`} (${preview.join(', ')}${data.matches.length > preview.length ? ', ...' : ''})`;
+    }
+  }
+
+  if (Array.isArray(data.openedPages)) {
+    const preview = data.openedPages
+      .slice(0, 2)
+      .map((pageEntry) => previewTitleOrUrl(pageEntry))
+      .filter((value): value is string => Boolean(value));
+    if (preview.length > 0) {
+      return `${summary ?? `Opened ${data.openedPages.length} pages`} (${preview.join(', ')}${data.openedPages.length > preview.length ? ', ...' : ''})`;
+    }
+  }
+
+  if (Array.isArray(data.searchResults)) {
+    const preview = data.searchResults
+      .slice(0, 2)
+      .map((resultEntry) => previewTitleOrUrl(resultEntry))
+      .filter((value): value is string => Boolean(value));
+    if (preview.length > 0) {
+      return `${summary ?? `Found ${data.searchResults.length} search results`} (${preview.join(', ')}${data.searchResults.length > preview.length ? ', ...' : ''})`;
+    }
+  }
+
+  if (Array.isArray(data.tabs)) {
+    const preview = data.tabs
+      .slice(0, 3)
+      .map((tab) => previewTitleOrUrl(tab))
+      .filter((value): value is string => Boolean(value));
+    if (preview.length > 0) {
+      return `${summary ?? `Read ${data.tabs.length} tabs`} (${preview.join(', ')}${data.tabs.length > preview.length ? ', ...' : ''})`;
+    }
+  }
+
+  if (Array.isArray(data.pages)) {
+    const preview = data.pages
+      .slice(0, 2)
+      .map((pageEntry) => previewTitleOrUrl(pageEntry))
+      .filter((value): value is string => Boolean(value));
+    if (preview.length > 0) {
+      return `${summary ?? `Listed ${data.pages.length} cached pages`} (${preview.join(', ')}${data.pages.length > preview.length ? ', ...' : ''})`;
+    }
+  }
+
+  if (data.page && typeof data.page === 'object') {
+    const preview = previewTitleOrUrl(data.page);
+    if (preview) {
+      return `${summary ?? 'Read browser page'} (${preview})`;
+    }
+  }
+
+  if (data.metadata && typeof data.metadata === 'object') {
+    const preview = previewTitleOrUrl(data.metadata);
+    if (preview) {
+      return `${summary ?? 'Read browser metadata'} (${preview})`;
+    }
+  }
+
+  if (typeof data.exitCode === 'number') {
+    const outputSnippet = terminalOutputSnippet(typeof data.output === 'string' ? data.output : '');
+    if (outputSnippet) {
+      return `exit ${data.exitCode}: ${outputSnippet}`;
+    }
+    return summary;
+  }
+
+  return summary;
+}
+
+function terminalOutputSnippet(output: string): string | null {
+  for (const rawLine of output.split('\n')) {
+    const line = rawLine.replace(/\s+/g, ' ').trim();
+    if (!line) continue;
+    return line.length > 72 ? `${line.slice(0, 69)}...` : line;
+  }
+  return null;
+}
+
+function previewTitleOrUrl(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const title = typeof (value as { title?: unknown }).title === 'string' ? (value as { title: string }).title.trim() : '';
+  const name = typeof (value as { name?: unknown }).name === 'string' ? (value as { name: string }).name.trim() : '';
+  const url = typeof (value as { url?: unknown }).url === 'string' ? (value as { url: string }).url.trim() : '';
+  const text = title || name || url;
+  if (!text) return null;
+  return text.length > 48 ? `${text.slice(0, 45)}...` : text;
 }

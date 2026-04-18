@@ -4,6 +4,7 @@ import {
   resolveAllowedToolsForTaskKind,
   resolveAutoExpandedToolPack,
   resolvePreflightToolPackExpansions,
+  searchToolCatalog,
 } from './toolPacks';
 
 describe('tool packs', () => {
@@ -13,19 +14,23 @@ describe('tool packs', () => {
 
     expect(research).not.toBe('all');
     expect(orchestration).not.toBe('all');
-    expect(research).toHaveLength(6);
-    expect(orchestration).toHaveLength(6);
+    expect(research).toHaveLength(8);
+    expect(orchestration).toHaveLength(8);
     expect(research).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'runtime.require_tools',
+      'runtime.invoke_tool',
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
       'browser.research_search',
       'browser.search_page_cache',
     ]));
     expect(orchestration).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'runtime.require_tools',
+      'runtime.invoke_tool',
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
       'subagent.spawn',
       'subagent.wait',
     ]));
@@ -41,28 +46,35 @@ describe('tool packs', () => {
     expect(review).not.toBe('all');
     expect(browserAutomation).not.toBe('all');
     expect(general).not.toBe('all');
-    expect(implementation).toHaveLength(8);
-    expect(review).toHaveLength(8);
-    expect(browserAutomation).toHaveLength(9);
-    expect(general).toHaveLength(9);
+    expect(implementation).toHaveLength(10);
+    expect(review).toHaveLength(10);
+    expect(browserAutomation).toHaveLength(11);
+    expect(general).toHaveLength(11);
     expect(implementation).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'runtime.require_tools',
+      'runtime.invoke_tool',
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
       'filesystem.patch',
       'filesystem.write',
       'terminal.exec',
     ]));
     expect(review).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'runtime.require_tools',
+      'runtime.invoke_tool',
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
       'chat.thread_summary',
       'chat.search',
     ]));
     expect(browserAutomation).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'runtime.require_tools',
+      'runtime.invoke_tool',
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
       'browser.get_tabs',
       'browser.close_tab',
       'browser.navigate',
@@ -70,9 +82,11 @@ describe('tool packs', () => {
       'browser.type',
     ]));
     expect(general).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'runtime.require_tools',
+      'runtime.invoke_tool',
       'runtime.request_tool_pack',
       'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
       'chat.thread_summary',
       'chat.read_last',
     ]));
@@ -83,7 +97,42 @@ describe('tool packs', () => {
     expect(resolveAllowedToolsForTaskKind('browser-search', 'all')).toBe('all');
   });
 
+  it('searches the tool catalog and ranks exact missing tools first', () => {
+    const matches = searchToolCatalog(
+      'close browser tabs',
+      [
+        { name: 'browser.close_tab', description: 'Close one browser tab' },
+        { name: 'browser.get_tabs', description: 'List the currently open browser tabs' },
+        { name: 'filesystem.read', description: 'Read a local file from disk' },
+      ],
+      {
+        currentTools: [{ name: 'browser.get_tabs' }],
+        limit: 3,
+      },
+    );
+
+    expect(matches.map((match) => match.name)).toEqual([
+      'browser.close_tab',
+      'browser.get_tabs',
+    ]);
+    expect(matches[0]?.bindingState).toBe('discoverable');
+    expect(matches[0]?.callableNow).toBe(false);
+    expect(matches[0]?.invokableNow).toBe(true);
+    expect(matches[0]?.invocationMethod).toBe('runtime.invoke_tool');
+    expect(matches[0]?.availableNextTurn).toBe(true);
+    expect(matches[1]?.bindingState).toBe('callable');
+    expect(matches[1]?.callableNow).toBe(true);
+    expect(matches[1]?.invokableNow).toBe(true);
+    expect(matches[1]?.invocationMethod).toBe('direct');
+    expect(matches[1]?.availableNextTurn).toBe(false);
+    expect(matches[0]?.relatedPackIds).toContain('browser-automation');
+  });
+
   it('loads named expansion packs from manifests', () => {
+    expect(getToolPack('debug')).toEqual(expect.objectContaining({
+      id: 'debug',
+      tools: expect.arrayContaining(['browser.evaluate_js', 'terminal.exec']),
+    }));
     expect(getToolPack('terminal-heavy')).toEqual(expect.objectContaining({
       id: 'terminal-heavy',
       tools: expect.arrayContaining(['terminal.exec', 'terminal.spawn', 'terminal.kill']),
@@ -92,6 +141,7 @@ describe('tool packs', () => {
       id: 'browser-advanced',
       tools: expect.arrayContaining(['browser.upload_file', 'browser.get_console_events']),
     }));
+    expect(getToolPack('browser-advanced')?.tools).not.toContain('browser.evaluate_js');
     expect(getToolPack('file-cache')).toEqual(expect.objectContaining({
       id: 'file-cache',
       tools: expect.arrayContaining(['filesystem.index_workspace', 'filesystem.search_file_cache']),
@@ -99,6 +149,10 @@ describe('tool packs', () => {
     expect(getToolPack('browser-automation')).toEqual(expect.objectContaining({
       id: 'browser-automation',
       baseline6: expect.arrayContaining(['browser.get_tabs', 'browser.close_tab']),
+    }));
+    expect(getToolPack('artifacts')).toEqual(expect.objectContaining({
+      id: 'artifacts',
+      tools: expect.arrayContaining(['artifact.create', 'artifact.delete', 'artifact.read', 'artifact.replace_content']),
     }));
     expect(getToolPack('all-tools')).toEqual(expect.objectContaining({
       id: 'all-tools',
@@ -312,6 +366,45 @@ describe('tool packs', () => {
       expect.objectContaining({
         pack: 'terminal-heavy',
         tools: expect.arrayContaining(['terminal.spawn', 'terminal.write', 'terminal.kill']),
+      }),
+    ]);
+  });
+
+  it('preflight-expands artifacts when the prompt asks for a managed markdown or csv artifact', () => {
+    const expansions = resolvePreflightToolPackExpansions(
+      'Create a markdown artifact called Weekly Research Note and then append to this csv sheet.',
+      [
+        { name: 'runtime.request_tool_pack' },
+        { name: 'runtime.list_tool_packs' },
+        { name: 'filesystem.search' },
+        { name: 'filesystem.read' },
+      ],
+      [
+        { name: 'runtime.request_tool_pack', description: '', inputSchema: {} },
+        { name: 'runtime.list_tool_packs', description: '', inputSchema: {} },
+        { name: 'filesystem.search', description: '', inputSchema: {} },
+        { name: 'filesystem.read', description: '', inputSchema: {} },
+        { name: 'artifact.list', description: '', inputSchema: {} },
+        { name: 'artifact.get', description: '', inputSchema: {} },
+        { name: 'artifact.get_active', description: '', inputSchema: {} },
+        { name: 'artifact.read', description: '', inputSchema: {} },
+        { name: 'artifact.create', description: '', inputSchema: {} },
+        { name: 'artifact.delete', description: '', inputSchema: {} },
+        { name: 'artifact.replace_content', description: '', inputSchema: {} },
+        { name: 'artifact.append_content', description: '', inputSchema: {} },
+      ],
+    );
+
+    expect(expansions).toEqual([
+      expect.objectContaining({
+        pack: 'artifacts',
+        tools: expect.arrayContaining([
+          'artifact.create',
+          'artifact.delete',
+          'artifact.read',
+          'artifact.replace_content',
+          'artifact.append_content',
+        ]),
       }),
     ]);
   });

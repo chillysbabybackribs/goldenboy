@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import { AppState, createDefaultAppState, ExecutionSplitState, TaskRecord } from '../../shared/types/appState';
-import { PhysicalWindowRole } from '../../shared/types/windowRoles';
+import { ArtifactRecord, isArtifactFormat, isArtifactStatus } from '../../shared/types/artifacts';
+import { PHYSICAL_WINDOW_ROLES, PhysicalWindowRole } from '../../shared/types/windowRoles';
 import { isProviderId } from '../../shared/types/model';
 
 const STATE_FILE = 'workspace-state.json';
@@ -16,15 +17,20 @@ type PersistedTaskRecord = {
   title: string;
   status: string;
   owner: string;
+  artifactIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
+
+type PersistedArtifactRecord = ArtifactRecord;
 
 type PersistedState = {
   executionSplit: ExecutionSplitState;
   windows: AppState['windows'];
   tasks?: PersistedTaskRecord[];
   activeTaskId?: string | null;
+  artifacts?: PersistedArtifactRecord[];
+  activeArtifactId?: string | null;
   tokenUsage?: { inputTokens: number; outputTokens: number };
 };
 
@@ -77,10 +83,13 @@ export function savePersistedState(state: AppState): void {
         title: t.title,
         status: t.status,
         owner: t.owner,
+        artifactIds: t.artifactIds,
         createdAt: t.createdAt,
         updatedAt: t.updatedAt,
       })),
       activeTaskId: state.activeTaskId,
+      artifacts: state.artifacts,
+      activeArtifactId: state.activeArtifactId,
       tokenUsage: state.tokenUsage,
     };
     const filePath = getStatePath();
@@ -96,6 +105,28 @@ function normalizePersistedTaskOwner(owner: string): TaskRecord['owner'] {
   return 'user';
 }
 
+function normalizePersistedArtifacts(records: PersistedArtifactRecord[] | undefined): ArtifactRecord[] {
+  if (!Array.isArray(records)) return [];
+  return records.filter((record): record is ArtifactRecord => {
+    return Boolean(
+      record
+      && typeof record.id === 'string'
+      && typeof record.title === 'string'
+      && typeof record.workingPath === 'string'
+      && typeof record.createdBy === 'string'
+      && typeof record.lastUpdatedBy === 'string'
+      && typeof record.createdAt === 'number'
+      && typeof record.updatedAt === 'number'
+      && typeof record.previewable === 'boolean'
+      && typeof record.exportable === 'boolean'
+      && typeof record.archived === 'boolean'
+      && Array.isArray(record.linkedTaskIds)
+      && isArtifactFormat(record.format)
+      && isArtifactStatus(record.status)
+    );
+  });
+}
+
 export function buildInitialState(): AppState {
   const defaults = createDefaultAppState();
   const persisted = loadPersistedState();
@@ -104,7 +135,7 @@ export function buildInitialState(): AppState {
   let windows = defaults.windows;
   if (persisted.windows) {
     const merged: Record<string, any> = { ...defaults.windows };
-    for (const role of ['command', 'execution'] as PhysicalWindowRole[]) {
+    for (const role of PHYSICAL_WINDOW_ROLES as readonly PhysicalWindowRole[]) {
       if (persisted.windows[role]) {
         merged[role] = { ...defaults.windows[role], ...persisted.windows[role] };
       }
@@ -123,6 +154,7 @@ export function buildInitialState(): AppState {
         title: t.title,
         status: (t.status === 'running' ? 'completed' : t.status) as TaskRecord['status'],
         owner: normalizePersistedTaskOwner(t.owner),
+        artifactIds: Array.isArray(t.artifactIds) ? t.artifactIds.filter((artifactId): artifactId is string => typeof artifactId === 'string') : [],
         createdAt: t.createdAt,
         updatedAt: t.updatedAt,
       } as TaskRecord));
@@ -139,12 +171,19 @@ export function buildInitialState(): AppState {
     ? persisted.tokenUsage
     : defaults.tokenUsage;
 
+  const artifacts = normalizePersistedArtifacts(persisted.artifacts);
+  const activeArtifactId = persisted.activeArtifactId && artifacts.some((artifact) => artifact.id === persisted.activeArtifactId)
+    ? persisted.activeArtifactId
+    : defaults.activeArtifactId;
+
   return {
     ...defaults,
     executionSplit: persisted.executionSplit ?? defaults.executionSplit,
     windows,
     tasks,
     activeTaskId,
+    artifacts,
+    activeArtifactId,
     tokenUsage,
   };
 }

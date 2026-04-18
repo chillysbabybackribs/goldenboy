@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { pruneExpiredEntries } from './AppServerProvider';
 import { AppServerProvider } from './AppServerProvider';
 
@@ -116,8 +116,9 @@ describe('web_search config enforcement', () => {
 });
 
 describe('turn text emission', () => {
-  it('does not stream interim assistant text for tool-calling turns', async () => {
+  it('streams assistant deltas immediately for tool-calling turns', async () => {
     const tokens: string[] = [];
+    const statuses: string[] = [];
     const mockWs = {
       send: (data: string) => {
         const msg = JSON.parse(data) as { id: number; method?: string };
@@ -171,8 +172,11 @@ describe('turn text emission', () => {
         taskId: 'task-1',
         systemPrompt: 'system',
         task: 'Click submit',
-        tools: [],
+        promptTools: [],
+        toolCatalog: [],
+        toolBindings: [],
         onToken: (text: string) => tokens.push(text),
+        onStatus: (status: string) => statuses.push(status),
       },
       currentTools: [],
       toolCatalog: [],
@@ -180,7 +184,142 @@ describe('turn text emission', () => {
 
     expect(result.kind).toBe('tool_calls');
     expect(result.message).toContain('Checking the page');
-    expect(tokens).toEqual([]);
+    expect(tokens).toEqual(['Checking the page before I click.']);
+    expect(statuses).toContain('thought-migrate');
+  });
+
+  it('suppresses generic post-tool procedural thoughts from status updates', async () => {
+    const statuses: string[] = [];
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { method?: string };
+        if (msg.method === 'turn/start') {
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            for (const handler of handlers) {
+              handler({ data: JSON.stringify({
+                method: 'item/started',
+                params: {
+                  item: {
+                    id: 'tool-1',
+                    type: 'mcpToolCall',
+                    server: 'v2-tools',
+                    tool: 'browser__click',
+                    arguments: { selector: '#submit' },
+                  },
+                },
+              }) });
+              handler({ data: JSON.stringify({ method: 'item/agentMessage/delta', params: { delta: 'I am checking the page before I click.' } }) });
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: 'Click submit',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: 'Click submit',
+        promptTools: [],
+        toolCatalog: [],
+        toolBindings: [],
+        onStatus: (status: string) => statuses.push(status),
+      },
+      currentTools: [],
+      toolCatalog: [],
+    });
+
+    expect(statuses.some((status) => status.startsWith('thought:'))).toBe(false);
+  });
+
+  it('keeps blocker-style post-tool questions in status updates', async () => {
+    const statuses: string[] = [];
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { method?: string };
+        if (msg.method === 'turn/start') {
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            for (const handler of handlers) {
+              handler({ data: JSON.stringify({
+                method: 'item/started',
+                params: {
+                  item: {
+                    id: 'tool-1',
+                    type: 'mcpToolCall',
+                    server: 'v2-tools',
+                    tool: 'browser__click',
+                    arguments: { selector: '#submit' },
+                  },
+                },
+              }) });
+              handler({ data: JSON.stringify({ method: 'item/agentMessage/delta', params: { delta: 'Which environment should I use?' } }) });
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: 'Click submit',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: 'Click submit',
+        promptTools: [],
+        toolCatalog: [],
+        toolBindings: [],
+        onStatus: (status: string) => statuses.push(status),
+      },
+      currentTools: [],
+      toolCatalog: [],
+    });
+
+    expect(statuses).toContain('thought:Which environment should I use?');
   });
 });
 
@@ -228,7 +367,9 @@ describe('turn input attachments', () => {
         taskId: 'task-1',
         systemPrompt: 'system',
         task: '',
-        tools: [],
+        promptTools: [],
+        toolCatalog: [],
+        toolBindings: [],
         attachments: [{
           type: 'image',
           mediaType: 'image/png',
@@ -245,5 +386,85 @@ describe('turn input attachments', () => {
     expect(turnStartMessage.params.input).toEqual([
       { type: 'local_image', path: '/tmp/diagram.png' },
     ]);
+  });
+});
+
+describe('tool scope promotion', () => {
+  it('writes only callable tools to the app-server context file for each turn', async () => {
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    const writtenToolNames: string[][] = [];
+    (provider as any).ws = {} as WebSocket;
+    (provider as any).acquireThread = vi.fn(async () => 'thread-1');
+    (provider as any).writeContextFile = vi.fn((_request: unknown, tools?: Array<{ name: string }>) => {
+      writtenToolNames.push((tools ?? []).map((tool) => tool.name));
+    });
+
+    let turnCount = 0;
+    (provider as any).runOneTurn = vi.fn(async (_ws: WebSocket, params: { currentTools: Array<{ name: string }> }) => {
+      turnCount += 1;
+      if (turnCount === 1) {
+        expect(params.currentTools.map((tool) => tool.name)).toEqual(['runtime.search_tools']);
+        return {
+          kind: 'tool_calls',
+          message: 'Queued browser tools',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolPackExpanded: true,
+          expansion: {
+            pack: 'browser-advanced',
+            description: 'Browser advanced tools',
+            tools: ['browser.close_tab'],
+            scope: 'named',
+            relatedPackIds: [],
+          },
+          codexItems: [],
+        };
+      }
+
+      expect(params.currentTools.map((tool) => tool.name)).toEqual([
+        'runtime.search_tools',
+        'browser.close_tab',
+      ]);
+      return {
+        kind: 'final',
+        message: 'Done',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolPackExpanded: false,
+        codexItems: [],
+      };
+    });
+
+    const result = await provider.invoke({
+      runId: 'run-1',
+      agentId: 'gpt-5.4',
+      mode: 'unrestricted-dev',
+      taskId: 'task-1',
+      systemPrompt: 'system',
+      task: 'Find a browser tool and then finish.',
+      promptTools: [
+        { name: 'runtime.search_tools', description: 'Search tools', inputSchema: {} },
+      ],
+      toolBindings: [
+        { name: 'runtime.search_tools', description: 'Search tools', inputSchema: {}, state: 'callable' },
+      ],
+      toolCatalog: [
+        { name: 'runtime.search_tools', description: 'Search tools', inputSchema: {} },
+        { name: 'browser.close_tab', description: 'Close tab', inputSchema: {} },
+      ],
+      onToken: vi.fn(),
+    });
+
+    expect(result.output).toBe('Done');
+    expect(writtenToolNames).toEqual([
+      ['runtime.search_tools'],
+      ['runtime.search_tools', 'browser.close_tab'],
+    ]);
+    expect((provider as any).runOneTurn).toHaveBeenCalledTimes(2);
   });
 });

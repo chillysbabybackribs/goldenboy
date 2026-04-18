@@ -1,0 +1,54 @@
+import type { ProviderId } from '../../../shared/types/model';
+import { AgentMode, AgentToolName, AgentToolStatus, ValidationStatus } from '../AgentTypes';
+export type SubAgentStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+export type SubAgentSpawnInput = {
+    task: string;
+    taskId?: string;
+    role?: string;
+    mode?: AgentMode;
+    inheritedContext?: 'full' | 'summary' | 'none';
+    providerId?: ProviderId | 'auto';
+    allowedTools?: 'all' | AgentToolName[];
+    canSpawnSubagents?: boolean;
+};
+export type SubAgentRecord = {
+    id: string;
+    taskId: string | null;
+    parentRunId: string;
+    runId: string | null;
+    role: string;
+    task: string;
+    mode: AgentMode;
+    status: SubAgentStatus;
+    createdAt: number;
+    completedAt: number | null;
+    summary: string | null;
+    error: string | null;
+};
+export type SubAgentResult = {
+    id: string;
+    status: SubAgentStatus;
+    summary: string;
+    findings: string[];
+    changedFiles: string[];
+    commands: string[];
+    blockers: string[];
+    toolCalls: SubAgentToolCallSummary[];
+    validation: SubAgentValidationSummary;
+};
+export type SubAgentToolCallSummary = {
+    toolName: AgentToolName;
+    status: AgentToolStatus;
+    summary: string;
+    validationStatus?: ValidationStatus;
+};
+export type SubAgentValidationSummary = {
+    total: number;
+    valid: number;
+    invalid: number;
+    incomplete: number;
+};
+export type SubAgentWaitInput = {
+    id: string;
+    timeoutMs?: number;
+};

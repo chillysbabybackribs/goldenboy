@@ -13,18 +13,14 @@ function getDataPath(): string {
 }
 
 export type PersistedTerminalData = {
-  tmuxSession: string | null;
   lastCwd: string | null;
   shell: string;
-  persistent: boolean;
 };
 
 function createDefaults(): PersistedTerminalData {
   return {
-    tmuxSession: null,
     lastCwd: null,
     shell: '',
-    persistent: false,
   };
 }
 
@@ -35,10 +31,8 @@ export function loadTerminalData(): PersistedTerminalData {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw);
     return {
-      tmuxSession: typeof parsed.tmuxSession === 'string' ? parsed.tmuxSession : null,
       lastCwd: typeof parsed.lastCwd === 'string' ? parsed.lastCwd : null,
       shell: typeof parsed.shell === 'string' ? parsed.shell : '',
-      persistent: typeof parsed.persistent === 'boolean' ? parsed.persistent : false,
     };
   } catch {
     return createDefaults();

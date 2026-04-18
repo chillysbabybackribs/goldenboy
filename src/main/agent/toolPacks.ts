@@ -9,6 +9,7 @@ import { orchestrationToolPack } from './tool-packs/orchestration';
 import { generalToolPack } from './tool-packs/general';
 import { browserAutomationToolPack } from './tool-packs/browserAutomation';
 import { browserAdvancedToolPack } from './tool-packs/browserAdvanced';
+import { artifactsToolPack } from './tool-packs/artifacts';
 import { terminalHeavyToolPack } from './tool-packs/terminalHeavy';
 import { fileEditToolPack } from './tool-packs/fileEdit';
 import { fileCacheToolPack } from './tool-packs/fileCache';
@@ -40,10 +41,36 @@ export type PreflightToolPackExpansion = ToolPackExpansion & {
   reason: string;
 };
 
+export type ToolSearchMatch = {
+  name: AgentToolName;
+  description: string;
+  category: string;
+  relatedPackIds: string[];
+  bindingState: 'discoverable' | 'callable';
+  callableNow: boolean;
+  invokableNow: boolean;
+  invocationMethod: 'direct' | 'runtime.invoke_tool';
+  availableNextTurn: boolean;
+  score: number;
+  reason: string;
+};
+
 export const DEFAULT_TOOL_PACK_PRESET: AgentToolPackPreset = 'mode-6';
+export const RUNTIME_SEARCH_TOOLS_TOOL_NAME = 'runtime.search_tools' as const;
+export const RUNTIME_REQUIRE_TOOLS_TOOL_NAME = 'runtime.require_tools' as const;
+export const RUNTIME_INVOKE_TOOL_NAME = 'runtime.invoke_tool' as const;
 export const RUNTIME_REQUEST_TOOL_NAME = 'runtime.request_tool_pack' as const;
 export const RUNTIME_LIST_TOOL_PACKS_TOOL_NAME = 'runtime.list_tool_packs' as const;
-export const RUNTIME_HAIKU_BROWSER_TOOL_NAME = 'runtime.haiku_browser_session' as const;
+export const LOCAL_FILES_INITIAL_SURFACE_TOOLS: AgentToolName[] = [
+  'filesystem.list',
+  'filesystem.search',
+  'filesystem.read',
+];
+export const BROWSER_INITIAL_SURFACE_PACK_IDS = [
+  'research',
+  'browser-automation',
+  'browser-advanced',
+] as const;
 
 const TASK_PACK_BY_KIND: Record<NormalizedTaskKind, ToolPackManifest> = {
   orchestration: orchestrationToolPack,
@@ -64,6 +91,7 @@ const ALL_TOOL_PACKS: ToolPackManifest[] = [
   generalToolPack,
   browserAutomationToolPack,
   browserAdvancedToolPack,
+  artifactsToolPack,
   terminalHeavyToolPack,
   fileEditToolPack,
   fileCacheToolPack,
@@ -89,7 +117,14 @@ function normalizeTaskKind(kind: AgentTaskKind): NormalizedTaskKind {
 }
 
 function withRuntimeScopeTools(tools: AgentToolName[]): AgentToolName[] {
-  return [RUNTIME_REQUEST_TOOL_NAME, RUNTIME_LIST_TOOL_PACKS_TOOL_NAME, RUNTIME_HAIKU_BROWSER_TOOL_NAME, ...tools];
+  return [
+    RUNTIME_SEARCH_TOOLS_TOOL_NAME,
+    RUNTIME_REQUIRE_TOOLS_TOOL_NAME,
+    RUNTIME_INVOKE_TOOL_NAME,
+    RUNTIME_REQUEST_TOOL_NAME,
+    RUNTIME_LIST_TOOL_PACKS_TOOL_NAME,
+    ...tools,
+  ];
 }
 
 function uniqueToolNames(tools: AgentToolName[]): AgentToolName[] {
@@ -113,10 +148,119 @@ export function getToolPack(packId: string): ToolPackManifest | null {
 export function buildRuntimeRequestToolDescription(): string {
   return [
     'Request an additional host-managed tool pack when the current scope is insufficient.',
+    'Prefer runtime.search_tools first when you only need a few exact tools; request a whole pack only when you need a broad surface.',
     'If you are unsure which pack contains the needed capability, call runtime.list_tool_packs first.',
-    'Use this immediately when you are blocked by missing tools instead of guessing or continuing with degraded output.',
+    'Use this immediately when you need a broad category of tools instead of guessing or continuing with degraded output.',
+    'Requested pack tools become callable on the next turn unless they are already in the current scope.',
     'Pass the pack id in `pack`. The input schema already validates the available pack ids.',
   ].join('\n');
+}
+
+function packIdsForTool(name: AgentToolName): string[] {
+  return ALL_TOOL_PACKS
+    .filter((pack) => pack.scope !== 'all' && pack.tools.includes(name))
+    .map((pack) => pack.id);
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[._/-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractSearchTerms(query: string): string[] {
+  return Array.from(new Set(
+    normalizeSearchText(query)
+      .split(' ')
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 2),
+  ));
+}
+
+function scoreToolMatch(
+  query: string,
+  tool: Pick<AgentToolDefinition, 'name' | 'description'>,
+): { score: number; reason: string } {
+  const normalizedQuery = normalizeSearchText(query);
+  const terms = extractSearchTerms(query);
+  const normalizedName = normalizeSearchText(tool.name);
+  const normalizedDescription = normalizeSearchText(tool.description);
+  const searchText = `${normalizedName} ${normalizedDescription}`;
+  let score = 0;
+  const matchedReasons: string[] = [];
+
+  if (normalizedName === normalizedQuery) {
+    score += 180;
+    matchedReasons.push('exact tool name match');
+  } else if (normalizedName.includes(normalizedQuery) && normalizedQuery.length >= 3) {
+    score += 120;
+    matchedReasons.push('tool name contains the query');
+  }
+
+  for (const term of terms) {
+    if (normalizedName.includes(term)) {
+      score += 35;
+      if (matchedReasons.length < 2) matchedReasons.push(`name matches "${term}"`);
+      continue;
+    }
+    if (normalizedDescription.includes(term)) {
+      score += 12;
+      if (matchedReasons.length < 2) matchedReasons.push(`description matches "${term}"`);
+      continue;
+    }
+    if (searchText.includes(term)) {
+      score += 6;
+    }
+  }
+
+  return {
+    score,
+    reason: matchedReasons[0] ?? 'semantic match',
+  };
+}
+
+export function searchToolCatalog(
+  query: string,
+  toolCatalog: Array<Pick<AgentToolDefinition, 'name' | 'description'>>,
+  options?: {
+    currentTools?: Array<Pick<AgentToolDefinition, 'name'>>;
+    limit?: number;
+  },
+): ToolSearchMatch[] {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [];
+
+  const currentToolNames = new Set((options?.currentTools ?? []).map((tool) => tool.name));
+  const limit = Math.min(Math.max(Math.floor(options?.limit ?? 5), 1), 10);
+
+  return toolCatalog
+    .filter((tool) => tool.name !== RUNTIME_SEARCH_TOOLS_TOOL_NAME)
+    .map((tool) => {
+      const { score, reason } = scoreToolMatch(query, tool);
+      return {
+        name: tool.name,
+        description: tool.description,
+        category: tool.name.split('.')[0] ?? 'general',
+        relatedPackIds: packIdsForTool(tool.name),
+        bindingState: currentToolNames.has(tool.name) ? 'callable' : 'discoverable',
+        callableNow: currentToolNames.has(tool.name),
+        invokableNow: true,
+        invocationMethod: currentToolNames.has(tool.name) ? 'direct' : 'runtime.invoke_tool',
+        availableNextTurn: !currentToolNames.has(tool.name),
+        score,
+        reason,
+      } satisfies ToolSearchMatch;
+    })
+    .filter((match) => match.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      if (left.callableNow !== right.callableNow) return Number(left.callableNow) - Number(right.callableNow);
+      return left.name.localeCompare(right.name);
+    })
+    .slice(0, limit);
 }
 
 export function resolveAllowedToolsForTaskKind(
@@ -126,6 +270,24 @@ export function resolveAllowedToolsForTaskKind(
   if (preset === 'all') return 'all';
   const manifest = TASK_PACK_BY_KIND[normalizeTaskKind(kind)];
   return uniqueToolNames(withRuntimeScopeTools(requiredBaselineTools(manifest, preset)));
+}
+
+export function resolveFullSurfaceTools(packId: string): AgentToolName[] | null {
+  const pack = TOOL_PACKS_BY_ID.get(packId);
+  if (!pack || pack.scope === 'all') return null;
+  return uniqueToolNames(withRuntimeScopeTools(pack.tools));
+}
+
+export function resolveLocalFilesInitialSurfaceTools(): AgentToolName[] {
+  return uniqueToolNames(withRuntimeScopeTools(LOCAL_FILES_INITIAL_SURFACE_TOOLS));
+}
+
+export function resolveBrowserInitialSurfaceTools(): AgentToolName[] {
+  const combined = BROWSER_INITIAL_SURFACE_PACK_IDS.flatMap((packId) => {
+    const pack = TOOL_PACKS_BY_ID.get(packId);
+    return pack && pack.scope !== 'all' ? pack.tools : [];
+  });
+  return uniqueToolNames(withRuntimeScopeTools(combined));
 }
 
 export function resolveRequestedToolPack(
@@ -228,6 +390,9 @@ export function resolvePreflightToolPackExpansions(
   }
   if (needsImplementationPack(normalized, currentToolNames)) {
     push('implementation', 'task text requires local code or file change capability');
+  }
+  if (needsArtifactsPack(normalized, currentToolNames)) {
+    push('artifacts', 'task text requires managed workspace artifact operations');
   }
   if (needsFileEditPack(normalized, currentToolNames)) {
     push('file-edit', 'task text requires focused file inspection or editing capability');
@@ -422,6 +587,22 @@ function needsImplementationPack(message: string, currentToolNames: Set<AgentToo
     'filesystem.move',
   ]);
   return implementationIntent && !hasImplementationTools;
+}
+
+function needsArtifactsPack(message: string, currentToolNames: Set<AgentToolName>): boolean {
+  const artifactIntent = /\bartifact\b/.test(message)
+    || /\b(create|make|write|draft|generate|update|replace|append|continue|revise|rewrite|rework|open)\b.*\b(markdown|md|html|txt|csv|document|note|report|sheet|table)\b/.test(message)
+    || /\b(active artifact|current artifact|this artifact|this document|this note|this report|this csv|this sheet|append to this)\b/.test(message);
+  const hasArtifactTools = hasAnyTool(currentToolNames, [
+    'artifact.list',
+    'artifact.get_active',
+    'artifact.read',
+    'artifact.create',
+    'artifact.delete',
+    'artifact.replace_content',
+    'artifact.append_content',
+  ]);
+  return artifactIntent && !hasArtifactTools;
 }
 
 function needsFileEditPack(message: string, currentToolNames: Set<AgentToolName>): boolean {

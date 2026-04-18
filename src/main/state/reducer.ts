@@ -69,8 +69,73 @@ export function appReducer(state: AppState, action: Action): AppState {
         ),
       };
 
+    case ActionType.LINK_TASK_ARTIFACT:
+      return {
+        ...state,
+        tasks: state.tasks.map((task) => {
+          if (task.id !== action.taskId) return task;
+          if (task.artifactIds.includes(action.artifactId)) return task;
+          return {
+            ...task,
+            artifactIds: [...task.artifactIds, action.artifactId],
+            updatedAt: Date.now(),
+          };
+        }),
+      };
+
+    case ActionType.UNLINK_TASK_ARTIFACT:
+      return {
+        ...state,
+        tasks: state.tasks.map((task) => {
+          if (task.id !== action.taskId) return task;
+          if (!task.artifactIds.includes(action.artifactId)) return task;
+          return {
+            ...task,
+            artifactIds: task.artifactIds.filter((artifactId) => artifactId !== action.artifactId),
+            updatedAt: Date.now(),
+          };
+        }),
+      };
+
     case ActionType.SET_ACTIVE_TASK:
       return { ...state, activeTaskId: action.taskId };
+
+    case ActionType.ADD_ARTIFACT:
+      return {
+        ...state,
+        artifacts: [...state.artifacts, action.artifact],
+        activeArtifactId: action.artifact.id,
+      };
+
+    case ActionType.DELETE_ARTIFACT:
+      return {
+        ...state,
+        artifacts: state.artifacts.filter((artifact) => artifact.id !== action.artifactId),
+        activeArtifactId: state.activeArtifactId === action.artifactId ? null : state.activeArtifactId,
+        tasks: state.tasks.map((task) => (
+          task.artifactIds.includes(action.artifactId)
+            ? {
+                ...task,
+                artifactIds: task.artifactIds.filter((artifactId) => artifactId !== action.artifactId),
+                updatedAt: Date.now(),
+              }
+            : task
+        )),
+      };
+
+    case ActionType.UPDATE_ARTIFACT:
+      return {
+        ...state,
+        artifacts: state.artifacts.map((artifact) =>
+          artifact.id === action.artifactId ? { ...artifact, ...action.patch } : artifact
+        ),
+      };
+
+    case ActionType.SET_ACTIVE_ARTIFACT:
+      return {
+        ...state,
+        activeArtifactId: action.artifactId,
+      };
 
     case ActionType.ADD_LOG: {
       const logs = [...state.logs, action.log];

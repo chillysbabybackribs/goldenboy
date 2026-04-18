@@ -44,6 +44,8 @@ const PREVIEW_CHARS = 260;
 const SUMMARY_CHARS = 1500;
 const DEFAULT_READ_CHARS = 3000;
 const DEFAULT_SEARCH_LIMIT = 5;
+const RECENT_CONVERSATION_MESSAGE_COUNT = 4;
+const FULL_CONVERSATION_MESSAGE_COUNT = 6;
 const STOP_WORDS = new Set([
   'about', 'after', 'again', 'also', 'and', 'are', 'because', 'been', 'before', 'being',
   'can', 'could', 'did', 'does', 'doing', 'done', 'for', 'from', 'had', 'has', 'have',
@@ -192,20 +194,18 @@ export class ChatKnowledgeStore {
       ? this.readMessage(taskId, currentMessageId, 1200)
       : null;
     const summary = this.threadSummary(taskId);
-    const recent = this.readLast(taskId, {
-      count: 2,
-      maxChars: 1000,
-      excludeMessageIds: currentMessageId ? [currentMessageId] : [],
+    const recentMessages = this.selectHydrationMessages(taskId, {
+      need: 'full',
+      currentMessageId,
+      includeToolResults: false,
     });
-    if (!current?.text && !summary && !recent.text) return null;
+    const recent = this.renderHydrationMessages(taskId, recentMessages, 1400, { compactToolResults: true });
+    if (!current?.text && !summary && !recent.trim()) return null;
 
-    const sections = [
-      '## Conversation Memory',
-      'Full chat history is cached on disk. Use chat.read_last for immediate follow-ups, chat.search for older context, and chat.read_window/read_message only when needed. Do not ask the user to repeat prior context until chat recall has failed.',
-    ];
+    const sections = ['## Conversation Context'];
     if (current?.text) sections.push('', '### Current User Message', current.text);
     if (summary) sections.push('', '### Thread Summary', summary);
-    if (recent.text) sections.push('', '### Recent Prior Messages', recent.text);
+    if (recent.trim()) sections.push('', '### Recent Conversation', recent);
     return sections.join('\n');
   }
 
@@ -237,14 +237,17 @@ export class ChatKnowledgeStore {
     includeTools?: boolean;
     limit?: number;
     maxSnippetChars?: number;
+    excludeMessageIds?: string[];
   }): { query: string; results: ChatSearchResult[]; tokenEstimate: number } {
     const index = this.loadIndex(taskId);
     const terms = normalizeTerms(input.query);
     const limit = Math.min(Math.max(input.limit || DEFAULT_SEARCH_LIMIT, 1), 20);
     const maxSnippetChars = Math.min(Math.max(input.maxSnippetChars || 420, 120), 1200);
     const now = Date.now();
+    const excluded = new Set(input.excludeMessageIds || []);
 
     const results = index.messages
+      .filter(meta => !excluded.has(meta.id))
       .filter(meta => !input.role || meta.role === input.role)
       .filter(meta => input.includeTools || meta.role !== 'tool')
       .map(meta => {
@@ -315,6 +318,7 @@ export class ChatKnowledgeStore {
     query: string;
     intent?: string;
     maxChars?: number;
+    excludeMessageIds?: string[];
   }): {
     strategy: string;
     summary: string | null;
@@ -326,49 +330,60 @@ export class ChatKnowledgeStore {
     const maxChars = Math.min(Math.max(input.maxChars || 3000, 500), 12_000);
     const summary = this.threadSummary(taskId);
     const lower = input.query.toLowerCase();
+    const excluded = input.excludeMessageIds || [];
     const looksRecent = /\b(last|previous|prior|again|continue|that|this|it|same|above)\b/.test(lower)
       || input.intent === 'follow_up'
       || input.intent === 'recent';
 
     if (looksRecent) {
-      const recent = this.readLast(taskId, { count: 4, maxChars });
+      const recentMessages = this.selectHydrationMessages(taskId, {
+        need: 'recent',
+        excludeMessageIds: excluded,
+        includeToolResults: true,
+      });
+      const text = this.renderHydrationMessages(taskId, recentMessages, maxChars, { compactToolResults: true });
       return {
         strategy: 'recent',
         summary,
-        text: recent.text,
+        text,
         matches: [],
-        tokenEstimate: recent.tokenEstimate,
-        truncated: recent.truncated,
+        tokenEstimate: estimateTokens(text),
+        truncated: text.length >= maxChars,
       };
     }
 
-    const search = this.search(taskId, { query: input.query, limit: 4 });
+    const search = this.search(taskId, { query: input.query, limit: 4, excludeMessageIds: excluded });
     if (search.results.length === 0) {
-      const recent = this.readLast(taskId, { count: 3, maxChars });
+      const recentMessages = this.selectHydrationMessages(taskId, {
+        need: 'recent',
+        excludeMessageIds: excluded,
+        includeToolResults: true,
+      });
+      const text = this.renderHydrationMessages(taskId, recentMessages, maxChars, { compactToolResults: true });
       return {
         strategy: 'recent-fallback',
         summary,
-        text: recent.text,
+        text,
         matches: [],
-        tokenEstimate: recent.tokenEstimate,
-        truncated: recent.truncated,
+        tokenEstimate: estimateTokens(text),
+        truncated: text.length >= maxChars,
       };
     }
 
-    const first = search.results[0];
-    const window = this.readWindow(taskId, {
-      messageId: first.messageId,
-      before: 1,
-      after: 1,
-      maxChars,
+    const windowMessages = this.selectHydrationMessages(taskId, {
+      need: 'searched',
+      searchQuery: input.query,
+      excludeMessageIds: excluded,
+      includeToolResults: true,
     });
+    const text = this.renderHydrationMessages(taskId, windowMessages, maxChars, { compactToolResults: true });
     return {
       strategy: 'search-window',
       summary,
-      text: window.text,
+      text,
       matches: search.results,
-      tokenEstimate: window.tokenEstimate + search.tokenEstimate,
-      truncated: window.truncated,
+      tokenEstimate: estimateTokens(text) + search.tokenEstimate,
+      truncated: text.length >= maxChars,
     };
   }
 
@@ -389,20 +404,231 @@ export class ChatKnowledgeStore {
     };
   }
 
+  /**
+   * Build silent hydration context for invisible injection into prompts.
+   *
+   * Returns ONLY the content without headers, labels, or metadata.
+   * Designed to be prepended to contextPrompt with no visible markers.
+   *
+   * Returns null if nothing meaningful to inject.
+   */
+  buildSilentHydrationContext(taskId: string, input: {
+    need: 'recent' | 'full' | 'searched';
+    searchQuery?: string;
+    maxChars?: number;
+    currentMessageId?: string;
+    excludeToolResults?: boolean;
+  }): string | null {
+    const maxChars = Math.min(Math.max(input.maxChars || 2000, 200), 12_000);
+    const candidates = this.selectHydrationMessages(taskId, {
+      need: input.need,
+      searchQuery: input.searchQuery,
+      currentMessageId: input.currentMessageId,
+      includeToolResults: input.excludeToolResults !== true,
+    });
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const rendered = this.renderSilentHydrationMessages(taskId, candidates, maxChars, {
+      compactToolResults: input.excludeToolResults !== false,
+    });
+    if (!rendered.trim()) {
+      return null;
+    }
+
+    if (input.need === 'full') {
+      const summary = this.buildSilentSummary(this.loadIndex(taskId));
+      if (summary) {
+        return truncate(`${summary}\n\n${rendered}`, maxChars, '\n...[conversation truncated]');
+      }
+    }
+
+    return rendered;
+  }
+
+  private buildSilentSummary(index: ThreadIndex): string | null {
+    const users = index.messages.filter(message => message.role === 'user');
+    const assistants = index.messages.filter(message => message.role === 'assistant');
+    const firstUser = users[0]?.preview?.trim();
+    const latestUser = users[users.length - 1]?.preview?.trim();
+    const latestAssistant = assistants[assistants.length - 1]?.preview?.trim();
+    const parts: string[] = [];
+
+    if (firstUser) parts.push(`The task began with the request: ${firstUser}`);
+    if (latestUser && latestUser !== firstUser) parts.push(`Most recently, the user asked: ${latestUser}`);
+    if (latestAssistant) parts.push(`The latest assistant result was: ${latestAssistant}`);
+
+    return parts.length > 0 ? parts.join('\n') : null;
+  }
+
   private buildSummary(index: ThreadIndex): string {
     const users = index.messages.filter(message => message.role === 'user');
     const assistants = index.messages.filter(message => message.role === 'assistant');
+    const recentConversation = index.messages.filter(message => message.role !== 'tool').slice(-6);
+    const recentTools = index.messages.filter(message => message.role === 'tool').slice(-3);
     const firstUser = users[0]?.preview || '';
-    const recent = index.messages.slice(-6)
-      .map(message => `[${message.id} ${message.role}] ${message.preview}`)
+    const latestUser = users[users.length - 1]?.preview || '';
+    const latestAssistant = assistants[assistants.length - 1]?.preview || '';
+    const recent = recentConversation
+      .map(message => `${this.messageRoleLabel(message)}: ${message.preview}`)
       .join('\n');
-    const anchors = Array.from(new Set(index.messages.flatMap(message => message.anchors))).slice(-20);
+    const recentToolPreview = recentTools.map(message => message.preview).filter(Boolean).join(' | ');
+    const anchors = Array.from(new Set(index.messages.flatMap(message => message.anchors))).slice(-12);
     const sections: string[] = [];
     if (firstUser) sections.push(`Initial goal: ${firstUser}`);
+    if (latestUser) sections.push(`Latest user intent: ${latestUser}`);
+    if (latestAssistant) sections.push(`Latest assistant result: ${latestAssistant}`);
     sections.push(`Messages cached: ${index.messages.length} (${users.length} user, ${assistants.length} assistant).`);
-    if (anchors.length > 0) sections.push(`Recent anchors: ${anchors.join(', ')}`);
-    if (recent) sections.push(`Recent message index:\n${recent}`);
+    if (recent) sections.push(`Recent conversation:\n${recent}`);
+    if (recentToolPreview) sections.push(`Recent tool activity: ${recentToolPreview}`);
+    if (anchors.length > 0) sections.push(`Active references: ${anchors.join(', ')}`);
     return truncate(sections.join('\n'), SUMMARY_CHARS);
+  }
+
+  private selectHydrationMessages(taskId: string, input: {
+    need: 'recent' | 'full' | 'searched';
+    searchQuery?: string;
+    currentMessageId?: string;
+    excludeMessageIds?: string[];
+    includeToolResults?: boolean;
+  }): ChatMessageMeta[] {
+    const index = this.loadIndex(taskId);
+    const excluded = new Set([
+      ...(input.excludeMessageIds || []),
+      ...(input.currentMessageId ? [input.currentMessageId] : []),
+    ]);
+    const includeToolResults = input.includeToolResults === true;
+    const recentCount = input.need === 'full' ? FULL_CONVERSATION_MESSAGE_COUNT : RECENT_CONVERSATION_MESSAGE_COUNT;
+
+    const selectRecent = (): ChatMessageMeta[] => {
+      const preferred = index.messages
+        .filter(meta => !excluded.has(meta.id))
+        .filter(meta => includeToolResults || meta.role !== 'tool')
+        .slice(-recentCount);
+      if (preferred.length > 0) return preferred;
+      return index.messages
+        .filter(meta => !excluded.has(meta.id))
+        .slice(-recentCount);
+    };
+
+    if (input.need === 'recent' || input.need === 'full') {
+      return selectRecent();
+    }
+
+    if (!input.searchQuery?.trim()) {
+      return selectRecent();
+    }
+
+    const result = this.search(taskId, {
+      query: input.searchQuery,
+      includeTools: includeToolResults,
+      limit: 4,
+      maxSnippetChars: 400,
+      excludeMessageIds: Array.from(excluded),
+    });
+    if (result.results.length === 0) {
+      return selectRecent();
+    }
+
+    const selectedIds = new Set<string>();
+    for (const match of result.results) {
+      const center = index.messages.findIndex(message => message.id === match.messageId);
+      if (center < 0) continue;
+
+      for (let offset = -1; offset <= 1; offset += 1) {
+        const candidate = index.messages[center + offset];
+        if (!candidate || excluded.has(candidate.id)) continue;
+        if (!includeToolResults && candidate.role === 'tool') continue;
+        selectedIds.add(candidate.id);
+      }
+
+      if (!includeToolResults && index.messages[center]?.role === 'tool') {
+        const previousConversation = [...index.messages.slice(0, center)]
+          .reverse()
+          .find(message => !excluded.has(message.id) && message.role !== 'tool');
+        const nextConversation = index.messages
+          .slice(center + 1)
+          .find(message => !excluded.has(message.id) && message.role !== 'tool');
+        if (previousConversation) selectedIds.add(previousConversation.id);
+        if (nextConversation) selectedIds.add(nextConversation.id);
+      }
+    }
+
+    const selected = index.messages.filter(message => selectedIds.has(message.id));
+    return selected.length > 0 ? selected.slice(-FULL_CONVERSATION_MESSAGE_COUNT) : selectRecent();
+  }
+
+  private renderHydrationMessages(
+    taskId: string,
+    messages: ChatMessageMeta[],
+    maxChars: number,
+    input?: { compactToolResults?: boolean },
+  ): string {
+    if (messages.length === 0) return '';
+
+    const parts = messages.map((meta) => {
+      const raw = this.readRawMessage(taskId, meta.id) || meta.preview;
+      const body = meta.role === 'tool' && input?.compactToolResults !== false ? meta.preview : raw.trim();
+      const maxMessageChars = meta.role === 'assistant'
+        ? 700
+        : meta.role === 'user'
+          ? 420
+          : 260;
+      const text = truncate(body, maxMessageChars, '\n...[message truncated]');
+      const label = `${this.messageRoleLabel(meta)}:`;
+      return text.includes('\n') ? `${label}\n${text}` : `${label} ${text}`;
+    });
+
+    return truncate(parts.join('\n\n'), maxChars, '\n...[conversation truncated]');
+  }
+
+  private renderSilentHydrationMessages(
+    taskId: string,
+    messages: ChatMessageMeta[],
+    maxChars: number,
+    input?: { compactToolResults?: boolean },
+  ): string {
+    if (messages.length === 0) return '';
+
+    const parts = messages.map((meta, index) => {
+      const raw = this.readRawMessage(taskId, meta.id) || meta.preview;
+      const body = meta.role === 'tool' && input?.compactToolResults !== false ? meta.preview : raw.trim();
+      const maxMessageChars = meta.role === 'assistant'
+        ? 700
+        : meta.role === 'user'
+          ? 420
+          : 260;
+      const text = truncate(body, maxMessageChars, '\n...[message truncated]');
+      const intro = index === 0 ? 'Earlier' : 'Then';
+
+      if (meta.role === 'user') {
+        return text.includes('\n')
+          ? `${intro}, the user said:\n${text}`
+          : `${intro}, the user said: ${text}`;
+      }
+
+      if (meta.role === 'assistant') {
+        return text.includes('\n')
+          ? `${intro}, the assistant replied:\n${text}`
+          : `${intro}, the assistant replied: ${text}`;
+      }
+
+      return text.includes('\n')
+        ? `${intro}, a tool produced:\n${text}`
+        : `${intro}, a tool produced: ${text}`;
+    });
+
+    return truncate(parts.join('\n\n'), maxChars, '\n...[conversation truncated]');
+  }
+
+  private messageRoleLabel(meta: ChatMessageMeta): string {
+    const role = meta.role.charAt(0).toUpperCase() + meta.role.slice(1);
+    if ((meta.role === 'assistant' || meta.role === 'tool') && meta.providerId) {
+      return `${role} (${meta.providerId})`;
+    }
+    return role;
   }
 
   private renderMessages(taskId: string, messages: ChatMessageMeta[], maxChars: number): {

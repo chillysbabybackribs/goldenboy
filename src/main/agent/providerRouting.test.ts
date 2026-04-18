@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickProviderForPrompt } from './providerRouting';
+import { pickProviderForPrompt } from './providerRouting.ts';
 import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 
 describe('provider routing', () => {
@@ -8,9 +8,9 @@ describe('provider routing', () => {
     [HAIKU_PROVIDER_ID]: { supportsV2ToolRuntime: true },
   } as const;
 
-  it('prefers haiku for research tasks when available', () => {
+  it('prefers the primary provider for research tasks when available', () => {
     expect(pickProviderForPrompt('Search online for the latest SEC guidance', [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID], undefined, capabilities))
-      .toBe(HAIKU_PROVIDER_ID);
+      .toBe(PRIMARY_PROVIDER_ID);
   });
 
   it('routes implementation, debug, and review tasks to gpt-5.4 when available', () => {
@@ -51,6 +51,6 @@ describe('provider routing', () => {
       [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID],
       { kind: 'research' },
       capabilities,
-    )).toBe(HAIKU_PROVIDER_ID);
+    )).toBe(PRIMARY_PROVIDER_ID);
   });
 });

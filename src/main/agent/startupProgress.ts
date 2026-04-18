@@ -1,28 +1,20 @@
-import type { AgentTaskKind } from '../../shared/types/model';
-
-export function shouldPrimeResearchBrowserSurface(taskKind: AgentTaskKind, browserSurfaceReady: boolean): boolean {
-  return taskKind === 'research' && browserSurfaceReady;
-}
+import {
+  HAIKU_PROVIDER_ID,
+  PRIMARY_PROVIDER_ID,
+  type AgentTaskKind,
+  type ProviderId,
+} from '../../shared/types/model';
 
 export function buildStartupStatusMessages(input: {
   taskKind: AgentTaskKind;
   browserSurfaceReady: boolean;
 }): string[] {
-  const statuses = ['Starting task...'];
+  void input;
+  return [];
+}
 
-  if (input.taskKind === 'research') {
-    statuses.push('Routing web search for fast browser-first execution.');
-    statuses.push(
-      input.browserSurfaceReady
-        ? 'Opening a dedicated search tab while the first tool call is prepared.'
-        : 'Browser search will open on the first tool call.',
-    );
-    return statuses;
-  }
-
-  if (input.taskKind === 'browser-automation') {
-    statuses.push('Preparing the browser workflow.');
-  }
-
-  return statuses;
+export function resolveExecutionBackendLabel(providerId: ProviderId): string {
+  if (providerId === PRIMARY_PROVIDER_ID) return 'app-server';
+  if (providerId === HAIKU_PROVIDER_ID) return 'anthropic-api';
+  return 'runtime';
 }

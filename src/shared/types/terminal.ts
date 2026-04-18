@@ -11,8 +11,6 @@ export type TerminalSessionInfo = {
   exitCode: number | null;
   cols: number;
   rows: number;
-  persistent: boolean;
-  tmuxSession: string | null;
   restored: boolean;
 };
 
@@ -71,4 +69,13 @@ export type CommandFinishResult = {
   cwd: string;
   durationMs: number;
   command: string;
+};
+
+export type TerminalExecResult = {
+  exitCode: number | null;
+  output: string;
+  cwd: string;
+  durationMs: number;
+  command: string;
+  timedOut: boolean;
 };

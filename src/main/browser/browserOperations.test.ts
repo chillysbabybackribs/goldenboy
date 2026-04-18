@@ -4,6 +4,8 @@ const { browserService } = vi.hoisted(() => ({
   browserService: {
     beginOperationNetworkScope: vi.fn(),
     completeOperationNetworkScope: vi.fn(),
+    captureTabSnapshot: vi.fn(),
+    getFormModel: vi.fn(),
     isCreated: vi.fn(() => true),
     navigate: vi.fn(),
     getState: vi.fn(),
@@ -24,14 +26,42 @@ import {
   clearBrowserOperationLedger,
   getRecentBrowserOperationLedgerEntries,
 } from './browserOperationLedger';
+import { clearBrowserOperationReplayStore } from './browserOperationReplayStore';
 
 describe('executeBrowserOperation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearBrowserOperationLedger();
+    clearBrowserOperationReplayStore();
     browserContextManager.resetForTests(browserService as any);
     browserService.isCreated.mockReturnValue(true);
     browserService.completeOperationNetworkScope.mockReturnValue(null);
+    browserService.captureTabSnapshot.mockResolvedValue({
+      id: 'snap_1',
+      tabId: 'tab_1',
+      capturedAt: Date.now(),
+      url: 'https://example.com',
+      title: 'Example',
+      mainHeading: 'Example',
+      visibleTextExcerpt: 'Example page',
+      forms: [],
+      viewport: { url: 'https://example.com' },
+      actionableElements: [{
+        id: 'act_1',
+        ref: { tabId: 'tab_1', frameId: null, selector: '#buy-now' },
+        role: 'button',
+        tagName: 'button',
+        text: 'Buy now',
+        ariaLabel: '',
+        href: null,
+        boundingBox: { x: 10, y: 20, width: 50, height: 20 },
+        actionability: ['clickable'],
+        visible: true,
+        enabled: true,
+        confidence: 0.9,
+      }],
+    });
+    browserService.getFormModel.mockResolvedValue([]);
     browserService.getState.mockReturnValue({
       activeTabId: 'tab_1',
       splitLeftTabId: null,
@@ -115,6 +145,25 @@ describe('executeBrowserOperation', () => {
           }),
         }),
         network: null,
+        replayOfOperationId: null,
+        decision: expect.objectContaining({
+          selectedMode: 'deterministic_execute',
+          confidence: 'high',
+        }),
+        decisionResult: expect.objectContaining({
+          selectedMode: 'deterministic_execute',
+          finalStatus: 'completed',
+        }),
+        targetDescriptor: expect.objectContaining({
+          kind: 'navigation',
+          evidence: expect.objectContaining({
+            expectedUrl: 'https://example.com',
+          }),
+        }),
+        validation: expect.objectContaining({
+          status: 'matched',
+          phase: 'postflight',
+        }),
       }),
     ]);
   });
@@ -137,6 +186,90 @@ describe('executeBrowserOperation', () => {
         totalTabs: 2,
       },
     });
+  });
+
+  it('routes browser.search-web queries through DuckDuckGo search URLs', async () => {
+    const currentYear = new Date().getFullYear();
+    browserService.getState.mockReturnValue({
+      activeTabId: 'tab_1',
+      splitLeftTabId: null,
+      splitRightTabId: null,
+      navigation: {
+        url: `https://duckduckgo.com/?q=acme%20pricing%20${currentYear}`,
+        title: `acme pricing ${currentYear} at DuckDuckGo`,
+        isLoading: false,
+      },
+      tabs: [{ id: 'tab_1' }],
+    });
+    browserService.getPageMetadata.mockResolvedValue({ lang: 'en' });
+    browserService.getPageText.mockResolvedValue('DuckDuckGo results');
+
+    const result = await executeBrowserOperation({
+      kind: 'browser.search-web',
+      payload: { query: 'acme pricing' },
+    });
+
+    expect(browserService.navigate).toHaveBeenCalledWith(`https://duckduckgo.com/?q=acme%20pricing%20${currentYear}`);
+    expect(result).toEqual({
+      summary: `Navigated to https://duckduckgo.com/?q=acme%20pricing%20${currentYear}`,
+      data: {
+        url: `https://duckduckgo.com/?q=acme%20pricing%20${currentYear}`,
+        title: `acme pricing ${currentYear} at DuckDuckGo`,
+        isLoading: false,
+        tabCount: 1,
+        pagePreview: 'DuckDuckGo results',
+        metadata: { lang: 'en' },
+      },
+    });
+  });
+
+  it('appends the current year for freshness-sensitive search queries', async () => {
+    const currentYear = new Date().getFullYear();
+    browserService.getState.mockReturnValue({
+      activeTabId: 'tab_1',
+      splitLeftTabId: null,
+      splitRightTabId: null,
+      navigation: {
+        url: `https://duckduckgo.com/?q=latest%20electron%20release%20notes%20${currentYear}`,
+        title: `latest electron release notes ${currentYear} at DuckDuckGo`,
+        isLoading: false,
+      },
+      tabs: [{ id: 'tab_1' }],
+    });
+    browserService.getPageMetadata.mockResolvedValue({ lang: 'en' });
+    browserService.getPageText.mockResolvedValue('DuckDuckGo results');
+
+    const result = await executeBrowserOperation({
+      kind: 'browser.search-web',
+      payload: { query: 'latest electron release notes' },
+    });
+
+    expect(browserService.navigate).toHaveBeenCalledWith(`https://duckduckgo.com/?q=latest%20electron%20release%20notes%20${currentYear}`);
+    expect(result.data.url).toBe(`https://duckduckgo.com/?q=latest%20electron%20release%20notes%20${currentYear}`);
+  });
+
+  it('preserves explicit years in freshness-sensitive search queries', async () => {
+    browserService.getState.mockReturnValue({
+      activeTabId: 'tab_1',
+      splitLeftTabId: null,
+      splitRightTabId: null,
+      navigation: {
+        url: 'https://duckduckgo.com/?q=latest%20electron%20release%20notes%202025',
+        title: 'latest electron release notes 2025 at DuckDuckGo',
+        isLoading: false,
+      },
+      tabs: [{ id: 'tab_1' }],
+    });
+    browserService.getPageMetadata.mockResolvedValue({ lang: 'en' });
+    browserService.getPageText.mockResolvedValue('DuckDuckGo results');
+
+    const result = await executeBrowserOperation({
+      kind: 'browser.search-web',
+      payload: { query: 'latest electron release notes 2025' },
+    });
+
+    expect(browserService.navigate).toHaveBeenCalledWith('https://duckduckgo.com/?q=latest%20electron%20release%20notes%202025');
+    expect(result.data.url).toBe('https://duckduckgo.com/?q=latest%20electron%20release%20notes%202025');
   });
 
   it('fails click operations when the browser reports a click failure', async () => {
@@ -176,6 +309,67 @@ describe('executeBrowserOperation', () => {
           urls: ['https://example.com/api'],
           statusCodes: [500],
         },
+        decision: expect.objectContaining({
+          selectedMode: 'deterministic_execute',
+        }),
+        decisionResult: expect.objectContaining({
+          selectedMode: 'deterministic_execute',
+          finalStatus: 'failed',
+        }),
+        targetDescriptor: expect.objectContaining({
+          kind: 'actionable-element',
+          evidence: expect.objectContaining({
+            selector: '#buy-now',
+            text: 'Buy now',
+          }),
+        }),
+        validation: expect.objectContaining({
+          status: 'matched',
+          phase: 'preflight',
+        }),
+      }),
+    ]);
+  });
+
+  it('falls back to heuristic execution when deterministic target evidence is weak', async () => {
+    browserService.captureTabSnapshot.mockResolvedValue({
+      id: 'snap_missing',
+      tabId: 'tab_1',
+      capturedAt: Date.now(),
+      url: 'https://example.com',
+      title: 'Example',
+      mainHeading: 'Example',
+      visibleTextExcerpt: 'Example page',
+      forms: [],
+      viewport: { url: 'https://example.com' },
+      actionableElements: [],
+    });
+    browserService.clickElement.mockResolvedValue({ clicked: true, error: null, method: 'native-input' });
+
+    const result = await executeBrowserOperation({
+      kind: 'browser.click',
+      payload: { selector: '#buy-now' },
+    });
+
+    expect(result.summary).toBe('Clicked: #buy-now');
+    expect(getRecentBrowserOperationLedgerEntries(1)).toEqual([
+      expect.objectContaining({
+        kind: 'browser.click',
+        status: 'completed',
+        decision: expect.objectContaining({
+          selectedMode: 'heuristic_execute',
+          confidence: 'low',
+        }),
+        decisionResult: expect.objectContaining({
+          selectedMode: 'heuristic_execute',
+          attemptedModes: ['deterministic_execute', 'heuristic_execute'],
+          fallbackUsed: true,
+          finalStatus: 'completed',
+        }),
+        validation: expect.objectContaining({
+          status: 'missing',
+          phase: 'preflight',
+        }),
       }),
     ]);
   });

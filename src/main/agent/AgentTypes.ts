@@ -7,14 +7,24 @@ export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'ca
 export type AgentToolStatus = 'running' | 'completed' | 'failed';
 
 export type AgentToolName =
+  | 'artifact.list'
+  | 'artifact.get'
+  | 'artifact.get_active'
+  | 'artifact.read'
+  | 'artifact.create'
+  | 'artifact.delete'
+  | 'artifact.replace_content'
+  | 'artifact.append_content'
   | 'attachments.list'
   | 'attachments.search'
   | 'attachments.read_chunk'
   | 'attachments.read_document'
   | 'attachments.stats'
+  | 'runtime.search_tools'
+  | 'runtime.require_tools'
+  | 'runtime.invoke_tool'
   | 'runtime.request_tool_pack'
   | 'runtime.list_tool_packs'
-  | 'runtime.haiku_browser_session'
   | 'browser.get_state'
   | 'browser.get_tabs'
   | 'browser.navigate'
@@ -84,7 +94,6 @@ export type AgentToolName =
   | 'chat.recall'
   | 'chat.cache_stats'
   | 'subagent.spawn'
-  | 'subagent.message'
   | 'subagent.wait'
   | 'subagent.cancel'
   | 'subagent.list';
@@ -128,8 +137,24 @@ export type AgentToolContext = {
   mode: AgentMode;
   taskId?: string;
   contextId?: string;
-  toolNames?: string[];
+  toolNames?: AgentToolName[];
+  // The run-visible hydratable catalog for this invocation. Runtime discovery
+  // tools operate against this set, while direct execution is constrained by
+  // toolNames / promptTools for the current turn.
+  toolCatalog: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
   onProgress?: (status: string) => void;
+};
+
+export type AgentToolBindingState =
+  | 'discoverable'
+  | 'callable'
+  | 'queued_next_turn'
+  | 'failed'
+  | 'evicted';
+
+export type AgentToolBinding = Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'> & {
+  state: AgentToolBindingState;
+  failureReason?: string;
 };
 
 export type ConstraintStatus = 'PASS' | 'FAIL' | 'UNKNOWN' | 'ESTIMATED' | 'CONDITIONAL';
@@ -175,7 +200,9 @@ export type AgentRuntimeConfig = {
   depth?: number;
   skillNames?: string[];
   allowedTools?: 'all' | AgentToolName[];
+  hydratableTools?: 'all' | AgentToolName[];
   restrictToolCatalogToAllowedTools?: boolean;
+  requiresGroundedResearchHydration?: boolean;
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
   attachments?: InvocationAttachment[];
@@ -193,8 +220,12 @@ export type AgentProviderRequest = {
   task: string;
   contextPrompt?: string | null;
   maxToolTurns?: number;
-  tools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
-  toolCatalog?: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  promptTools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  // The run-visible hydratable catalog for this invocation. Runtime discovery
+  // and pack hydration operate against this set; promptTools remain the
+  // currently callable subset.
+  toolCatalog: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  toolBindings: AgentToolBinding[];
   attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
   onStatus?: (status: string) => void;

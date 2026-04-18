@@ -1,0 +1,180 @@
+{
+  "generatedAt": "2026-04-18T15:27:33.688Z",
+  "providers": [
+    "haiku"
+  ],
+  "scenarios": [
+    "local-config-lookup"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  Correct  Grounded  MinPath\n----------------------------------------------------------------------------------------\nhaiku        1          0        1        0        0%         100%     100%      0%\n\n## haiku\n- local-config-lookup: soft_pass | asked=false | coverage=0.50 | failures=none\n\nScenarios without any submitted runs: tests-infer-behavior, runtime-status-from-logs, cross-source-summary, stale-doc-vs-current-code, true-missing-information",
+  "runs": [
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-local-config-lookup-haiku-1776526048337-ms21ex",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-haiku-1776526048337-ms21ex",
+        "providerId": "haiku",
+        "success": true,
+        "output": "## Summary\n\n**File:** `src/main/agent/providerRouting.ts`\n\n**Default Provider Preference Order:**\n\nThe default provider routing order is defined as:\n```typescript\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\n**Preference Order by Task Kind:**\n\nThe file further refines routing based on the specific task:\n\n1. **Research tasks**: Prefer `HAIKU_PROVIDER_ID` → fallback to `PRIMARY_PROVIDER_ID`\n2. **Browser-automation tasks**: Prefer `PRIMARY_PROVIDER_ID` → fallback to `HAIKU_PROVIDER_ID`\n3. **Other task kinds** (orchestration, implementation, debug, review): Follow the **default order** = `PRIMARY_PROVIDER_ID` → `HAIKU_PROVIDER_ID`\n\nThe routing also checks provider capabilities (`supportsV2ToolRuntime`) and filters out providers that don't support the required V2 tool runtime for certain task kinds before applying these preferences.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "haiku-tool-1-1-1776526049626",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.search_file_cache",
+              "input": {
+                "query": "provider routing defaults"
+              }
+            },
+            "result": {
+              "summary": "Invoked filesystem.search_file_cache: Found 6 cached file chunks",
+              "data": {
+                "tool": "filesystem.search_file_cache",
+                "invokedVia": "runtime.invoke_tool",
+                "result": {
+                  "summary": "Found 6 cached file chunks",
+                  "data": {
+                    "query": "provider routing defaults",
+                    "results": [
+                      {
+                        "chunkId": "file_557905453dce679f_chunk_0",
+                        "fileId": "file_557905453dce679f",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                        "relativePath": "src/main/agent/providerRouting.ts",
+                        "language": "typescript",
+                        "startLine": 1,
+                        "endLine": 80,
+                        "snippet": "const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];",
+                        "score": 12,
+                        "tokenEstimate": 22
+                      },
+                      {
+                        "chunkId": "file_557905453dce679f_chunk_1",
+                        "fileId": "file_557905453dce679f",
+                        "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                        "relativePath": "src/main/agent/providerRouting.ts",
+                        "language": "typescript",
+                        "startLine": 81,
+                        "endLine": 101,
+                        "snippet": "if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;",
+                        "score": 10,
+                        "tokenEstimate": 17
+                      },
+                      {
+                        "chunkId": "file_9af4a8a13c81b85f_chunk_0",
+                        "fileId": "file_9af4a8a13c81b85f",
+                        "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                        "relativePath": "src/shared/types/model.ts",
+                        "language": "typescript",
+                        "startLine": 1,
+                        "endLine": 80,
+                        "snippet": "export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;",
+                        "score": 3,
+                        "tokenEstimate": 20
+                      },
+                      {
+                        "chunkId": "file_9af4a8a13c81b85f_chunk_2",
+                        "fileId": "file_9af4a8a13c81b85f",
+                        "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                        "relativePath": "src/shared/types/model.ts",
+                        "language": "typescript",
+                        "startLine": 161,
+                        "endLine": 240,
+                        "snippet": "providerId: ProviderId;",
+                        "score": 2,
+                        "tokenEstimate": 6
+                      },
+                      {
+                        "chunkId": "file_9af4a8a13c81b85f_chunk_1",
+                        "fileId": "file_9af4a8a13c81b85f",
+                        "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                        "relativePath": "src/shared/types/model.ts",
+                        "language": "typescript",
+                        "startLine": 81,
+                        "endLine": 160,
+                        "snippet": "export type ModelOwner = ProviderId | 'user';",
+                        "score": 1,
+                        "tokenEstimate": 12
+                      },
+                      {
+                        "chunkId": "file_9af4a8a13c81b85f_chunk_3",
+                        "fileId": "file_9af4a8a13c81b85f",
+                        "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                        "relativePath": "src/shared/types/model.ts",
+                        "language": "typescript",
+                        "startLine": 241,
+                        "endLine": 295,
+                        "snippet": "// ─── Routing Types ────────────────────────────────────────────────────────",
+                        "score": 1,
+                        "tokenEstimate": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-2-1-1776526051040",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.invoke_tool",
+            "arguments": {
+              "tool": "filesystem.read_file_chunk",
+              "input": {
+                "chunkId": "file_557905453dce679f_chunk_0"
+              }
+            },
+            "result": {
+              "summary": "Invoked filesystem.read_file_chunk: Read cached file chunk src/main/agent/providerRouting.ts:1-80",
+              "data": {
+                "tool": "filesystem.read_file_chunk",
+                "invokedVia": "runtime.invoke_tool",
+                "result": {
+                  "summary": "Read cached file chunk src/main/agent/providerRouting.ts:1-80",
+                  "data": {
+                    "chunk": {
+                      "id": "file_557905453dce679f_chunk_0",
+                      "fileId": "file_557905453dce679f",
+                      "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                      "relativePath": "src/main/agent/providerRouting.ts",
+                      "language": "typescript",
+                      "startLine": 1,
+                      "endLine": 80,
+                      "ordinal": 0,
+                      "charCount": 2527,
+                      "tokenEstimate": 632,
+                      "contentHash": "1177b6198c9d84bd",
+                      "indexedAt": 1776525946727,
+                      "text": "import {\n  HAIKU_PROVIDER_ID,\n  PRIMARY_PROVIDER_ID,\n  type AgentTaskKind,\n  type AgentTaskProfileOverride,\n  type ProviderId,\n} from '../../shared/types/model';\nimport { buildTaskProfile } from './taskProfile';\n\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n\nexport type PrimaryProviderBackend = 'exec' | 'app-server';\n\nexport type ProviderRoutingCapabilities = Partial<Record<ProviderId, {\n  supportsV2ToolRuntime: boolean;\n}>>;\n\nexport function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {\n  return kind === 'orchestration'\n    || kind === 'research'\n    || kind === 'browser-automation'\n    || kind === 'implementation'\n    || kind === 'debug'\n    || kind === 'review';\n}\n\nexport function shouldPreferExecForTaskKind(taskKind: AgentTaskKind): boolean {\n  return taskKind === 'implementation' || taskKind === 'debug' || taskKind === 'review';\n}\n\nexport function resolvePrimaryProviderBackend(\n  taskKind: AgentTaskKind,\n  configuredMode = process.env.CODEX_PROVIDER,\n  execAvailable = true,\n): PrimaryProviderBackend {\n  if (!execAvailable) return 'app-server';\n  if (configuredMode === 'exec') return 'exec';\n  return shouldPreferExecForTaskKind(taskKind) ? 'exec' : 'app-server';\n}\n\nexport function providerSupportsPrompt(\n  providerId: ProviderId,\n  prompt: string,\n  overrides?: AgentTaskProfileOverride,\n  capabilities?: ProviderRoutingCapabilities,\n): boolean {\n  const profile = buildTaskProfile(prompt, overrides);\n  if (!taskKindRequiresV2ToolRuntime(profile.kind)) return true;\n  if (!capabilities) return true;\n  return capabilities[providerId]?.supportsV2ToolRuntime === true;\n}\n\nexport function pickProviderForPrompt(\n  prompt: string,\n  availableProviders: Iterable<ProviderId>,\n  overrides?: AgentTaskProfileOverride,\n  capabilities?: ProviderRoutingCapabilities,\n): ProviderId | null {\n  const available = new Set(\n    Array.from(availableProviders).filter((providerId) => providerSupportsPrompt(\n      providerId,\n      prompt,\n      overrides,\n      capabilities,\n    )),\n  );\n  const profile = buildTaskProfile(prompt, overrides);\n\n  if (available.size === 0) return null;\n\n  if (profile.kind === 'research') {\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n  }\n\n  if (profile.kind === 'browser-automation') {\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n  }\n"
+                    }
+                  }
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-final-1776526053681",
+            "type": "agent_message",
+            "text": "## Summary\n\n**File:** `src/main/agent/providerRouting.ts`\n\n**Default Provider Preference Order:**\n\nThe default provider routing order is defined as:\n```typescript\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\n**Preference Order by Task Kind:**\n\nThe file further refines routing based on the specific task:\n\n1. **Research tasks**: Prefer `HAIKU_PROVIDER_ID` → fallback to `PRIMARY_PROVIDER_ID`\n2. **Browser-automation tasks**: Prefer `PRIMARY_PROVIDER_ID` → fallback to `HAIKU_PROVIDER_ID`\n3. **Other task kinds** (orchestration, implementation, debug, review): Follow the **default order** = `PRIMARY_PROVIDER_ID` → `HAIKU_PROVIDER_ID`\n\nThe routing also checks provider capabilities (`supportsV2ToolRuntime`) and filters out providers that don't support the required V2 tool runtime for certain task kinds before applying these preferences."
+          }
+        ],
+        "usage": {
+          "inputTokens": 13643,
+          "outputTokens": 472,
+          "durationMs": 5305
+        },
+        "runId": "run_mo4hqnvk_ckvcwx"
+      }
+    }
+  ]
+}

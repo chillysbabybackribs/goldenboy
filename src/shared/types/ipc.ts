@@ -3,11 +3,14 @@ import { AppEventType } from './events';
 import { PhysicalWindowRole } from './windowRoles';
 import { TerminalSessionInfo } from './terminal';
 import { BrowserState, BrowserHistoryEntry, BrowserNavigationState, TabInfo, BookmarkEntry, ExtensionInfo, BrowserSettings, BrowserDownloadState, BrowserAuthDiagnostics } from './browser';
+import { BrowserReplayRequest, BrowserTargetValidationResult } from './browserDeterministic';
 import { BrowserOperationLedgerEntry } from './browserOperationLedger';
 import { BrowserActionableElement, BrowserConsoleEvent, BrowserFinding, BrowserFormModel, BrowserNetworkEvent, BrowserSiteStrategy, BrowserSnapshot, BrowserSurfaceEvalFixture, BrowserTaskMemory } from './browserIntelligence';
 import { SurfaceActionInput, SurfaceActionRecord, SurfaceActionKind } from '../actions/surfaceActionTypes';
 import { AgentInvocationOptions, TaskMemoryRecord } from './model';
 import { DocumentImportRequest, DocumentInvocationAttachment } from './attachments';
+import { ArtifactRecord, CreateArtifactInput } from './artifacts';
+import { DocumentArtifactSummary, DocumentArtifactView } from './document';
 
 export const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -22,6 +25,19 @@ export const IPC_CHANNELS = {
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
   ADD_LOG: 'workspace:add-log',
   ATTACHMENTS_IMPORT_DOCUMENTS: 'attachments:import-documents',
+  ARTIFACT_CREATE: 'artifact:create',
+  ARTIFACT_GET: 'artifact:get',
+  ARTIFACT_LIST: 'artifact:list',
+  ARTIFACT_SET_ACTIVE: 'artifact:set-active',
+  ARTIFACT_GET_ACTIVE: 'artifact:get-active',
+  ARTIFACT_DELETE: 'artifact:delete',
+  ARTIFACT_REPLACE_CONTENT: 'artifact:replace-content',
+  ARTIFACT_APPEND_CONTENT: 'artifact:append-content',
+  DOCUMENT_OPEN_ARTIFACT: 'document:open-artifact',
+  DOCUMENT_GET_CURRENT: 'document:get-current',
+  DOCUMENT_GET_ARTIFACT: 'document:get-artifact',
+  DOCUMENT_LIST_ARTIFACTS: 'document:list-artifacts',
+  DOCUMENT_SET_CURRENT: 'document:set-current',
 
   // Execution split control (replaces old layout channels)
   APPLY_EXECUTION_PRESET: 'workspace:apply-execution-preset',
@@ -50,6 +66,7 @@ export const IPC_CHANNELS = {
   BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
   BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
   BROWSER_GET_OPERATION_LEDGER: 'browser:get-operation-ledger',
+  BROWSER_REPLAY_OPERATION: 'browser:replay-operation',
   BROWSER_RECORD_FINDING: 'browser:record-finding',
   BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
   BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',
@@ -60,8 +77,6 @@ export const IPC_CHANNELS = {
   BROWSER_ADD_BOOKMARK: 'browser:add-bookmark',
   BROWSER_REMOVE_BOOKMARK: 'browser:remove-bookmark',
   BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
-  BROWSER_SPLIT_TAB: 'browser:split-tab',
-  BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
 
   // Zoom
   BROWSER_ZOOM_IN: 'browser:zoom-in',
@@ -107,7 +122,6 @@ export const IPC_CHANNELS = {
   MODEL_GET_PROVIDERS: 'model:get-providers',
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
-  MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
@@ -119,7 +133,6 @@ export const IPC_CHANNELS = {
   TERMINAL_OUTPUT: 'terminal:output',
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
-  TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
 } as const;
 
 export interface WorkspaceAPI {
@@ -136,6 +149,25 @@ export interface WorkspaceAPI {
 
   attachments: {
     importDocuments(taskId: string, documents: DocumentImportRequest[]): Promise<DocumentInvocationAttachment[]>;
+  };
+
+  artifacts: {
+    create(input: CreateArtifactInput): Promise<ArtifactRecord>;
+    get(artifactId: string): Promise<ArtifactRecord | null>;
+    list(): Promise<ArtifactRecord[]>;
+    setActive(artifactId: string | null): Promise<ArtifactRecord | null>;
+    getActive(): Promise<ArtifactRecord | null>;
+    delete(artifactId: string, deletedBy?: string): Promise<{ deletedArtifactId: string; nextActiveArtifact: ArtifactRecord | null }>;
+    replaceContent(input: { artifactId?: string | null; content: string; updatedBy?: string }): Promise<ArtifactRecord>;
+    appendContent(input: { artifactId?: string | null; content: string; updatedBy?: string }): Promise<ArtifactRecord>;
+  };
+
+  document: {
+    openArtifact(artifactId: string): Promise<DocumentArtifactView>;
+    getCurrent(): Promise<DocumentArtifactView | null>;
+    getArtifact(artifactId: string): Promise<DocumentArtifactView>;
+    listArtifacts(): Promise<DocumentArtifactSummary[]>;
+    setCurrent(artifactId: string | null): Promise<DocumentArtifactView | null>;
   };
 
   // Execution split control
@@ -156,7 +188,8 @@ export interface WorkspaceAPI {
   onStateUpdate(callback: (state: AppState) => void): void;
   onEvent(callback: (type: AppEventType, payload: unknown) => void): void;
 
-  // Browser runtime API (queries, management, UI features, subscriptions)
+  // Browser runtime API (queries, management, diagnostics, subscriptions)
+  // Operational browser actions flow through actions.submit.
   browser: {
     getState(): Promise<BrowserState>;
     getHistory(): Promise<BrowserHistoryEntry[]>;
@@ -171,6 +204,12 @@ export interface WorkspaceAPI {
     getConsoleEvents(tabId?: string, since?: number): Promise<BrowserConsoleEvent[]>;
     getNetworkEvents(tabId?: string, since?: number): Promise<BrowserNetworkEvent[]>;
     getOperationLedger(limit?: number): Promise<BrowserOperationLedgerEntry[]>;
+    replayOperation(request: BrowserReplayRequest): Promise<{
+      replayedOperationId: string | null;
+      sourceOperationId: string;
+      validation: BrowserTargetValidationResult | null;
+      result: { summary: string; data: Record<string, unknown> } | null;
+    }>;
     recordFinding(input: { taskId: string; tabId?: string; title: string; summary: string; severity?: BrowserFinding['severity']; evidence?: string[]; snapshotId?: string | null }): Promise<BrowserFinding>;
     getTaskMemory(taskId: string): Promise<BrowserTaskMemory>;
     getSiteStrategy(origin: string): Promise<BrowserSiteStrategy | null>;
@@ -204,8 +243,6 @@ export interface WorkspaceAPI {
     getDownloads(): Promise<BrowserDownloadState[]>;
     cancelDownload(downloadId: string): Promise<void>;
     clearDownloads(): Promise<void>;
-    splitTab(tabId?: string): Promise<TabInfo>;
-    clearSplitView(): Promise<void>;
     // Cookie sync
     reimportCookies(): Promise<{ imported: number; failed: number; domains: string[] }>;
     // Subscriptions
@@ -214,25 +251,24 @@ export interface WorkspaceAPI {
     onFindUpdate(callback: (find: { activeMatch: number; totalMatches: number }) => void): void;
   };
 
-  // Model API (invocation, routing, handoff)
+  // Model API (invocation and routing)
   model: {
     invoke(taskId: string, prompt: string, owner?: string, options?: AgentInvocationOptions): Promise<any>;
     cancel(taskId: string): Promise<boolean>;
     getProviders(): Promise<Record<string, any>>;
     getTaskMemory(taskId: string): Promise<TaskMemoryRecord>;
     resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions): Promise<string>;
-    handoff(taskId: string, from: string, to: string): Promise<any>;
     runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }): Promise<any>;
     onProgress(callback: (progress: any) => void): void;
   };
 
-  // Terminal session API (raw PTY I/O, queries, subscriptions)
+  // Terminal session API (raw PTY transport, queries, subscriptions)
+  // Orchestrated commands go through actions.submit or agent terminal tools.
   terminal: {
     startSession(cols?: number, rows?: number): Promise<TerminalSessionInfo>;
     getSession(): Promise<TerminalSessionInfo | null>;
     write(data: string): Promise<void>;
     resize(cols: number, rows: number): Promise<void>;
-    captureScrollback(): Promise<string>;
     onOutput(callback: (data: string) => void): void;
     onStatus(callback: (session: TerminalSessionInfo) => void): void;
     onExit(callback: (exitCode: number) => void): void;

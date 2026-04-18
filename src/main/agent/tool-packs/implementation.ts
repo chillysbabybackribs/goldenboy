@@ -29,5 +29,5 @@ export const implementationToolPack: ToolPackManifest = {
     'terminal.write',
     'terminal.kill',
   ],
-  relatedPackIds: ['file-edit', 'file-cache', 'terminal-heavy'],
+  relatedPackIds: ['file-edit', 'file-cache', 'terminal-heavy', 'artifacts'],
 };

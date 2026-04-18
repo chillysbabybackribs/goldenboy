@@ -16,6 +16,7 @@ export type SubAgentSpawnInput = {
 
 export type SubAgentRecord = {
   id: string;
+  taskId: string | null;
   parentRunId: string;
   runId: string | null;
   role: string;

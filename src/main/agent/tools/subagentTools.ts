@@ -9,6 +9,7 @@ import {
 import { appStateStore } from '../../state/appStateStore';
 import { ActionType } from '../../state/actions';
 import { generateId } from '../../../shared/utils/ids';
+import { runtimeLedgerStore } from '../../models/runtimeLedgerStore';
 
 let sharedManager: SubAgentManager | null = null;
 
@@ -93,6 +94,17 @@ export function createSubAgentToolDefinitions(providerFactory: (input: SubAgentS
         };
         const record = manager.spawnBackground(context.runId, spawnInput);
         logSubAgent('info', `Spawned sub-agent ${record.id}: ${record.role}`);
+        runtimeLedgerStore.recordSubagentEvent({
+          taskId: context.taskId || null,
+          providerId: spawnInput.providerId && spawnInput.providerId !== 'auto' ? spawnInput.providerId : undefined,
+          runId: record.runId ?? undefined,
+          summary: `Spawned sub-agent ${record.role}: ${record.task}`,
+          metadata: {
+            subagentId: record.id,
+            role: record.role,
+            status: record.status,
+          },
+        });
         return {
           summary: `Spawned sub-agent ${record.id}`,
           data: { subagent: record },
@@ -116,8 +128,20 @@ export function createSubAgentToolDefinitions(providerFactory: (input: SubAgentS
           id: requireString(obj, 'id'),
           timeoutMs: typeof obj.timeoutMs === 'number' ? obj.timeoutMs : 120_000,
         };
+        const record = manager.get(waitInput.id);
         const result = await manager.wait(waitInput.id, waitInput.timeoutMs);
         logSubAgent(result.status === 'completed' ? 'info' : 'warn', `Sub-agent ${result.id} ${result.status}`);
+        runtimeLedgerStore.recordSubagentEvent({
+          taskId: record?.taskId ?? null,
+          runId: record?.runId ?? undefined,
+          summary: `Sub-agent ${result.id} ${result.status}: ${result.summary}`,
+          metadata: {
+            subagentId: result.id,
+            role: record?.role,
+            status: result.status,
+            blockers: result.blockers,
+          },
+        });
         return {
           summary: `Sub-agent ${result.id} ${result.status}`,
           data: { result },
@@ -135,32 +159,19 @@ export function createSubAgentToolDefinitions(providerFactory: (input: SubAgentS
       async execute(input: unknown) {
         const record = manager.cancel(requireString(objectInput(input), 'id'));
         logSubAgent('warn', `Cancelled sub-agent ${record.id}`);
+        runtimeLedgerStore.recordSubagentEvent({
+          taskId: record.taskId,
+          runId: record.runId ?? undefined,
+          summary: `Cancelled sub-agent ${record.role}: ${record.task}`,
+          metadata: {
+            subagentId: record.id,
+            role: record.role,
+            status: record.status,
+          },
+        });
         return {
           summary: `Cancelled sub-agent ${record.id}`,
           data: { subagent: record },
-        };
-      },
-    },
-    {
-      name: 'subagent.message',
-      description: 'Append a message to a sub-agent. Not implemented yet; use spawn for self-contained child tasks.',
-      inputSchema: {
-        type: 'object',
-        required: ['id', 'message'],
-        properties: {
-          id: { type: 'string' },
-          message: { type: 'string' },
-        },
-      },
-      async execute(input: unknown) {
-        const obj = objectInput(input);
-        const id = requireString(obj, 'id');
-        requireString(obj, 'message');
-        const record = manager.get(id);
-        if (!record) throw new Error(`Sub-agent not found: ${id}`);
-        return {
-          summary: `Sub-agent ${id} does not support follow-up messages yet`,
-          data: { subagent: record, supported: false },
         };
       },
     },

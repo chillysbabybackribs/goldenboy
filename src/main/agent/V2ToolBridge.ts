@@ -21,7 +21,7 @@ function readContext(contextPath: string): AgentToolContext {
     const raw = fs.readFileSync(contextPath, 'utf-8');
     return JSON.parse(raw) as AgentToolContext;
   } catch {
-    return { runId: 'unknown', agentId: 'unknown', mode: 'unrestricted-dev' };
+    return { runId: 'unknown', agentId: 'unknown', mode: 'unrestricted-dev', toolCatalog: [] };
   }
 }
 

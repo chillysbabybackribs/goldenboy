@@ -1,7 +1,13 @@
 import type { AgentToolName } from './AgentTypes';
-import type { AgentTaskKind, AgentTaskProfileOverride } from '../../shared/types/model';
+import type { AgentTaskKind, AgentTaskProfileOverride, AgentToolPackPreset } from '../../shared/types/model';
 import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
-import { DEFAULT_TOOL_PACK_PRESET, resolveAllowedToolsForTaskKind } from './toolPacks';
+import {
+  DEFAULT_TOOL_PACK_PRESET,
+  resolveAllowedToolsForTaskKind,
+  resolveBrowserInitialSurfaceTools,
+  resolveFullSurfaceTools,
+  resolveLocalFilesInitialSurfaceTools,
+} from './toolPacks';
 
 export type AgentTaskProfile = {
   kind: AgentTaskKind;
@@ -18,10 +24,88 @@ const DEBUG_MAX_TOOL_TURNS = 28;
 const REVIEW_MAX_TOOL_TURNS = 24;
 const DELEGATION_MAX_TOOL_TURNS = 40;
 
+function looksLikeBrowserRoutingDiscussion(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const browserTopic = /\b(browser|tab|tabs|page|pages|url|search|research|navigate|click|type|automation)\b/.test(normalized);
+  const routingMeta = /\b(prompt|prompts|task|tasks|message|messages|routing|route|router|classifier|classification|heuristic|trigger|triggers|triggered|triggering|keyword|keywords|word|words|phrase|phrases|text|intent|mode|modes|hard[\s-]?coded|automatic(?:ally)?|auto)\b/.test(normalized);
+  return browserTopic && routingMeta;
+}
+
+function hasExplicitBrowserAutomationIntent(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const browserAction = '(?:open|visit|navigate(?: to)?|go to|click|type|fill|submit|log in(?: to)?|sign in(?: to)?|upload|download|close|close out|switch(?: to)?|focus|activate|reopen|restore|arrange|clean up|cleanup)';
+  const leadingInstruction = new RegExp(`^\\s*(?:please\\s+)?(?:browser\\s*[:,-]\\s*)?${browserAction}\\b`);
+  const requestedInstruction = new RegExp(`\\b(?:can you|could you|please|use (?:the )?browser to|in (?:the )?browser(?:,)?|with the browser)\\s+${browserAction}\\b`);
+  return leadingInstruction.test(normalized) || requestedInstruction.test(normalized);
+}
+
+function hasInternalStateContext(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return /\b(artifact|artifacts|active artifact|current artifact|chat|conversation|thread|message|messages|prompt|prompts|note|notes|panel|pane|sidebar|selection|selected|session|sessions|history|memory|log|logs|status)\b/.test(normalized);
+}
+
+function looksLikeRuntimeMetaTask(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const runtimeSurface = /\b(agent|agents|prompt|prompts|system prompt|tool|tools|tooling|runtime|provider|providers|memory|context|hydration|process|processes|workflow|workflows|orchestration|routing|router|classifier|classification|heuristic|task profile|task profiles|search tool|search tools|browser tool|browser tools)\b/.test(normalized);
+  const metaIntent = /\b(clean up|cleanup|rebuild|refactor|simplify|improve|fix|change|understand|understanding|why|how|over-?engineer(?:ed|ing)?|limiting|behavior|design)\b/.test(normalized);
+  const localSystem = /\b(codebase|repo|repository|workspace|app|system|v2)\b/.test(normalized);
+  return runtimeSurface && (metaIntent || localSystem || hasInternalStateContext(prompt));
+}
+
 function maxTurnsForPrompt(prompt: string): number {
   return shouldUseStrictSourceValidation(prompt)
     ? STRICT_VALIDATION_MAX_TOOL_TURNS
     : DEFAULT_MAX_TOOL_TURNS;
+}
+
+function looksLikeLocalFilesTask(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const localPathIntent = /\b(desktop|downloads|documents|home|folder|directory|path)\b/.test(normalized)
+    || /(?:^|[\s(])~\//.test(prompt)
+    || /\b[a-z]:\\/.test(prompt)
+    || /\/(?:users|home|tmp|var|etc|mnt|opt)\//i.test(prompt);
+  const fileIntent = /\b(list|show|find|search|read|open|count|locate)\b/.test(normalized)
+    && /\b(file|files|folder|folders|directory|directories|path|paths)\b/.test(normalized);
+  const extensionIntent = /\.[a-z0-9]{1,8}\b/i.test(prompt);
+  const codeIntent = /\b(build|test|patch|edit|refactor|typescript|javascript|electron|repo|repository|codebase|ci|compile)\b/.test(normalized);
+  const browserIntent = looksLikeResearchTask(prompt) || looksLikeBrowserAutomationTask(prompt);
+
+  return !codeIntent && !browserIntent && (fileIntent || (localPathIntent && extensionIntent));
+}
+
+function initialAllowedToolsForPrompt(
+  kind: AgentTaskKind,
+  prompt: string,
+  toolPackPreset: AgentToolPackPreset,
+): 'all' | AgentToolName[] | null {
+  if (toolPackPreset === 'all') return 'all';
+  if (toolPackPreset !== 'mode-6') return null;
+
+  if (kind === 'research') {
+    return resolveBrowserInitialSurfaceTools();
+  }
+
+  if (kind === 'browser-automation') {
+    return resolveBrowserInitialSurfaceTools();
+  }
+
+  if ((kind === 'implementation' || kind === 'general') && looksLikeLocalFilesTask(prompt)) {
+    return resolveLocalFilesInitialSurfaceTools();
+  }
+
+  if (kind === 'implementation') {
+    return resolveFullSurfaceTools('implementation');
+  }
+
+  if (kind === 'debug') {
+    return resolveFullSurfaceTools('debug');
+  }
+
+  if (kind === 'review') {
+    return resolveFullSurfaceTools('review');
+  }
+
+  return null;
 }
 
 export function buildTaskProfile(prompt: string, overrides?: AgentTaskProfileOverride): AgentTaskProfile {
@@ -38,12 +122,8 @@ export function buildTaskProfile(prompt: string, overrides?: AgentTaskProfileOve
 }
 
 export function withBrowserSearchDirective(prompt: string, overrides?: AgentTaskProfileOverride): string {
-  if (!buildTaskProfile(prompt, overrides).requiresBrowserSearchDirective) return prompt;
-  return [
-    'Runtime directive: This is a browser-search task. You must call browser.research_search first with the user query. Let it open/cache one result at a time and stop when enough evidence is found. Use only browser-observed search results, cached page chunks, or pages opened in the owned browser as evidence. Do not answer from model memory or provider-native search.',
-    '',
-    `User request: ${prompt}`,
-  ].join('\n');
+  void overrides;
+  return prompt;
 }
 
 function normalizeTaskKind(kind: AgentTaskKind): AgentTaskKind {
@@ -77,6 +157,8 @@ function defaultTaskProfileForKind(
   prompt: string,
   toolPackPreset = DEFAULT_TOOL_PACK_PRESET,
 ): AgentTaskProfile {
+  const initialAllowedTools = initialAllowedToolsForPrompt(normalizeTaskKind(kind), prompt, toolPackPreset);
+
   switch (normalizeTaskKind(kind)) {
     case 'orchestration':
       return {
@@ -91,16 +173,16 @@ function defaultTaskProfileForKind(
       return {
         kind: 'research',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('research', toolPackPreset),
+        allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('research', toolPackPreset),
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
-        requiresBrowserSearchDirective: true,
+        requiresBrowserSearchDirective: false,
       };
     case 'browser-automation':
       return {
         kind: 'browser-automation',
         skillNames: ['browser-operation'],
-        allowedTools: resolveAllowedToolsForTaskKind('browser-automation', toolPackPreset),
+        allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('browser-automation', toolPackPreset),
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -109,7 +191,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'implementation',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('implementation', toolPackPreset),
+        allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('implementation', toolPackPreset),
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -118,7 +200,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'debug',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('debug', toolPackPreset),
+        allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('debug', toolPackPreset),
         canSpawnSubagents: false,
         maxToolTurns: DEBUG_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -127,7 +209,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'review',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('review', toolPackPreset),
+        allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('review', toolPackPreset),
         canSpawnSubagents: false,
         maxToolTurns: REVIEW_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -137,7 +219,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'general',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('general', toolPackPreset),
+        allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('general', toolPackPreset),
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: false,
@@ -156,8 +238,10 @@ export function looksLikeOrchestrationTask(prompt: string): boolean {
 export function looksLikeImplementationTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   const local = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|typescript|javascript|electron|compile|build|test|fix|implement|patch|edit|refactor|terminal|filesystem)\b/.test(normalized);
-  const web = /\b(search|look up|lookup|find online|research|google|web search)\b/.test(normalized);
-  return local
+  const internalSystemTask = looksLikeRuntimeMetaTask(prompt);
+  const web = /\b(search|look up|lookup|find online|research|google|web search)\b/.test(normalized)
+    && !internalSystemTask;
+  return (local || internalSystemTask)
     && !web
     && !looksLikeReviewTask(prompt)
     && !looksLikeDebugTask(prompt)
@@ -168,27 +252,40 @@ export function looksLikeResearchTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   const explicitSearchIntent = /\b(search(?: the web| online)?(?: for)?|look up|lookup|find online|research(?: online)?|web search|google|duckduckgo|bing)\b/.test(normalized);
   const freshnessIntent = /\b(latest|current|today|news)\b/.test(normalized);
+  const freshnessQuestion = /\b(?:what(?:'s| is)|who(?:'s| is)|tell me|give me|show me)\s+(?:the\s+)?(?:latest|current)\b/.test(normalized);
+  const sourceVerificationIntent = /\b(current web sources?|sources? with links?|linked sources?|citations?|cited|verify|verified|verification|unverifiable claims?|fact-check|fact check)\b/.test(normalized);
+  const externalInfoTarget = /\b(price|prices|pricing|cost|costs|guidance|law|laws|regulation|regulations|policy|policies|weather|forecast|stock|stocks|market|markets|news|release|releases|release notes|version|versions|api|apis|documentation|docs|model|models|schedule|schedules|score|scores|exchange rate|rates|president|ceo|earnings|tariff|tariffs|filing|filings)\b/.test(normalized);
   const localContext = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|grep|filesystem)\b/.test(normalized);
+  const internalStateContext = hasInternalStateContext(prompt);
+  const runtimeMetaTask = looksLikeRuntimeMetaTask(prompt);
   const browserAutomation = /\b(navigate|navigation|go to|visit|open url|open the url|open page|click|type|fill|form|login|sign in|upload|download|checkout|book|submit|automate|workflow|autonomous|agentic|audit|qa|regression)\b/.test(normalized);
+  const routingDiscussion = looksLikeBrowserRoutingDiscussion(prompt);
 
-  if (localContext || browserAutomation) return false;
-  return explicitSearchIntent || freshnessIntent;
+  if (localContext || runtimeMetaTask || browserAutomation || routingDiscussion) return false;
+  if (explicitSearchIntent || sourceVerificationIntent) return true;
+  if (internalStateContext && !(sourceVerificationIntent || explicitSearchIntent)) return false;
+  return freshnessIntent && (externalInfoTarget || freshnessQuestion || sourceVerificationIntent);
 }
 
 export function looksLikeBrowserAutomationTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
-  const localContext = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|typescript|javascript|electron|build|test|server|ci)\b/.test(normalized);
+  const localContext = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|typescript|javascript|electron|build|test|server|ci|docs|documentation|readme)\b/.test(normalized);
+  const routingDiscussion = looksLikeBrowserRoutingDiscussion(prompt);
+  const runtimeMetaTask = looksLikeRuntimeMetaTask(prompt);
   const browserSurface = /\b(browser|tab|tabs|page|pages|site|website|webpage|url|link|links|window|windows)\b/.test(normalized);
   const tabManagement = /\b(close|close out|close all|switch|activate|focus|reopen|restore|arrange|cleanup|clean up)\b/.test(normalized)
     && /\b(tab|tabs|window|windows)\b/.test(normalized);
-  const browserActions = /\b(navigate|go to|open|visit|click|type|fill|submit|login|log in|sign in|upload|download|checkout)\b/.test(normalized);
+  const browserActionIntent = hasExplicitBrowserAutomationIntent(prompt);
+  const directUrlTarget = /\b(?:https?:\/\/|www\.)\S+/.test(normalized);
 
   return !localContext
+    && !routingDiscussion
+    && !runtimeMetaTask
     && !looksLikeResearchTask(prompt)
     && !looksLikeReviewTask(prompt)
     && !looksLikeDebugTask(prompt)
     && !looksLikeOrchestrationTask(prompt)
-    && (tabManagement || (browserSurface && browserActions));
+    && (tabManagement || ((browserSurface || directUrlTarget) && browserActionIntent));
 }
 
 export function looksLikeReviewTask(prompt: string): boolean {

@@ -10,19 +10,27 @@ import {
 } from '../../shared/types/model';
 import { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolName } from './AgentTypes';
 import {
+  applyAutoExpandedToolPack,
+  applyRuntimeToolExpansion,
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
   describeProviderToolCall,
   encodeToolInput,
+  formatAutoExpandedToolPackLines,
+  formatQueuedExpansionLines,
   executeProviderToolCallWithEvents,
   normalizeProviderMaxToolTurns,
   normalizeProviderFinalOutput,
   publishProviderFinalOutput,
-  resolveToolPackExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
+import { createRequestToolBindingStore } from './toolBindingScope';
 
 const CODEX_INACTIVITY_TIMEOUT_MS = 180_000;
 const CODEX_WEB_SEARCH_DISABLED_CONFIG = 'web_search="disabled"';
+
+const MAX_TOOL_DESCRIPTION_CHARS = 160;
+const MAX_TOOL_SCHEMA_CHARS = 600;
+const MAX_PROMPT_HISTORY_ENTRIES = 12;
+const MAX_PROMPT_HISTORY_CHARS = 12_000;
 
 type CodexProviderOptions = {
   providerId?: ProviderId;
@@ -59,29 +67,57 @@ function firstNonEmptyLine(value: string): string | null {
   return null;
 }
 
-function buildToolPlanningPrompt(
+function compactPromptText(text: string, maxChars: number, suffix: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const limit = Math.max(0, maxChars - suffix.length);
+  return `${trimmed.slice(0, limit)}${suffix}`;
+}
+
+function compactSchema(schema: unknown): string {
+  return compactPromptText(JSON.stringify(schema), MAX_TOOL_SCHEMA_CHARS, '...[schema truncated]');
+}
+
+function buildToolRegistryText(tools: AgentProviderRequest['promptTools']): string {
+  if (tools.length === 0) return 'No tools are available in this runtime.';
+  return tools.map((tool) => [
+    `- ${tool.name}`,
+    `  Description: ${compactPromptText(tool.description, MAX_TOOL_DESCRIPTION_CHARS, '...')}`,
+    `  Input schema: ${compactSchema(tool.inputSchema)}`,
+  ].join('\n')).join('\n\n');
+}
+
+function buildTranscriptHistory(transcript: TranscriptEntry[]): string {
+  if (transcript.length === 0) return 'No prior tool calls yet.';
+
+  const recent = transcript.slice(-MAX_PROMPT_HISTORY_ENTRIES);
+  const selected: TranscriptEntry[] = [];
+  let usedChars = 0;
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const entry = recent[index];
+    const nextSize = entry.content.length + (selected.length > 0 ? 2 : 0);
+    if (selected.length > 0 && usedChars + nextSize > MAX_PROMPT_HISTORY_CHARS) break;
+    selected.unshift(entry);
+    usedChars += nextSize;
+  }
+
+  const omittedCount = transcript.length - selected.length;
+  const sections: string[] = [];
+  if (omittedCount > 0) {
+    sections.push(`Earlier history omitted to control prompt size (${omittedCount} older steps skipped).`);
+  }
+  sections.push(selected.map((entry, index) => [
+    `### Step ${omittedCount + index + 1} (${entry.type})`,
+    compactPromptText(entry.content, MAX_PROMPT_HISTORY_CHARS, '\n...[step truncated]'),
+  ].join('\n')).join('\n\n'));
+  return sections.join('\n\n');
+}
+
+function buildToolPlanningPromptFrame(
   request: Pick<AgentProviderRequest, 'systemPrompt' | 'contextPrompt' | 'task'>,
-  tools: AgentProviderRequest['tools'],
-  transcript: TranscriptEntry[],
+  tools: AgentProviderRequest['promptTools'],
   forceFinal: boolean,
 ): string {
-  const toolLines = tools.length === 0
-    ? ['No tools are available in this runtime.']
-    : tools.map((tool) => {
-      const schema = JSON.stringify(tool.inputSchema, null, 2);
-      return [
-        `- ${tool.name}`,
-        `  Description: ${tool.description}`,
-        `  Input schema: ${schema}`,
-      ].join('\n');
-    });
-
-  const historyText = transcript.length === 0
-    ? 'No prior tool calls yet.'
-    : transcript.map((entry, index) => [
-      `### Step ${index + 1} (${entry.type})`,
-      entry.content,
-    ].join('\n')).join('\n\n');
 
   const sections = [
     '# System Instructions',
@@ -91,6 +127,7 @@ function buildToolPlanningPrompt(
       'You are running inside the V2 runtime as a model transport only.',
       'Do not execute shell commands, do not edit files directly, and do not use Codex built-in MCP or browser capabilities.',
       'If you need external state, request one or more V2 tools and wait for the host to return results.',
+      'The user cannot see raw tool results or raw terminal/browser output unless you restate them in assistant text. Tool status lines are only compact progress indicators.',
       'Respect runtime validation blocks exactly as written. Do not override INVALID or INCOMPLETE verdicts.',
       forceFinal
         ? 'The host will not execute any more tools in this turn. Produce the best final answer from the evidence already gathered.'
@@ -104,23 +141,34 @@ function buildToolPlanningPrompt(
 
   sections.push(
     '# Available Tools',
-    toolLines.join('\n\n'),
+    buildToolRegistryText(tools),
     '# Current User Request',
     request.task.trim(),
-    '# Prior Turn History',
-    historyText,
     '# Response Rules',
     [
       'Return JSON matching the provided response schema.',
       forceFinal
         ? 'Set kind="final", tool_calls=[], and place the user-facing answer in message.'
-        : 'Either set kind="tool_calls" with tool_calls populated and message as a short progress note, or set kind="final" with tool_calls=[].',
+        : 'Either set kind="tool_calls" with tool_calls populated and keep message empty unless you need a short blocker, clarification request, or material state-change note, or set kind="final" with tool_calls=[].',
       'Each tool call arguments_json must be valid JSON encoding of the tool input object.',
       'Do not wrap JSON in markdown fences.',
     ].join('\n'),
   );
 
   return sections.join('\n\n');
+}
+
+function buildToolPlanningPrompt(
+  request: Pick<AgentProviderRequest, 'systemPrompt' | 'contextPrompt' | 'task'>,
+  tools: AgentProviderRequest['promptTools'],
+  transcript: TranscriptEntry[],
+  forceFinal: boolean,
+): string {
+  return [
+    buildToolPlanningPromptFrame(request, tools, forceFinal),
+    '# Prior Turn History',
+    buildTranscriptHistory(transcript),
+  ].join('\n\n');
 }
 
 function buildToolLoopOutputSchema(toolNames: AgentToolName[]): Record<string, unknown> {
@@ -260,14 +308,25 @@ export class CodexProvider implements AgentProvider {
     let outputTokens = 0;
     const completedItems = new Map<string, CodexItem>();
     const transcript: TranscriptEntry[] = [];
-    let currentTools = [...request.tools];
-    const toolCatalog = request.toolCatalog?.length ? request.toolCatalog : request.tools;
+    const toolCatalog = request.toolCatalog;
+    const toolBindingStore = createRequestToolBindingStore(request);
+    const promptFrameCache = new Map<string, string>();
 
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
 
-    if (currentTools.length === 0) {
+    const buildPrompt = (tools: AgentProviderRequest['promptTools'], forceFinal: boolean): string => {
+      const cacheKey = `${forceFinal ? 'final' : 'loop'}:${tools.map((tool) => tool.name).join('|')}`;
+      let frame = promptFrameCache.get(cacheKey);
+      if (!frame) {
+        frame = buildToolPlanningPromptFrame(request, tools, forceFinal);
+        promptFrameCache.set(cacheKey, frame);
+      }
+      return [frame, '# Prior Turn History', buildTranscriptHistory(transcript)].join('\n\n');
+    };
+
+    if (toolBindingStore.getCallableTools().length === 0) {
       const finalResult = await this.invokeCodexTurn(
-        buildToolPlanningPrompt(request, currentTools, transcript, true),
+        buildPrompt([], true),
         buildFinalOnlyOutputSchema(),
       );
       inputTokens += finalResult.usage.inputTokens;
@@ -296,39 +355,33 @@ export class CodexProvider implements AgentProvider {
 
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
+      const callableTools = toolBindingStore.beginTurn();
 
       const turnResult = await this.invokeCodexTurn(
-        buildToolPlanningPrompt(request, currentTools, transcript, false),
-        buildToolLoopOutputSchema(currentTools.map(tool => tool.name as AgentToolName)),
+        buildPrompt(callableTools, false),
+        buildToolLoopOutputSchema(callableTools.map(tool => tool.name as AgentToolName)),
       );
       inputTokens += turnResult.usage.inputTokens;
       outputTokens += turnResult.usage.outputTokens;
 
       const response = turnResult.response;
       if (response.kind === 'final') {
-        const autoExpansion = resolveAutoExpandedToolPack(response.message, currentTools, toolCatalog);
+        const autoExpansion = applyAutoExpandedToolPack({
+          message: response.message,
+          toolCatalog,
+          toolBindingStore,
+        });
         if (autoExpansion) {
-          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
           if (response.message.trim()) {
-            request.onStatus?.(response.message.trim());
             transcript.push({
               type: 'assistant',
               content: response.message.trim(),
             });
           }
-          const expandedToolNames = autoExpansion.scope === 'all'
-            ? ['all eligible tools']
-            : autoExpansion.tools;
-          const hostNote = [
-            `Host auto-expanded tool pack "${autoExpansion.pack}".`,
-            `Reason: ${autoExpansion.reason}`,
-            `Description: ${autoExpansion.description}`,
-            `Expanded tools: ${expandedToolNames.join(', ')}`,
-          ].join('\n');
           request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
           transcript.push({
             type: 'tool',
-            content: hostNote,
+            content: formatAutoExpandedToolPackLines(autoExpansion).join('\n'),
           });
           continue;
         }
@@ -354,7 +407,6 @@ export class CodexProvider implements AgentProvider {
       }
 
       if (response.message.trim()) {
-        request.onStatus?.(response.message.trim());
         transcript.push({
           type: 'assistant',
           content: response.message.trim(),
@@ -367,9 +419,18 @@ export class CodexProvider implements AgentProvider {
 
       for (let index = 0; index < response.tool_calls.length; index++) {
         const toolCall = response.tool_calls[index];
-        const allowedToolNames = new Set(currentTools.map(tool => tool.name));
+        const allowedToolNames = new Set(callableTools.map(tool => tool.name));
         if (!allowedToolNames.has(toolCall.name)) {
-          throw new Error(`Tool is not available in this runtime scope: ${toolCall.name}`);
+          const message = `Tool is not available in this runtime scope: ${toolCall.name}`;
+          transcript.push({
+            type: 'tool',
+            content: [
+              `Tool: ${toolCall.name}`,
+              `Error: ${message}`,
+            ].join('\n'),
+          });
+          request.onStatus?.(`tool-done:${toolCall.name} ... error: ${message.slice(0, 80)}`);
+          continue;
         }
 
         let toolInput: unknown;
@@ -395,24 +456,24 @@ export class CodexProvider implements AgentProvider {
           toolName: toolCall.name,
           toolInput,
           itemId,
+          currentTools: callableTools,
         });
         completedItems.set(itemId, execution.completedItem);
 
         if (execution.ok) {
-          const expansion = resolveToolPackExpansion(request, toolCall.name, execution.result);
+          const expansion = applyRuntimeToolExpansion({
+            request,
+            toolBindingStore,
+            toolName: toolCall.name,
+            result: execution.result,
+          });
           if (expansion) {
-            currentTools = mergeExpandedTools(currentTools, toolCatalog, expansion);
-            const expandedToolNames = expansion.scope === 'all'
-              ? ['all eligible tools']
-              : expansion.tools;
             transcript.push({
               type: 'tool',
               content: [
                 `Tool: ${toolCall.name}`,
                 `Input: ${encodeToolInput(toolInput)}`,
-                `Result: loaded tool pack "${expansion.pack}"`,
-                `Description: ${expansion.description}`,
-                `Expanded tools: ${expandedToolNames.join(', ')}`,
+                ...formatQueuedExpansionLines(expansion, { style: 'codex' }),
               ].join('\n'),
             });
             continue;
@@ -443,7 +504,7 @@ export class CodexProvider implements AgentProvider {
     }
 
     const finalResult = await this.invokeCodexTurn(
-      buildToolPlanningPrompt(request, currentTools, transcript, true),
+      buildPrompt(toolBindingStore.beginTurn(), true),
       buildFinalOnlyOutputSchema(),
     );
     inputTokens += finalResult.usage.inputTokens;

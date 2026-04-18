@@ -9,6 +9,19 @@ export const IPC_CHANNELS = {
   UPDATE_TASK_STATUS: 'workspace:update-task-status',
   SET_ACTIVE_TASK: 'workspace:set-active-task',
   ADD_LOG: 'workspace:add-log',
+  ARTIFACT_CREATE: 'artifact:create',
+  ARTIFACT_GET: 'artifact:get',
+  ARTIFACT_LIST: 'artifact:list',
+  ARTIFACT_SET_ACTIVE: 'artifact:set-active',
+  ARTIFACT_GET_ACTIVE: 'artifact:get-active',
+  ARTIFACT_DELETE: 'artifact:delete',
+  ARTIFACT_REPLACE_CONTENT: 'artifact:replace-content',
+  ARTIFACT_APPEND_CONTENT: 'artifact:append-content',
+  DOCUMENT_OPEN_ARTIFACT: 'document:open-artifact',
+  DOCUMENT_GET_CURRENT: 'document:get-current',
+  DOCUMENT_GET_ARTIFACT: 'document:get-artifact',
+  DOCUMENT_LIST_ARTIFACTS: 'document:list-artifacts',
+  DOCUMENT_SET_CURRENT: 'document:set-current',
 
   // Execution split control (replaces old layout channels)
   APPLY_EXECUTION_PRESET: 'workspace:apply-execution-preset',
@@ -37,6 +50,7 @@ export const IPC_CHANNELS = {
   BROWSER_GET_CONSOLE_EVENTS: 'browser:get-console-events',
   BROWSER_GET_NETWORK_EVENTS: 'browser:get-network-events',
   BROWSER_GET_OPERATION_LEDGER: 'browser:get-operation-ledger',
+  BROWSER_REPLAY_OPERATION: 'browser:replay-operation',
   BROWSER_RECORD_FINDING: 'browser:record-finding',
   BROWSER_GET_TASK_MEMORY: 'browser:get-task-memory',
   BROWSER_GET_SITE_STRATEGY: 'browser:get-site-strategy',
@@ -47,8 +61,6 @@ export const IPC_CHANNELS = {
   BROWSER_ADD_BOOKMARK: 'browser:add-bookmark',
   BROWSER_REMOVE_BOOKMARK: 'browser:remove-bookmark',
   BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
-  BROWSER_SPLIT_TAB: 'browser:split-tab',
-  BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
 
   // Zoom
   BROWSER_ZOOM_IN: 'browser:zoom-in',
@@ -94,7 +106,6 @@ export const IPC_CHANNELS = {
   MODEL_GET_PROVIDERS: 'model:get-providers',
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
-  MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
@@ -106,5 +117,4 @@ export const IPC_CHANNELS = {
   TERMINAL_OUTPUT: 'terminal:output',
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
-  TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
 } as const;

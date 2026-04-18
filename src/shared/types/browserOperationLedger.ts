@@ -1,4 +1,9 @@
 import type { BrowserActionKind } from '../actions/surfaceActionTypes';
+import type {
+  BrowserExecutionDecision,
+  BrowserExecutionDecisionResult,
+} from './browserExecution';
+import type { BrowserTargetDescriptor, BrowserTargetValidationResult } from './browserDeterministic';
 import type { BrowserNetworkActivitySummary } from './browserIntelligence';
 
 export type BrowserOperationKind =
@@ -72,6 +77,11 @@ export type BrowserOperationLedgerEntry = {
   completedAt: number | null;
   related: BrowserOperationLedgerReferences;
   network: BrowserNetworkActivitySummary | null;
+  targetDescriptor: BrowserTargetDescriptor | null;
+  validation: BrowserTargetValidationResult | null;
+  replayOfOperationId: string | null;
+  decision: BrowserExecutionDecision | null;
+  decisionResult: BrowserExecutionDecisionResult | null;
 };
 
 export type BrowserOperationExecutionContext = Partial<Pick<

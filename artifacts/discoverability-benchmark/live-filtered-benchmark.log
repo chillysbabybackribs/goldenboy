@@ -1,0 +1,26 @@
+
+> v2-workspace@1.0.0 benchmark:discoverability
+> npm run build && electron --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage scripts/run-discoverability-benchmark.js --scenarios cross-source-summary,stale-doc-vs-current-code,true-missing-information --format both
+
+
+> v2-workspace@1.0.0 build
+> npm run build:main && npm run build:preload && npm run build:renderer && npm run copy:html
+
+
+> v2-workspace@1.0.0 build:main
+> tsc -p tsconfig.main.json
+
+
+> v2-workspace@1.0.0 build:preload
+> tsc -p tsconfig.preload.json
+
+
+> v2-workspace@1.0.0 build:renderer
+> tsc -p tsconfig.renderer.json
+
+
+> v2-workspace@1.0.0 copy:html
+> node scripts/copy-renderer.js
+
+Renderer assets copied.
+/home/dp/Desktop/v2workspace/node_modules/electron/dist/electron exited with signal SIGTERM

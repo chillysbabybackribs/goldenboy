@@ -4,6 +4,7 @@ import { agentRunStore } from './AgentRunStore';
 import { agentSkillLoader } from './AgentSkillLoader';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { resolvePreflightToolPackExpansions } from './toolPacks';
+import { createToolBindingStore } from './toolBindingScope';
 import { appStateStore } from '../state/appStateStore';
 import { ActionType } from '../state/actions';
 import { generateId } from '../../shared/utils/ids';
@@ -34,29 +35,39 @@ export class AgentRuntime {
 
     try {
       const fullToolCatalog = filterToolCatalogForConfig(agentToolExecutor.list(), config);
-      let tools = filterToolsForConfig(fullToolCatalog, config);
-      const preflightExpansions = config.restrictToolCatalogToAllowedTools
-        ? []
-        : resolvePreflightToolPackExpansions(
-          config.task,
-          tools.map(tool => ({ name: tool.name })),
-          fullToolCatalog.map(tool => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-          })),
-        );
+      const hydratableToolCatalogDefs = filterHydratableToolCatalogForConfig(fullToolCatalog, config);
+      const initialToolDefs = filterCallableToolsForConfig(hydratableToolCatalogDefs, config);
+      const toolCatalogDefs = hydratableToolCatalogDefs;
+      const initialTools = initialToolDefs.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      }));
+      const toolBindingStore = createToolBindingStore(
+        initialTools,
+        toolCatalogDefs.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      );
+      const preflightExpansions = resolvePreflightToolPackExpansions(
+        config.task,
+        toolBindingStore.getCallableTools().map(tool => ({ name: tool.name })),
+        toolCatalogDefs.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      );
       for (const expansion of preflightExpansions) {
-        const toolCatalogByName = new Map(fullToolCatalog.map(tool => [tool.name, tool]));
-        const currentToolNames = new Set(tools.map(tool => tool.name));
-        const added = expansion.tools
-          .map((name) => toolCatalogByName.get(name))
-          .filter((tool): tool is (typeof fullToolCatalog)[number] => Boolean(tool))
-          .filter((tool) => !currentToolNames.has(tool.name));
-        tools = [...tools, ...added];
+        toolBindingStore.queueTools(expansion.tools);
+        toolBindingStore.beginTurn();
       }
-      const toolCatalog = config.restrictToolCatalogToAllowedTools ? tools : fullToolCatalog;
-      assertInitialBrowserScope(config.task, tools.map(tool => tool.name));
+      const tools = toolBindingStore.getCallableTools();
+      const callableToolNames = new Set(tools.map((tool) => tool.name));
+      const callableToolDefs = toolCatalogDefs.filter((tool) => callableToolNames.has(tool.name));
+      assertInitialBrowserScope(config.task, tools.map(tool => tool.name), config.requiresGroundedResearchHydration === true);
       
       // OPTIMIZATION: Lazy-load skills.
       // If config.skillNames is provided, load them for the system prompt.
@@ -75,7 +86,7 @@ export class AgentRuntime {
           }
           : config,
         skills,
-        tools,
+        tools: callableToolDefs,
       });
       
       logPromptBudget(run.id, config, {
@@ -100,16 +111,13 @@ export class AgentRuntime {
         task: config.task,
         contextPrompt: config.contextPrompt,
         maxToolTurns: config.maxToolTurns,
-        tools: tools.map(tool => ({
+        promptTools: tools,
+        toolCatalog: toolCatalogDefs.map(tool => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema,
         })),
-        toolCatalog: toolCatalog.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
+        toolBindings: toolBindingStore.getBindings(),
         attachments: config.attachments,
         onToken: config.onToken,
         onStatus: config.onStatus,
@@ -131,16 +139,19 @@ export class AgentRuntime {
 
 export function assertInitialBrowserScope(
   task: string,
-  toolNames: AgentProviderRequest['tools'][number]['name'][],
+  toolNames: AgentProviderRequest['promptTools'][number]['name'][],
+  requireBrowserScope = false,
 ): void {
   const profile = buildTaskProfile(task);
-  if (profile.kind !== 'research' && profile.kind !== 'browser-automation') return;
+  if (!requireBrowserScope && profile.kind !== 'research' && profile.kind !== 'browser-automation') return;
 
   const hasBrowserTool = toolNames.some((name) => name.startsWith('browser.'));
   if (hasBrowserTool) return;
 
   throw new Error(
-    `Browser task blocked: initial MCP tool scope for ${profile.kind} did not expose any browser.* tools.`,
+    requireBrowserScope
+      ? 'Grounded research run blocked: initial MCP tool scope did not expose any browser.* tools.'
+      : `Browser task blocked: initial MCP tool scope for ${profile.kind} did not expose any browser.* tools.`,
   );
 }
 
@@ -151,7 +162,7 @@ function logPromptBudget(
     systemPrompt: string;
     contextPrompt?: string | null;
     skillCount: number;
-    tools: AgentProviderRequest['tools'];
+    tools: AgentProviderRequest['promptTools'];
     lazyLoadEnabled?: boolean;
     preflightExpansions?: Array<{ pack: string; reason: string }>;
   },
@@ -194,7 +205,7 @@ function logPromptBudget(
 
 function estimateProviderToolPayloadChars(
   agentId: string,
-  tools: AgentProviderRequest['tools'],
+  tools: AgentProviderRequest['promptTools'],
 ): number {
   if (tools.length === 0) return 0;
   if (agentId === 'haiku') {
@@ -219,13 +230,29 @@ function resolveLogSource(agentId: string): LogSource {
   return isProviderId(agentId) ? agentId : 'system';
 }
 
-function filterToolsForConfig(
+function filterCallableToolsForConfig(
   tools: ReturnType<typeof agentToolExecutor.list>,
   config: AgentRuntimeConfig,
 ): ReturnType<typeof agentToolExecutor.list> {
   const allowed = config.allowedTools === 'all' || !config.allowedTools
     ? null
     : new Set(config.allowedTools);
+
+  return tools.filter((tool) => {
+    if (config.canSpawnSubagents === false && tool.name.startsWith('subagent.')) return false;
+    return !allowed || allowed.has(tool.name);
+  });
+}
+
+function filterHydratableToolCatalogForConfig(
+  tools: ReturnType<typeof agentToolExecutor.list>,
+  config: AgentRuntimeConfig,
+): ReturnType<typeof agentToolExecutor.list> {
+  const hydratable = config.hydratableTools
+    ?? (config.restrictToolCatalogToAllowedTools ? config.allowedTools : undefined);
+  const allowed = hydratable === 'all' || !hydratable
+    ? null
+    : new Set(hydratable);
 
   return tools.filter((tool) => {
     if (config.canSpawnSubagents === false && tool.name.startsWith('subagent.')) return false;

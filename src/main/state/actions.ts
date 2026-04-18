@@ -3,6 +3,7 @@ import { TaskRecord, LogRecord, ExecutionLayoutPreset, SurfaceExecutionState, Wi
 import { TerminalSessionInfo, TerminalCommandState } from '../../shared/types/terminal';
 import { BrowserState } from '../../shared/types/browser';
 import { SurfaceActionRecord } from '../../shared/actions/surfaceActionTypes';
+import { ArtifactRecord } from '../../shared/types/artifacts';
 import { ProviderId, ProviderRuntime } from '../../shared/types/model';
 
 export enum ActionType {
@@ -13,7 +14,13 @@ export enum ActionType {
   ADD_TASK = 'ADD_TASK',
   DELETE_TASK = 'DELETE_TASK',
   UPDATE_TASK = 'UPDATE_TASK',
+  LINK_TASK_ARTIFACT = 'LINK_TASK_ARTIFACT',
+  UNLINK_TASK_ARTIFACT = 'UNLINK_TASK_ARTIFACT',
   SET_ACTIVE_TASK = 'SET_ACTIVE_TASK',
+  ADD_ARTIFACT = 'ADD_ARTIFACT',
+  DELETE_ARTIFACT = 'DELETE_ARTIFACT',
+  UPDATE_ARTIFACT = 'UPDATE_ARTIFACT',
+  SET_ACTIVE_ARTIFACT = 'SET_ACTIVE_ARTIFACT',
   ADD_LOG = 'ADD_LOG',
   SET_SURFACE_STATUS = 'SET_SURFACE_STATUS',
   SET_TERMINAL_SESSION = 'SET_TERMINAL_SESSION',
@@ -35,7 +42,13 @@ export type Action =
   | { type: ActionType.ADD_TASK; task: TaskRecord }
   | { type: ActionType.DELETE_TASK; taskId: string }
   | { type: ActionType.UPDATE_TASK; taskId: string; updates: Partial<Pick<TaskRecord, 'owner' | 'status' | 'updatedAt'>> }
+  | { type: ActionType.LINK_TASK_ARTIFACT; taskId: string; artifactId: string }
+  | { type: ActionType.UNLINK_TASK_ARTIFACT; taskId: string; artifactId: string }
   | { type: ActionType.SET_ACTIVE_TASK; taskId: string | null }
+  | { type: ActionType.ADD_ARTIFACT; artifact: ArtifactRecord }
+  | { type: ActionType.DELETE_ARTIFACT; artifactId: string }
+  | { type: ActionType.UPDATE_ARTIFACT; artifactId: string; patch: Partial<Omit<ArtifactRecord, 'id' | 'format' | 'workingPath' | 'createdBy' | 'createdAt'>> }
+  | { type: ActionType.SET_ACTIVE_ARTIFACT; artifactId: string | null }
   | { type: ActionType.ADD_LOG; log: LogRecord }
   | { type: ActionType.SET_SURFACE_STATUS; surface: 'browser' | 'terminal'; status: SurfaceExecutionState }
   | { type: ActionType.SET_TERMINAL_SESSION; session: TerminalSessionInfo | null }

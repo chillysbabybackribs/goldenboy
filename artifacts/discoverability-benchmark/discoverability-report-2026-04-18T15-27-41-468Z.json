@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-04-18T15:27:41.468Z",
+  "providers": [
+    "gpt-5.4"
+  ],
+  "scenarios": [
+    "local-config-lookup"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  Correct  Grounded  MinPath\n----------------------------------------------------------------------------------------\ngpt-5.4      1          0        0        1        0%         100%     0%        0%\n\n## gpt-5.4\n- local-config-lookup: fail | asked=false | coverage=0.00 | failures=wrong_confidence\n\nScenarios without any submitted runs: tests-infer-behavior, runtime-status-from-logs, cross-source-summary, stale-doc-vs-current-code, true-missing-information",
+  "runs": [
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526048340-o09t7c",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526048340-o09t7c",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "I’m locating the provider routing defaults in the indexed workspace first, then I’ll summarize the default preference order from the source.The defaults are defined in [src/main/agent/providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:8).\n\nThe default provider preference order is `PRIMARY_PROVIDER_ID` first, then `HAIKU_PROVIDER_ID`, from:\n\n```ts\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\nThere are two task-specific overrides in the same file:\n- `research`: prefers `HAIKU_PROVIDER_ID`, then falls back to `PRIMARY_PROVIDER_ID`\n- `browser-automation`: prefers `PRIMARY_PROVIDER_ID`, then falls back to `HAIKU_PROVIDER_ID`\n\nFor other routed task kinds, it falls back to the default order: `PRIMARY_PROVIDER_ID` -> `HAIKU_PROVIDER_ID`. The routing also filters out providers that do not support the required V2 tool runtime before applying that order.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "gpt-5-4-final-1776526061464",
+            "type": "agent_message",
+            "text": "I’m locating the provider routing defaults in the indexed workspace first, then I’ll summarize the default preference order from the source.The defaults are defined in [src/main/agent/providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:8).\n\nThe default provider preference order is `PRIMARY_PROVIDER_ID` first, then `HAIKU_PROVIDER_ID`, from:\n\n```ts\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\nThere are two task-specific overrides in the same file:\n- `research`: prefers `HAIKU_PROVIDER_ID`, then falls back to `PRIMARY_PROVIDER_ID`\n- `browser-automation`: prefers `PRIMARY_PROVIDER_ID`, then falls back to `HAIKU_PROVIDER_ID`\n\nFor other routed task kinds, it falls back to the default order: `PRIMARY_PROVIDER_ID` -> `HAIKU_PROVIDER_ID`. The routing also filters out providers that do not support the required V2 tool runtime before applying that order."
+          }
+        ],
+        "usage": {
+          "inputTokens": 34976,
+          "outputTokens": 228,
+          "durationMs": 12815
+        },
+        "runId": "run_mo4hqnvl_30nvhe"
+      }
+    }
+  ]
+}

@@ -9,6 +9,8 @@ import { buildTaskProfile } from './taskProfile';
 
 const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
 
+export type PrimaryProviderBackend = 'exec' | 'app-server';
+
 export type ProviderRoutingCapabilities = Partial<Record<ProviderId, {
   supportsV2ToolRuntime: boolean;
 }>>;
@@ -20,6 +22,20 @@ export function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {
     || kind === 'implementation'
     || kind === 'debug'
     || kind === 'review';
+}
+
+export function shouldPreferExecForTaskKind(taskKind: AgentTaskKind): boolean {
+  return taskKind === 'implementation' || taskKind === 'debug' || taskKind === 'review';
+}
+
+export function resolvePrimaryProviderBackend(
+  taskKind: AgentTaskKind,
+  configuredMode = process.env.CODEX_PROVIDER,
+  execAvailable = true,
+): PrimaryProviderBackend {
+  if (!execAvailable) return 'app-server';
+  if (configuredMode === 'exec') return 'exec';
+  return shouldPreferExecForTaskKind(taskKind) ? 'exec' : 'app-server';
 }
 
 export function providerSupportsPrompt(
@@ -53,8 +69,8 @@ export function pickProviderForPrompt(
   if (available.size === 0) return null;
 
   if (profile.kind === 'research') {
-    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
     if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
+    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
   }
 
   if (profile.kind === 'browser-automation') {

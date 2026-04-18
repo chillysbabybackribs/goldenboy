@@ -3,13 +3,10 @@ import { AgentRuntimeConfig, AgentSkill, AgentToolDefinition } from './AgentType
 import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 import { APP_WORKSPACE_ROOT, resolveWorkspacePath } from '../workspaceRoot';
 import {
-  ALWAYS_ON_SOURCE_VALIDATION_RULE,
-  CONSTRAINT_LEDGER_PROTOCOL,
-  DETERMINISTIC_VALIDATION_OVERRIDE_RULE,
-  PHYSICAL_TASK_COMPLETION_PROTOCOL,
   STRICT_SOURCE_VALIDATION_PROTOCOL,
   shouldUseStrictSourceValidation,
 } from './sourceValidationPolicy';
+import { looksLikeBrowserAutomationTask, looksLikeResearchTask } from './taskProfile';
 
 const AGENT_CONTRACT_PATH = resolveWorkspacePath('AGENT.md');
 const ALWAYS_ON_CONTRACT_SECTIONS = new Set([
@@ -30,6 +27,31 @@ type CachedFileText = {
 
 let cachedContract: CachedFileText | null = null;
 
+const EXECUTION_GUARDRAILS = [
+  'Use authoritative sources for factual or decision-impacting claims; if verification is incomplete, say so briefly.',
+  'Track the active user constraints internally and validate the result against them before claiming success.',
+  'Treat any RUNTIME VALIDATION block as authoritative: VALID only when every checked constraint passes; INVALID or INCOMPLETE must be reported honestly.',
+  'When the user asks for a real action, use tools to do the work, verify the outcome, and avoid destructive or irreversible actions unless explicitly requested.',
+].join('\n');
+
+const TOOLING_GUARDRAILS = [
+  'If a needed capability is missing, use runtime.search_tools first; request a broader tool pack only when a wide surface is actually needed.',
+  'Restate important tool findings in assistant text because the user cannot see raw tool payloads.',
+  'Use artifact.* tools for managed workspace artifacts (`md`, `txt`, `html`, `csv`); use filesystem.* for repository files and arbitrary local files.',
+].join('\n');
+
+const PRIMARY_PROVIDER_GUARDRAILS = [
+  'Use only V2 browser, filesystem, terminal, and research tools for external actions. Do not use provider-native web features.',
+  'Never use shell commands for web access. Use browser.research_search for research, browser.navigate + browser.extract_page for direct URLs, and browser.search_web to open a search page.',
+].join('\n');
+
+const RUNTIME_IDENTITY = [
+  'You are the user\'s persistent V2 workspace agent, not a generic chatbot.',
+  'Act on the user\'s behalf inside this application: proactively inspect the relevant source of truth first, then use the right V2 tools to complete the task.',
+  'For web or current-information tasks, use the owned browser and browser research tools. For OS, repo, and file tasks, use filesystem, terminal, artifact, and chat/task memory tools as appropriate.',
+  'Start from observed state, not assumptions. End with a concrete result, the key observed evidence, and any remaining blocker if the task could not be completed.',
+].join('\n');
+
 export class AgentPromptBuilder {
   /**
    * Lazy-load variant: builds minimal prompt without skills.
@@ -42,11 +64,9 @@ export class AgentPromptBuilder {
   }): string {
     const baseContract = buildBaseContract(readCachedContract());
 
-    // For now, include skills if provided (backward compat).
-    // Future: defer all skills to lazy loading, pass empty array by default.
     const skillText = input.skills.length > 0
       ? input.skills.map(skill => `\n\n## Skill: ${skill.name}\n\n${compactSkillBody(skill.body)}`).join('')
-      : '\n\n## Skills\n\nNo task-specific skills loaded.';
+      : '';
 
     const toolText = input.tools.length > 0
       ? input.tools.map(tool => tool.name).join(', ')
@@ -54,23 +74,20 @@ export class AgentPromptBuilder {
 
     return [
       baseContract,
-      `\n\n## Source Validation\n\n${ALWAYS_ON_SOURCE_VALIDATION_RULE}`,
-      `\n\n## Constraint Ledger\n\n${CONSTRAINT_LEDGER_PROTOCOL}`,
-      `\n\n## Deterministic Validation Authority\n\n${DETERMINISTIC_VALIDATION_OVERRIDE_RULE}`,
-      `\n\n## Physical Task Completion\n\n${PHYSICAL_TASK_COMPLETION_PROTOCOL}`,
+      `\n\n## Runtime Identity\n\n${RUNTIME_IDENTITY}`,
+      `\n\n## Execution Guardrails\n\n${EXECUTION_GUARDRAILS}`,
       shouldUseStrictSourceValidation(input.config.task)
         ? `\n\n## Strict Source Validation Protocol\n\n${STRICT_SOURCE_VALIDATION_PROTOCOL}`
         : '',
-      `\n\n## Active Runtime\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\n${buildCurrentDateTimeLine()}`,
-      `\n\n## Workspace Root\n\nAbsolute workspace root: ${APP_WORKSPACE_ROOT}\nResolve relative repository paths from this root unless a tool result explicitly reports a different cwd.${input.config.cwd ? `\nCurrent working directory: ${input.config.cwd}` : ''}`,
+      `\n\n## Runtime Context\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\n${buildCurrentDateTimeLine()}\nWorkspace root: ${APP_WORKSPACE_ROOT}${input.config.cwd ? `\nCurrent working directory: ${input.config.cwd}` : ''}`,
       input.config.systemPromptAddendum?.trim()
         ? `\n\n## Additional Invocation Instructions\n\n${input.config.systemPromptAddendum.trim()}`
         : '',
-      '\n\n## Tool Scope Recovery\n\nIf the current tool scope appears too narrow for the task, inspect the available packs with runtime.list_tool_packs, then expand with runtime.request_tool_pack. Do this immediately when the current tool subset is missing a browser, filesystem, terminal, chat, or subagent capability you need.',
+      `\n\n## Tooling Guardrails\n\n${TOOLING_GUARDRAILS}`,
       input.config.agentId === PRIMARY_PROVIDER_ID
-        ? '\n\n## V2 Tool Priority\n\nYou are running inside V2 Workspace. All browser, filesystem, terminal, and research operations must go through the v2 MCP tools listed in your tool scope. These tools are first-class — they operate the real app-owned browser, real filesystem, and real terminal surfaces.\n\nDo not use any Codex-native capabilities: no built-in web search, no native browser control. If you need a capability not in your current tool scope, use runtime.list_tool_packs to find the right pack, then runtime.request_tool_pack to load it. Every action must produce a v2 tool record.\n\n## Web Access Hard Rule\n\nNEVER use shell commands to access the internet. This means: never use python, python3, curl, wget, node, or any other shell command to make HTTP requests, fetch URLs, scrape web pages, call APIs, or retrieve any online content. This prohibition is absolute — no exceptions, no fallbacks.\n\nFor ANY task involving web search, browsing, looking something up, or retrieving online information:\n- Use `browser.research_search` for research tasks (searches and reads multiple pages)\n- Use `browser.navigate` + `browser.extract_page` for direct URL navigation\n- Use `browser.search_web` to open a search without reading results\n\nThese are the ONLY valid paths to web content. If the browser tools are not in your current scope, use runtime.request_tool_pack to load them — do not fall back to shell.'
+        ? `\n\n## V2 Guardrails\n\n${PRIMARY_PROVIDER_GUARDRAILS}`
         : '',
-      `\n\n## Available Tools\n\nTool schemas are provided separately. Available tool names: ${toolText}`,
+      `\n\n## Available Tools\n\n${toolText}`,
       skillText,
     ].join('');
   }
@@ -213,7 +230,7 @@ function buildCurrentDateTimeLine(): string {
 
 export function buildResponseStyleAddendum(task: string): string {
   const normalized = task.toLowerCase();
-  if (/\b(search(?: the web| online)?|look up|lookup|find online|research|latest|current|browser|tab|tabs|page|pages|url|navigate|visit|click|type|form|login|upload|download|automation)\b/.test(normalized)) {
+  if (looksLikeResearchTask(task) || looksLikeBrowserAutomationTask(task)) {
     return [
       'For browser, research, and web tasks:',
       '1. Do not narrate your plan or restate obvious tool actions.',
@@ -221,6 +238,7 @@ export function buildResponseStyleAddendum(task: string): string {
       '3. As soon as observed browser evidence or verified tool results satisfy the task, stop calling tools and produce the final answer immediately.',
       '4. Do not add an extra recap after the task is complete.',
       '5. Keep the final answer concise and focused on the result, not the tool trace.',
+      '6. Do not emit step-by-step progress commentary like "checking", "verifying", "reading", or "running" for routine tool work.',
     ].join('\n');
   }
 

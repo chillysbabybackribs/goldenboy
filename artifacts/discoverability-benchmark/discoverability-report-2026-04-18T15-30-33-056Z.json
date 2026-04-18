@@ -1,0 +1,122 @@
+{
+  "generatedAt": "2026-04-18T15:30:33.056Z",
+  "providers": [
+    "gpt-5.4"
+  ],
+  "scenarios": [
+    "local-config-lookup"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  Correct  Grounded  MinPath\n----------------------------------------------------------------------------------------\ngpt-5.4      1          0        1        0        0%         100%     0%        0%\n\n## gpt-5.4\n- local-config-lookup: soft_pass | asked=false | coverage=0.00 | failures=none\n\nScenarios without any submitted runs: tests-infer-behavior, runtime-status-from-logs, cross-source-summary, stale-doc-vs-current-code, true-missing-information",
+  "runs": [
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526192408-t94lvu",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-gpt-5.4-1776526192408-t94lvu",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "[providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:9) defines the provider routing defaults.\n\nThe generic default order is `PRIMARY_PROVIDER_ID` then `HAIKU_PROVIDER_ID`:\n\n```ts\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\nBefore that fallback, `pickProviderForPrompt` applies task-specific routing:\n- `research`: `HAIKU_PROVIDER_ID` first, then `PRIMARY_PROVIDER_ID`\n- `browser-automation`, `implementation`, `orchestration`, `review`, `debug`: `PRIMARY_PROVIDER_ID` first, then `HAIKU_PROVIDER_ID`\n\nThat behavior is covered in [providerRouting.test.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts:1).",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "call_oqIC0sPy9pmIKv2AH5Q7PQvq",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "provider routing defaults preference order",
+              "limit": 5
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_oqIC0sPy9pmIKv2AH5Q7PQvq",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "provider routing defaults preference order",
+              "limit": 5
+            },
+            "result": null,
+            "error": {
+              "message": "tool call error: tool call failed for `v2-tools/filesystem__search_file_cache`\n\nCaused by:\n    Mcp error: -32000: connect ECONNREFUSED 127.0.0.1:37829"
+            },
+            "status": "failed"
+          },
+          {
+            "id": "call_QpnWMabIEV4pwG62XpMkEBVQ",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "provider routing default",
+              "limit": 5
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_QpnWMabIEV4pwG62XpMkEBVQ",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "provider routing default",
+              "limit": 5
+            },
+            "result": null,
+            "error": {
+              "message": "tool call error: tool call failed for `v2-tools/filesystem__search_file_cache`\n\nCaused by:\n    Mcp error: -32000: connect ECONNREFUSED 127.0.0.1:37829"
+            },
+            "status": "failed"
+          },
+          {
+            "id": "call_X41gXG6FwkNX7E6nJiHS5UVH",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "preference order provider",
+              "limit": 5
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_X41gXG6FwkNX7E6nJiHS5UVH",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "preference order provider",
+              "limit": 5
+            },
+            "result": null,
+            "error": {
+              "message": "tool call error: tool call failed for `v2-tools/filesystem__search_file_cache`\n\nCaused by:\n    Mcp error: -32000: connect ECONNREFUSED 127.0.0.1:37829"
+            },
+            "status": "failed"
+          },
+          {
+            "id": "gpt-5-4-final-1776526233051",
+            "type": "agent_message",
+            "text": "[providerRouting.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts:9) defines the provider routing defaults.\n\nThe generic default order is `PRIMARY_PROVIDER_ID` then `HAIKU_PROVIDER_ID`:\n\n```ts\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\nBefore that fallback, `pickProviderForPrompt` applies task-specific routing:\n- `research`: `HAIKU_PROVIDER_ID` first, then `PRIMARY_PROVIDER_ID`\n- `browser-automation`, `implementation`, `orchestration`, `review`, `debug`: `PRIMARY_PROVIDER_ID` first, then `HAIKU_PROVIDER_ID`\n\nThat behavior is covered in [providerRouting.test.ts](/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.test.ts:1)."
+          }
+        ],
+        "usage": {
+          "inputTokens": 84601,
+          "outputTokens": 422,
+          "durationMs": 40351
+        },
+        "runId": "run_mo4htr1j_9vxgqp"
+      }
+    }
+  ]
+}

@@ -48,6 +48,36 @@ describe('ConstraintValidator', () => {
     ]));
   });
 
+  it('accepts a single retained homepage tab when closing the last browser tab', () => {
+    const result = validateToolResult(
+      'browser.close_tab',
+      {
+        summary: 'Closed 1 browser tab; retained one homepage tab',
+        data: {
+          tabIds: ['tab-2'],
+          homepage: 'https://www.google.com',
+          retainedLastTabId: 'tab-2',
+          activeTabId: 'tab-2',
+          tabs: [{
+            id: 'tab-2',
+            navigation: {
+              url: 'https://www.google.com/?zx=12345',
+            },
+          }],
+        },
+      },
+      { tabId: 'tab-2' },
+    );
+
+    expect(result?.status).toBe('VALID');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'tab_closed',
+        status: 'PASS',
+      }),
+    ]));
+  });
+
   it('validates browser activate_tab against activeTabId', () => {
     const result = validateToolResult(
       'browser.activate_tab',

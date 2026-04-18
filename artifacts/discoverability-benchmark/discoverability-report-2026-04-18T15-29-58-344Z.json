@@ -1,0 +1,304 @@
+{
+  "generatedAt": "2026-04-18T15:29:58.344Z",
+  "providers": [
+    "haiku"
+  ],
+  "scenarios": [
+    "local-config-lookup"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  Correct  Grounded  MinPath\n----------------------------------------------------------------------------------------\nhaiku        1          1        0        0        0%         100%     100%      100%\n\n## haiku\n- local-config-lookup: strong_pass | asked=false | coverage=1.00 | failures=none\n\nScenarios without any submitted runs: tests-infer-behavior, runtime-status-from-logs, cross-source-summary, stale-doc-vs-current-code, true-missing-information",
+  "runs": [
+    {
+      "scenarioId": "local-config-lookup",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-local-config-lookup-haiku-1776526192444-o633hd",
+      "prompt": "Find which file defines the provider routing defaults and summarize the default preference order.",
+      "result": {
+        "taskId": "discoverability-live-local-config-lookup-haiku-1776526192444-o633hd",
+        "providerId": "haiku",
+        "success": true,
+        "output": "## Summary\n\n**File:** `src/main/agent/providerRouting.ts`\n\n**Default Provider Preference Order:**\n\n```typescript\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\nThe default routing preference is:\n1. **PRIMARY_PROVIDER_ID** (first choice)\n2. **HAIKU_PROVIDER_ID** (fallback)\n\nThis default order is used as a fallback in the provider routing logic. The actual routing also has task-kind-specific rules: for `implementation`, `orchestration`, `review`, and `debug` tasks, the system prefers `PRIMARY_PROVIDER_ID` if available, then falls back to `HAIKU_PROVIDER_ID`, and finally uses the `DEFAULT_PROVIDER_ORDER` array if neither of those are available.",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "haiku-tool-1-1-1776526193672",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "runtime.search_tools",
+            "arguments": {
+              "query": "filesystem search file cache"
+            },
+            "result": {
+              "summary": "Found 5 tool matches for \"filesystem search file cache\"",
+              "data": {
+                "query": "filesystem search file cache",
+                "matches": [
+                  {
+                    "name": "filesystem.search_file_cache",
+                    "description": "Search indexed file chunks by query, optional path prefix, and language. Returns snippets and chunk ids for targeted reads.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "exact tool name match"
+                  },
+                  {
+                    "name": "filesystem.search",
+                    "description": "Fallback file path and text search under a local path. Prefer filesystem.search_file_cache for indexed source lookup when possible.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "implementation",
+                      "debug",
+                      "review",
+                      "orchestration",
+                      "general",
+                      "file-edit"
+                    ],
+                    "bindingState": "callable",
+                    "callableNow": true,
+                    "invokableNow": true,
+                    "invocationMethod": "direct",
+                    "availableNextTurn": false,
+                    "reason": "name matches \"filesystem\""
+                  },
+                  {
+                    "name": "filesystem.answer_from_cache",
+                    "description": "Answer a file/code question from cached file chunks with compact excerpts and source chunk ids. Prefer this before full file reads.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "name matches \"filesystem\""
+                  },
+                  {
+                    "name": "filesystem.file_cache_stats",
+                    "description": "Return file knowledge cache size, token estimate, and hit/miss counters.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "name matches \"filesystem\""
+                  },
+                  {
+                    "name": "filesystem.list_cached_files",
+                    "description": "List files currently indexed in the file knowledge cache.",
+                    "category": "filesystem",
+                    "relatedPackIds": [
+                      "file-cache"
+                    ],
+                    "bindingState": "discoverable",
+                    "callableNow": false,
+                    "invokableNow": true,
+                    "invocationMethod": "runtime.invoke_tool",
+                    "availableNextTurn": true,
+                    "reason": "name matches \"filesystem\""
+                  }
+                ],
+                "tools": [
+                  "filesystem.search_file_cache",
+                  "filesystem.search",
+                  "filesystem.answer_from_cache",
+                  "filesystem.file_cache_stats",
+                  "filesystem.list_cached_files"
+                ],
+                "suggestedPackIds": [
+                  "file-cache",
+                  "implementation",
+                  "debug",
+                  "review",
+                  "orchestration",
+                  "general",
+                  "file-edit"
+                ],
+                "hydration": {
+                  "callableNow": [
+                    "filesystem.search"
+                  ],
+                  "invokableNow": [
+                    "filesystem.search_file_cache",
+                    "filesystem.search",
+                    "filesystem.answer_from_cache",
+                    "filesystem.file_cache_stats",
+                    "filesystem.list_cached_files"
+                  ],
+                  "availableNextTurn": [
+                    "filesystem.search_file_cache",
+                    "filesystem.answer_from_cache",
+                    "filesystem.file_cache_stats",
+                    "filesystem.list_cached_files"
+                  ],
+                  "failed": []
+                }
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-2-1-1776526194470",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "filesystem.search_file_cache",
+            "arguments": {
+              "query": "provider routing defaults preference order"
+            },
+            "result": {
+              "summary": "Found 6 cached file chunks",
+              "data": {
+                "query": "provider routing defaults preference order",
+                "results": [
+                  {
+                    "chunkId": "file_557905453dce679f_chunk_0",
+                    "fileId": "file_557905453dce679f",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                    "relativePath": "src/main/agent/providerRouting.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];",
+                    "score": 13,
+                    "tokenEstimate": 22
+                  },
+                  {
+                    "chunkId": "file_557905453dce679f_chunk_1",
+                    "fileId": "file_557905453dce679f",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                    "relativePath": "src/main/agent/providerRouting.ts",
+                    "language": "typescript",
+                    "startLine": 81,
+                    "endLine": 101,
+                    "snippet": "for (const providerId of DEFAULT_PROVIDER_ORDER) {",
+                    "score": 11,
+                    "tokenEstimate": 13
+                  },
+                  {
+                    "chunkId": "file_9af4a8a13c81b85f_chunk_0",
+                    "fileId": "file_9af4a8a13c81b85f",
+                    "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                    "relativePath": "src/shared/types/model.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;",
+                    "score": 3,
+                    "tokenEstimate": 20
+                  },
+                  {
+                    "chunkId": "file_9af4a8a13c81b85f_chunk_2",
+                    "fileId": "file_9af4a8a13c81b85f",
+                    "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                    "relativePath": "src/shared/types/model.ts",
+                    "language": "typescript",
+                    "startLine": 161,
+                    "endLine": 240,
+                    "snippet": "providerId: ProviderId;",
+                    "score": 2,
+                    "tokenEstimate": 6
+                  },
+                  {
+                    "chunkId": "file_9af4a8a13c81b85f_chunk_1",
+                    "fileId": "file_9af4a8a13c81b85f",
+                    "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                    "relativePath": "src/shared/types/model.ts",
+                    "language": "typescript",
+                    "startLine": 81,
+                    "endLine": 160,
+                    "snippet": "export type ModelOwner = ProviderId | 'user';",
+                    "score": 1,
+                    "tokenEstimate": 12
+                  },
+                  {
+                    "chunkId": "file_9af4a8a13c81b85f_chunk_3",
+                    "fileId": "file_9af4a8a13c81b85f",
+                    "path": "/home/dp/Desktop/v2workspace/src/shared/types/model.ts",
+                    "relativePath": "src/shared/types/model.ts",
+                    "language": "typescript",
+                    "startLine": 241,
+                    "endLine": 295,
+                    "snippet": "// ─── Routing Types ────────────────────────────────────────────────────────",
+                    "score": 1,
+                    "tokenEstimate": 20
+                  }
+                ]
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-tool-3-1-1776526195666",
+            "type": "mcp_tool_call",
+            "server": "v2",
+            "tool": "filesystem.answer_from_cache",
+            "arguments": {
+              "query": "DEFAULT_PROVIDER_ORDER provider routing preferences",
+              "pathPrefix": "src/main/agent/providerRouting.ts"
+            },
+            "result": {
+              "summary": "Found 2 cached file sources",
+              "data": {
+                "query": "DEFAULT_PROVIDER_ORDER provider routing preferences",
+                "answer": "### src/main/agent/providerRouting.ts:1\nimport {\n  HAIKU_PROVIDER_ID,\n  PRIMARY_PROVIDER_ID,\n  type AgentTaskKind,\n  type AgentTaskProfileOverride,\n  type ProviderId,\n} from '../../shared/types/model';\nimport { buildTaskProfile } from './taskProfile';\n\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n\nexport type PrimaryProviderBackend = 'exec' | 'app-server';\n\nexport type ProviderRoutingCapabilities = Partial<Record<ProviderId, {\n  supportsV2ToolRuntime: boolean;\n}>>;\n\nexport function taskKindRequiresV2ToolRuntime(kind: AgentTaskKind): boolean {\n  return kind === 'orchestration'\n    || kind === 'research'\n    || kind === 'browser-automation'\n    || kind === 'implementation'\n    || kind === 'debug'\n    || kind === 'review';\n}\n\nexport function shouldPreferExecForTaskKind(taskKind: AgentTaskKind): boolean {\n  return taskKind === 'implementation' || taskKind === 'debug' || taskKind === 'review';\n}\n\nexport function resolvePrimaryProviderBackend(\n  taskKind: AgentTaskKind,\n  configuredMode = process.env.CODEX_PROVIDER,\n  execAvailable = true,\n): PrimaryProviderBackend {\n  if (!execAvailable) return 'app-server';\n  if (configuredMode === 'exec') return 'exec';\n  return shouldPreferExecForT\n...[file truncated]\n\n### src/main/agent/providerRouting.ts:81\n  if (profile.kind === 'implementation') {\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n  }\n\n  if (\n    profile.kind === 'orchestration'\n    || profile.kind === 'review'\n    || profile.kind === 'debug'\n  ) {\n    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;\n    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;\n  }\n\n  for (const providerId of DEFAULT_PROVIDER_ORDER) {\n    if (available.has(providerId)) return providerId;\n  }\n\n  return null;\n}\n",
+                "sources": [
+                  {
+                    "chunkId": "file_557905453dce679f_chunk_0",
+                    "fileId": "file_557905453dce679f",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                    "relativePath": "src/main/agent/providerRouting.ts",
+                    "language": "typescript",
+                    "startLine": 1,
+                    "endLine": 80,
+                    "snippet": "const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];",
+                    "score": 13,
+                    "tokenEstimate": 22
+                  },
+                  {
+                    "chunkId": "file_557905453dce679f_chunk_1",
+                    "fileId": "file_557905453dce679f",
+                    "path": "/home/dp/Desktop/v2workspace/src/main/agent/providerRouting.ts",
+                    "relativePath": "src/main/agent/providerRouting.ts",
+                    "language": "typescript",
+                    "startLine": 81,
+                    "endLine": 101,
+                    "snippet": "for (const providerId of DEFAULT_PROVIDER_ORDER) {",
+                    "score": 11,
+                    "tokenEstimate": 13
+                  }
+                ],
+                "tokenEstimate": 470
+              }
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "haiku-final-1776526198341",
+            "type": "agent_message",
+            "text": "## Summary\n\n**File:** `src/main/agent/providerRouting.ts`\n\n**Default Provider Preference Order:**\n\n```typescript\nconst DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];\n```\n\nThe default routing preference is:\n1. **PRIMARY_PROVIDER_ID** (first choice)\n2. **HAIKU_PROVIDER_ID** (fallback)\n\nThis default order is used as a fallback in the provider routing logic. The actual routing also has task-kind-specific rules: for `implementation`, `orchestration`, `review`, and `debug` tasks, the system prefers `PRIMARY_PROVIDER_ID` if available, then falls back to `HAIKU_PROVIDER_ID`, and finally uses the `DEFAULT_PROVIDER_ORDER` array if neither of those are available."
+          }
+        ],
+        "usage": {
+          "inputTokens": 18574,
+          "outputTokens": 457,
+          "durationMs": 5851
+        },
+        "runId": "run_mo4htr2k_sdxkfq"
+      }
+    }
+  ]
+}

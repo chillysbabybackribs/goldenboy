@@ -1,0 +1,173 @@
+{
+  "generatedAt": "2026-04-18T17:18:58.588Z",
+  "providers": [
+    "gpt-5.4"
+  ],
+  "scenarios": [
+    "cross-source-summary",
+    "stale-doc-vs-current-code",
+    "true-missing-information"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  CorrectEsc Correct  Grounded  MinPath\n---------------------------------------------------------------------------------------------------\ngpt-5.4      1          0        1        0        0%         0%         100%     100%      0%\n\n## gpt-5.4\nUnavailable runs:\n- cross-source-summary: benchmark unavailable: invocation timeout\n- stale-doc-vs-current-code: benchmark unavailable: invocation timeout\n\nBuckets:\n- negative_control: scenarios=1 | strong=0 | soft=1 | fail=0 | correctEsc=0% | minPath=0%\n\n- true-missing-information: soft_pass | asked=true | correctEscalation=false | coverage=0.00 | failures=none\n\nScenarios without any submitted runs: local-config-lookup, tests-infer-behavior, runtime-status-from-logs",
+  "runs": [
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-cross-source-summary-gpt-5.4-1776532575422-qxk9ur",
+      "prompt": "Explain how runtime validation failures are classified by combining the implementation, the tests, and the benchmark planning docs in this repo.",
+      "result": {
+        "taskId": "discoverability-live-cross-source-summary-gpt-5.4-1776532575422-qxk9ur",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 60000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 60000
+        }
+      }
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-stale-doc-vs-current-code-gpt-5.4-1776532635541-kdlvs8",
+      "prompt": "Resolve a conflict between a stale plan doc and the current implementation by checking the code.",
+      "result": {
+        "taskId": "discoverability-live-stale-doc-vs-current-code-gpt-5.4-1776532635541-kdlvs8",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 60000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 60000
+        }
+      }
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532695630-cnsybf",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "result": {
+        "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532695630-cnsybf",
+        "providerId": "gpt-5.4",
+        "success": true,
+        "output": "What is the deployment target?",
+        "artifacts": [],
+        "codexItems": [
+          {
+            "id": "call_kuH76GoXyQZuYlnOlYKplfbj",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "chat.thread_summary",
+            "arguments": {},
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          },
+          {
+            "id": "call_kuH76GoXyQZuYlnOlYKplfbj",
+            "type": "mcp_tool_call",
+            "server": "v2-tools",
+            "tool": "chat.thread_summary",
+            "arguments": {},
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"summary\":\"Read chat thread summary\",\"data\":{\"taskId\":\"discoverability-live-true-missing-information-gpt-5.4-1776532695630-cnsybf\",\"summary\":\"Initial goal: Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.\\nLatest user intent: Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.\\nMessages cached: 1 (1 user, 0 assistant).\\nRecent conversation:\\nUser: Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.\"}}"
+                }
+              ],
+              "structuredContent": null,
+              "_meta": null
+            },
+            "error": null,
+            "status": "completed"
+          },
+          {
+            "id": "gpt-5-4-final-1776532738575",
+            "type": "agent_message",
+            "text": "What is the deployment target?"
+          }
+        ],
+        "processEntries": [
+          {
+            "kind": "tool",
+            "text": "thread summary"
+          },
+          {
+            "kind": "tool",
+            "text": "thread summary -> done"
+          },
+          {
+            "kind": "thought",
+            "text": "I’m checking Git metadata and any release-related files before concluding the target is missing."
+          },
+          {
+            "kind": "thought",
+            "text": "There’s no release or hosting config in the repo, and Git only tells me the source repository, not where builds are supposed to go."
+          },
+          {
+            "kind": "thought",
+            "text": "What is the deployment target?"
+          }
+        ],
+        "usage": {
+          "inputTokens": 90154,
+          "outputTokens": 250,
+          "durationMs": 42561
+        },
+        "runId": "run_mo4lp508_k6nyqv"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "gpt-5.4",
+      "prompt": "Explain how runtime validation failures are classified by combining the implementation, the tests, and the benchmark planning docs in this repo.",
+      "output": "benchmark timeout after 60000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "gpt-5.4",
+      "prompt": "Resolve a conflict between a stale plan doc and the current implementation by checking the code.",
+      "output": "benchmark timeout after 60000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "gpt-5.4",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "output": "What is the deployment target?",
+      "toolCalls": [
+        {
+          "id": "tool_mo4lpab5_96zz0y",
+          "runId": "run_mo4lp508_k6nyqv",
+          "agentId": "gpt-5.4",
+          "toolName": "chat.thread_summary",
+          "input": {},
+          "output": {
+            "summary": "Read chat thread summary",
+            "data": {
+              "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532695630-cnsybf",
+              "summary": "Initial goal: Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.\nLatest user intent: Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.\nMessages cached: 1 (1 user, 0 assistant).\nRecent conversation:\nUser: Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere."
+            }
+          },
+          "status": "completed",
+          "startedAt": 1776532702577,
+          "completedAt": 1776532702578,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

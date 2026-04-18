@@ -181,6 +181,7 @@ export class SubAgentManager {
   spawn(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord {
     const record: SubAgentRecord = {
       id: makeSubAgentId(),
+      taskId: input.taskId ?? null,
       parentRunId,
       runId: null,
       role: input.role || 'subagent',

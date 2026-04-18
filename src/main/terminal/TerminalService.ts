@@ -3,8 +3,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import * as os from 'os';
+import { spawn } from 'child_process';
 import * as pty from 'node-pty';
-import { TerminalSessionInfo, TerminalSessionStatus, CommandState, CommandFinishResult, createDefaultCommandState } from '../../shared/types/terminal';
+import { TerminalSessionInfo, TerminalSessionStatus, CommandState, CommandFinishResult, TerminalExecResult, createDefaultCommandState } from '../../shared/types/terminal';
 import { parseOscSequences, stripAnsi, type OscEvent } from './oscParser';
 import { getShellIntegrationScript } from './shellIntegration';
 import { eventBus } from '../events/eventBus';
@@ -20,6 +21,10 @@ function resolveShell(): string {
     return process.env.COMSPEC || 'cmd.exe';
   }
   return process.env.SHELL || '/bin/bash';
+}
+
+function resolveDefaultCwd(persisted?: PersistedTerminalData): string {
+  return persisted?.lastCwd || APP_WORKSPACE_ROOT || process.env.HOME || os.homedir();
 }
 
 export class TerminalService {
@@ -54,7 +59,7 @@ export class TerminalService {
 
     const shell = resolveShell();
     const persisted = loadTerminalData();
-    const cwd = persisted.lastCwd || APP_WORKSPACE_ROOT || process.env.HOME || os.homedir();
+    const cwd = resolveDefaultCwd(persisted);
     const c = (cols && cols > 0) ? cols : 80;
     const r = (rows && rows > 0) ? rows : 24;
     const id = generateId('term');
@@ -70,8 +75,6 @@ export class TerminalService {
       exitCode: null,
       cols: c,
       rows: r,
-      persistent: false,
-      tmuxSession: null,
       restored: false,
     };
 
@@ -124,10 +127,6 @@ export class TerminalService {
     }
 
     return { ...this.session };
-  }
-
-  captureScrollback(): string {
-    return '';
   }
 
   write(data: string): void {
@@ -227,6 +226,72 @@ export class TerminalService {
     });
   }
 
+  async executeCommandIsolated(
+    command: string,
+    options: { cwd?: string; timeoutMs?: number } = {},
+  ): Promise<TerminalExecResult> {
+    const cwd = this.resolveCommandCwd(options.cwd);
+    const timeoutMs = Math.max(1, options.timeoutMs ?? 10_000);
+    const shell = resolveShell();
+
+    return new Promise<TerminalExecResult>((resolve, reject) => {
+      const startedAt = Date.now();
+      let output = '';
+      let timedOut = false;
+      let settled = false;
+      let forceKillTimer: NodeJS.Timeout | null = null;
+
+      const child = spawn(command, {
+        cwd,
+        env: { ...process.env },
+        shell,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+
+      const appendOutput = (chunk: string | Buffer) => {
+        output += chunk.toString();
+        if (output.length > this.MAX_COMMAND_OUTPUT) {
+          output = output.slice(-this.MAX_COMMAND_OUTPUT);
+        }
+      };
+
+      const finish = (exitCode: number | null) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        resolve({
+          command,
+          cwd,
+          durationMs: Date.now() - startedAt,
+          exitCode: timedOut ? null : exitCode,
+          output,
+          timedOut,
+        });
+      };
+
+      child.stdout?.on('data', appendOutput);
+      child.stderr?.on('data', appendOutput);
+      child.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        reject(error);
+      });
+      child.on('close', (exitCode) => finish(exitCode));
+
+      const timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        forceKillTimer = setTimeout(() => {
+          child.kill('SIGKILL');
+        }, 1_000);
+      }, timeoutMs);
+    });
+  }
+
   resize(cols: number, rows: number): void {
     if (!this.ptyProcess || !this.session || this.session.status !== 'running') return;
     if (cols < 1 || rows < 1) return;
@@ -277,16 +342,10 @@ export class TerminalService {
     }
   }
 
-  isPersistent(): boolean {
-    return false;
-  }
-
   persistNow(): void {
     saveTerminalData({
-      tmuxSession: null,
       lastCwd: this.session?.cwd || null,
       shell: this.session?.shell || resolveShell(),
-      persistent: false,
     });
   }
 
@@ -341,6 +400,13 @@ export class TerminalService {
       eventBus.emit(AppEventType.TERMINAL_SESSION_EXITED, { sessionId, exitCode });
       this.emitLog('info', `Terminal exited with code ${exitCode}`);
     });
+  }
+
+  private resolveCommandCwd(preferredCwd?: string): string {
+    if (preferredCwd && preferredCwd.trim()) return preferredCwd;
+    if (this.commandState.cwd.trim()) return this.commandState.cwd;
+    if (this.session?.cwd?.trim()) return this.session.cwd;
+    return resolveDefaultCwd(loadTerminalData());
   }
 
   private cleanupPty(): void {

@@ -28,24 +28,30 @@ vi.mock('../chatKnowledge/ChatKnowledgeStore', () => ({
   },
 }));
 
-import { CodexProvider } from './CodexProvider';
+import { CodexProvider } from './CodexProvider.ts';
 
 type MockChildProcess = EventEmitter & {
   stdin?: PassThrough;
   stdout: PassThrough;
   stderr: PassThrough;
   kill: ReturnType<typeof vi.fn>;
+  readStdinText: () => string;
 };
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
   child.stdin = new PassThrough();
+  const stdinChunks: Buffer[] = [];
+  child.stdin.on('data', (chunk: Buffer) => {
+    stdinChunks.push(Buffer.from(chunk));
+  });
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.kill = vi.fn(() => {
     child.emit('close', null);
     return true;
   });
+  child.readStdinText = () => Buffer.concat(stdinChunks).toString('utf8');
   return child;
 }
 
@@ -66,7 +72,7 @@ async function completeTurn(
 }
 
 function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProviderRequest {
-  return {
+  const request: AgentProviderRequest = {
     runId: 'run-1',
     agentId: PRIMARY_PROVIDER_ID,
     mode: 'unrestricted-dev',
@@ -74,10 +80,16 @@ function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProvi
     systemPrompt: 'You are a helpful assistant.',
     task: 'What is 2 + 2?',
     contextPrompt: '',
-    tools: [],
+    promptTools: [],
+    toolCatalog: [],
+    toolBindings: [],
     maxToolTurns: 2,
     ...overrides,
   };
+  request.toolCatalog = overrides.toolCatalog ?? request.promptTools;
+  request.toolBindings = overrides.toolBindings
+    ?? request.promptTools.map((tool) => ({ ...tool, state: 'callable' as const }));
+  return request;
 }
 
 describe('CodexProvider', () => {
@@ -113,7 +125,7 @@ describe('CodexProvider', () => {
     const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
     const resultPromise = provider.invoke(buildRequest({
       task: 'Inspect the workspace and answer.',
-      tools: [
+      promptTools: [
         {
           name: 'filesystem.list',
           description: 'List a directory',
@@ -179,12 +191,12 @@ describe('CodexProvider', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
       }),
     );
-    expect(executeMock).toHaveBeenCalledWith('filesystem.list', { path: '.' }, {
+    expect(executeMock).toHaveBeenCalledWith('filesystem.list', { path: '.' }, expect.objectContaining({
       runId: 'run-1',
       agentId: PRIMARY_PROVIDER_ID,
       mode: 'unrestricted-dev',
       taskId: 'task-1',
-    });
+    }));
     expect(recordToolMessageMock).toHaveBeenCalledTimes(1);
     expect(tokens).toEqual(['Found the files.']);
     expect(itemEvents).toEqual([
@@ -268,6 +280,45 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('compacts tool schemas in the planning prompt', async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const provider = new CodexProvider();
+    const resultPromise = provider.invoke(buildRequest({
+      task: 'Inspect the workspace and answer.',
+      promptTools: [
+        {
+          name: 'filesystem.list',
+          description: 'List a directory with a deliberately long description that should be compacted before being sent through the per-turn planning prompt.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              path: { type: 'string' },
+              includeHidden: { type: 'boolean' },
+              recursive: { type: 'boolean' },
+            },
+            required: ['path'],
+          },
+        },
+      ],
+    }));
+
+    await completeTurn(child, JSON.stringify({
+      kind: 'final',
+      tool_calls: [],
+      message: 'Done.',
+    }));
+    await resultPromise;
+
+    const promptText = child.readStdinText();
+    expect(promptText).toContain('Input schema: {"type":"object"');
+    expect(promptText).not.toContain('Input schema: {\n');
+    expect(promptText).toContain('# Prior Turn History');
+    expect(promptText).toContain('keep message empty unless you need a short blocker, clarification request, or material state-change note');
+  });
+
   it('expands the active tool scope after requesting a tool pack', async () => {
     const expandTurn = createMockChildProcess();
     const workTurn = createMockChildProcess();
@@ -296,7 +347,7 @@ describe('CodexProvider', () => {
     const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
     const resultPromise = provider.invoke(buildRequest({
       task: 'Load the needed tools, inspect the workspace, and answer.',
-      tools: [
+      promptTools: [
         {
           name: 'runtime.request_tool_pack',
           description: 'Request a tool pack.',
@@ -374,6 +425,265 @@ describe('CodexProvider', () => {
     expect(result.output).toBe('Expansion worked.');
   });
 
+  it('hydrates exact tools returned from runtime.search_tools without loading a whole pack', async () => {
+    const searchTurn = createMockChildProcess();
+    const workTurn = createMockChildProcess();
+    const finalTurn = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(searchTurn)
+      .mockReturnValueOnce(workTurn)
+      .mockReturnValueOnce(finalTurn);
+
+    executeMock
+      .mockResolvedValueOnce({
+        summary: 'Found 2 tool matches for "close browser tabs"',
+        data: {
+          query: 'close browser tabs',
+          matches: [
+            {
+              name: 'browser.close_tab',
+              description: 'Close one browser tab',
+              category: 'browser',
+              relatedPackIds: ['browser-automation'],
+              alreadyLoaded: false,
+              reason: 'tool name contains the query',
+            },
+            {
+              name: 'browser.get_tabs',
+              description: 'List the currently open browser tabs',
+              category: 'browser',
+              relatedPackIds: ['browser-automation'],
+              alreadyLoaded: false,
+              reason: 'description matches "tabs"',
+            },
+          ],
+          tools: ['browser.close_tab', 'browser.get_tabs'],
+          suggestedPackIds: ['browser-automation'],
+        },
+      })
+      .mockResolvedValueOnce({
+        summary: 'Closed one tab',
+        data: { closedTabId: 'tab-2' },
+      });
+
+    const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
+    const resultPromise = provider.invoke(buildRequest({
+      task: 'Close the extra browser tabs and answer.',
+      maxToolTurns: 3,
+      promptTools: [
+        {
+          name: 'runtime.search_tools',
+          description: 'Search the tool catalog.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        },
+      ],
+      toolCatalog: [
+        {
+          name: 'runtime.search_tools',
+          description: 'Search the tool catalog.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        },
+        {
+          name: 'browser.get_tabs',
+          description: 'List the currently open browser tabs',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+        {
+          name: 'browser.close_tab',
+          description: 'Close one browser tab',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { tabId: { type: 'string' } },
+            required: ['tabId'],
+          },
+        },
+      ],
+    }));
+
+    await completeTurn(
+      searchTurn,
+      JSON.stringify({
+        kind: 'tool_calls',
+        tool_calls: [
+          {
+            name: 'runtime.search_tools',
+            arguments_json: '{"query":"close browser tabs"}',
+          },
+        ],
+        message: 'Searching for the exact browser tab tools first.',
+      }),
+    );
+    await completeTurn(
+      workTurn,
+      JSON.stringify({
+        kind: 'tool_calls',
+        tool_calls: [
+          {
+            name: 'browser.close_tab',
+            arguments_json: '{"tabId":"tab-2"}',
+          },
+        ],
+        message: 'Closing the extra tab now.',
+      }),
+    );
+    await completeTurn(
+      finalTurn,
+      JSON.stringify({
+        kind: 'final',
+        tool_calls: [],
+        message: 'Only one browser tab remains open.',
+      }),
+    );
+
+    const result = await resultPromise;
+
+    expect(executeMock).toHaveBeenNthCalledWith(1, 'runtime.search_tools', { query: 'close browser tabs' }, expect.any(Object));
+    expect(executeMock).toHaveBeenNthCalledWith(2, 'browser.close_tab', { tabId: 'tab-2' }, expect.any(Object));
+    expect(result.output).toBe('Only one browser tab remains open.');
+  });
+
+  it('does not allow newly hydrated tools to execute until the next turn', async () => {
+    const searchTurn = createMockChildProcess();
+    const followupTurn = createMockChildProcess();
+    const finalTurn = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(searchTurn)
+      .mockReturnValueOnce(followupTurn)
+      .mockReturnValueOnce(finalTurn);
+
+    executeMock
+      .mockResolvedValueOnce({
+        summary: 'Found 1 tool match for "close browser tab"',
+        data: {
+          query: 'close browser tab',
+          matches: [
+            {
+              name: 'browser.close_tab',
+              description: 'Close one browser tab',
+              category: 'browser',
+              relatedPackIds: ['browser-automation'],
+              bindingState: 'discoverable',
+              callableNow: false,
+              availableNextTurn: true,
+              reason: 'tool name contains the query',
+            },
+          ],
+          tools: ['browser.close_tab'],
+          suggestedPackIds: ['browser-automation'],
+          hydration: {
+            callableNow: [],
+            availableNextTurn: ['browser.close_tab'],
+            failed: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        summary: 'Closed one tab',
+        data: { closedTabId: 'tab-2' },
+      });
+
+    const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
+    const resultPromise = provider.invoke(buildRequest({
+      task: 'Search for the close tab tool, then close the extra browser tab.',
+      maxToolTurns: 3,
+      promptTools: [
+        {
+          name: 'runtime.search_tools',
+          description: 'Search the tool catalog.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        },
+      ],
+      toolCatalog: [
+        {
+          name: 'runtime.search_tools',
+          description: 'Search the tool catalog.',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        },
+        {
+          name: 'browser.close_tab',
+          description: 'Close one browser tab',
+          inputSchema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { tabId: { type: 'string' } },
+            required: ['tabId'],
+          },
+        },
+      ],
+    }));
+
+    await completeTurn(
+      searchTurn,
+      JSON.stringify({
+        kind: 'tool_calls',
+        tool_calls: [
+          {
+            name: 'runtime.search_tools',
+            arguments_json: '{"query":"close browser tab"}',
+          },
+          {
+            name: 'browser.close_tab',
+            arguments_json: '{"tabId":"tab-2"}',
+          },
+        ],
+        message: 'Searching for the exact tab tool and then closing it.',
+      }),
+    );
+    await completeTurn(
+      followupTurn,
+      JSON.stringify({
+        kind: 'tool_calls',
+        tool_calls: [
+          {
+            name: 'browser.close_tab',
+            arguments_json: '{"tabId":"tab-2"}',
+          },
+        ],
+        message: 'Now the close-tab tool is available.',
+      }),
+    );
+    await completeTurn(
+      finalTurn,
+      JSON.stringify({
+        kind: 'final',
+        tool_calls: [],
+        message: 'The extra tab was closed on the follow-up turn.',
+      }),
+    );
+
+    const result = await resultPromise;
+
+    expect(executeMock).toHaveBeenCalledTimes(2);
+    expect(executeMock).toHaveBeenNthCalledWith(1, 'runtime.search_tools', { query: 'close browser tab' }, expect.any(Object));
+    expect(executeMock).toHaveBeenNthCalledWith(2, 'browser.close_tab', { tabId: 'tab-2' }, expect.any(Object));
+    expect(result.output).toBe('The extra tab was closed on the follow-up turn.');
+  });
+
   it('auto-expands a related tool pack when the model says the current scope is missing browser tools', async () => {
     const blockedTurn = createMockChildProcess();
     const workTurn = createMockChildProcess();
@@ -392,7 +702,7 @@ describe('CodexProvider', () => {
     const resultPromise = provider.invoke(buildRequest({
       task: 'Close the extra browser tabs and tell me what remains open.',
       maxToolTurns: 3,
-      tools: [
+      promptTools: [
         {
           name: 'runtime.request_tool_pack',
           description: 'Request a tool pack.',

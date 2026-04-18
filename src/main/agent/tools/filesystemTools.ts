@@ -6,6 +6,7 @@ import { fileKnowledgeStore } from '../../fileKnowledge/FileKnowledgeStore';
 import { appStateStore } from '../../state/appStateStore';
 import { ActionType } from '../../state/actions';
 import { generateId } from '../../../shared/utils/ids';
+import { isPathInArtifactsRoot } from '../../artifacts/storage';
 import { APP_WORKSPACE_ROOT } from '../../workspaceRoot';
 
 const DEFAULT_FILE_READ_MAX_CHARS = 6_000;
@@ -40,6 +41,12 @@ function optionalPositiveInteger(input: Record<string, unknown>, key: string): n
 
 function resolveLocalPath(rawPath: string): string {
   return path.resolve(APP_WORKSPACE_ROOT, rawPath);
+}
+
+function assertNotManagedArtifactPath(target: string): void {
+  if (isPathInArtifactsRoot(target)) {
+    throw new Error('Managed artifact paths are reserved for the artifact service.');
+  }
 }
 
 function logFileCache(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
@@ -343,6 +350,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const target = resolveLocalPath(requireString(obj, 'path'));
         const content = requireString(obj, 'content');
+        assertNotManagedArtifactPath(target);
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, content, 'utf-8');
         fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
@@ -359,6 +367,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const target = resolveLocalPath(requireString(obj, 'path'));
         const search = requireString(obj, 'search');
         const replace = String(obj.replace ?? '');
+        assertNotManagedArtifactPath(target);
         const before = fs.readFileSync(target, 'utf-8');
         if (!before.includes(search)) throw new Error(`Search text not found in ${target}`);
         const after = before.replace(search, replace);
@@ -374,6 +383,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } },
       async execute(input) {
         const target = resolveLocalPath(requireString(objectInput(input), 'path'));
+        assertNotManagedArtifactPath(target);
         fs.rmSync(target, { recursive: true, force: true });
         const removedRecords = fileKnowledgeStore.removePathTree(target);
         invalidateFilesystemCaches();
@@ -386,6 +396,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } },
       async execute(input) {
         const target = resolveLocalPath(requireString(objectInput(input), 'path'));
+        assertNotManagedArtifactPath(target);
         fs.mkdirSync(target, { recursive: true });
         invalidateFilesystemCaches();
         return { summary: `Created directory ${target}`, data: { path: target } };
@@ -399,6 +410,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const from = resolveLocalPath(requireString(obj, 'from'));
         const to = resolveLocalPath(requireString(obj, 'to'));
+        assertNotManagedArtifactPath(from);
+        assertNotManagedArtifactPath(to);
         fs.mkdirSync(path.dirname(to), { recursive: true });
         fs.renameSync(from, to);
         const stat = fs.statSync(to);

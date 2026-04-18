@@ -132,4 +132,22 @@ describe('SubAgentManager', () => {
       },
     ]);
   });
+
+  it('keeps task ownership on sub-agent records for later waits and handoffs', () => {
+    const manager = new SubAgentManager(() => createStubProvider());
+    const record = manager.spawn('parent-run', {
+      task: 'Check the deployment tab and summarize blockers',
+      taskId: 'task-123',
+      role: 'research',
+    });
+
+    expect(record.taskId).toBe('task-123');
+    expect(manager.get(record.id)?.taskId).toBe('task-123');
+    expect(manager.list('parent-run')).toEqual([
+      expect.objectContaining({
+        id: record.id,
+        taskId: 'task-123',
+      }),
+    ]);
+  });
 });

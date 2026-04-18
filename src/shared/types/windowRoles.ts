@@ -1,7 +1,7 @@
 import type { ProviderId } from './model';
 
 // Physical OS windows
-export const PHYSICAL_WINDOW_ROLES = ['command', 'execution'] as const;
+export const PHYSICAL_WINDOW_ROLES = ['command', 'execution', 'document'] as const;
 export type PhysicalWindowRole = typeof PHYSICAL_WINDOW_ROLES[number];
 
 // Logical surfaces (panes within windows)

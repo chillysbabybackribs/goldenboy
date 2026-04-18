@@ -24,6 +24,7 @@ import { agentCache } from './AgentCache';
 import { agentRunStore } from './AgentRunStore';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { executeProviderToolCall } from './providerToolRuntime';
+import { createRuntimeToolDefinitions } from './tools/runtimeTools';
 
 class SuccessfulToolLoopProvider {
   requests: AgentProviderRequest[] = [];
@@ -69,6 +70,34 @@ class FailingToolLoopProvider {
     }
 
     throw new Error('Expected terminal.exec to fail');
+  }
+}
+
+class SearchCatalogProvider {
+  requests: AgentProviderRequest[] = [];
+
+  async invoke(request: AgentProviderRequest) {
+    this.requests.push(request);
+
+    const execution = await executeProviderToolCall({
+      providerId: PRIMARY_PROVIDER_ID,
+      request,
+      toolName: 'runtime.search_tools',
+      toolInput: { query: 'close browser tab' },
+    });
+
+    if (!execution.ok) {
+      throw new Error(execution.errorMessage);
+    }
+
+    return {
+      output: execution.toolContent,
+      usage: {
+        inputTokens: 5,
+        outputTokens: 5,
+        durationMs: 5,
+      },
+    };
   }
 }
 
@@ -136,11 +165,17 @@ describe('AgentRuntime', () => {
 
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0].maxToolTurns).toBe(4);
-    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(['terminal.exec']);
+    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(['terminal.exec']);
+    expect(provider.requests[0].toolBindings).toEqual([
+      expect.objectContaining({
+        name: 'terminal.exec',
+        state: 'callable',
+      }),
+    ]);
     expect(result.runId).toBeTruthy();
     expect(result.output).toContain('"summary":"Ran echo ok"');
     expect(result.output).toContain('STATUS: VALID');
-    expect(statusUpdates).toEqual(['tool-done:Ran echo ok']);
+    expect(statusUpdates).toEqual(['tool-done:exit 0: ok']);
     expect(recordToolMessageMock).toHaveBeenCalledWith(
       'task-runtime-success',
       expect.stringContaining('"tool": "terminal.exec"'),
@@ -274,8 +309,14 @@ describe('AgentRuntime', () => {
     });
 
     expect(provider.requests).toHaveLength(1);
-    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
+    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
       'browser.get_tabs',
+    ]));
+    expect(provider.requests[0].toolBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'browser.get_tabs',
+        state: 'callable',
+      }),
     ]));
   });
 
@@ -369,7 +410,7 @@ describe('AgentRuntime', () => {
     });
 
     expect(provider.requests).toHaveLength(1);
-    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
+    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
       'browser.create_tab',
     ]));
   });
@@ -379,5 +420,49 @@ describe('AgentRuntime', () => {
       'Search the web for the latest browser tool issue and summarize it.',
       ['runtime.request_tool_pack', 'runtime.list_tool_packs', 'filesystem.read'],
     )).toThrow('Browser task blocked: initial MCP tool scope for research did not expose any browser.* tools.');
+  });
+
+  it('keeps a broader hydratable catalog than the current callable scope when configured', async () => {
+    agentToolExecutor.registerMany(createRuntimeToolDefinitions());
+    agentToolExecutor.register({
+      name: 'browser.close_tab',
+      description: 'Close one browser tab',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          tabId: { type: 'string' },
+        },
+        required: ['tabId'],
+      },
+      execute: async () => ({
+        summary: 'Closed one tab',
+        data: { closedTabId: 'tab-2' },
+      }),
+    });
+
+    const provider = new SearchCatalogProvider();
+    const runtime = new AgentRuntime(provider);
+    const result = await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: 'Inspect the runtime registry for an exact missing tool name.',
+      taskId: 'task-runtime-hydratable-catalog',
+      allowedTools: ['runtime.search_tools'],
+      hydratableTools: ['runtime.search_tools', 'browser.close_tab'],
+      restrictToolCatalogToAllowedTools: true,
+      canSpawnSubagents: false,
+      maxToolTurns: 4,
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].promptTools.map(toolDef => toolDef.name)).toEqual(['runtime.search_tools']);
+    expect(provider.requests[0].toolCatalog.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
+      'runtime.search_tools',
+      'browser.close_tab',
+    ]));
+    expect(provider.requests[0].toolCatalog).toHaveLength(2);
+    expect(result.output).toContain('browser.close_tab');
   });
 });

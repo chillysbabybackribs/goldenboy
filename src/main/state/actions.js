@@ -1,0 +1,32 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ActionType = void 0;
+var ActionType;
+(function (ActionType) {
+    ActionType["SET_WINDOW_BOUNDS"] = "SET_WINDOW_BOUNDS";
+    ActionType["SET_WINDOW_FOCUSED"] = "SET_WINDOW_FOCUSED";
+    ActionType["SET_WINDOW_VISIBLE"] = "SET_WINDOW_VISIBLE";
+    ActionType["SET_EXECUTION_SPLIT"] = "SET_EXECUTION_SPLIT";
+    ActionType["ADD_TASK"] = "ADD_TASK";
+    ActionType["DELETE_TASK"] = "DELETE_TASK";
+    ActionType["UPDATE_TASK"] = "UPDATE_TASK";
+    ActionType["LINK_TASK_ARTIFACT"] = "LINK_TASK_ARTIFACT";
+    ActionType["UNLINK_TASK_ARTIFACT"] = "UNLINK_TASK_ARTIFACT";
+    ActionType["SET_ACTIVE_TASK"] = "SET_ACTIVE_TASK";
+    ActionType["ADD_ARTIFACT"] = "ADD_ARTIFACT";
+    ActionType["DELETE_ARTIFACT"] = "DELETE_ARTIFACT";
+    ActionType["UPDATE_ARTIFACT"] = "UPDATE_ARTIFACT";
+    ActionType["SET_ACTIVE_ARTIFACT"] = "SET_ACTIVE_ARTIFACT";
+    ActionType["ADD_LOG"] = "ADD_LOG";
+    ActionType["SET_SURFACE_STATUS"] = "SET_SURFACE_STATUS";
+    ActionType["SET_TERMINAL_SESSION"] = "SET_TERMINAL_SESSION";
+    ActionType["SET_TERMINAL_COMMAND"] = "SET_TERMINAL_COMMAND";
+    ActionType["SET_BROWSER_RUNTIME"] = "SET_BROWSER_RUNTIME";
+    ActionType["ADD_SURFACE_ACTION"] = "ADD_SURFACE_ACTION";
+    ActionType["UPDATE_SURFACE_ACTION"] = "UPDATE_SURFACE_ACTION";
+    ActionType["SET_PROVIDER_RUNTIME"] = "SET_PROVIDER_RUNTIME";
+    ActionType["ACCUMULATE_TOKEN_USAGE"] = "ACCUMULATE_TOKEN_USAGE";
+    ActionType["RESET_TOKEN_USAGE"] = "RESET_TOKEN_USAGE";
+    ActionType["REPLACE_STATE"] = "REPLACE_STATE";
+})(ActionType || (exports.ActionType = ActionType = {}));
+//# sourceMappingURL=actions.js.map

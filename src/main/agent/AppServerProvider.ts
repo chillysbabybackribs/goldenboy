@@ -14,13 +14,19 @@ import type {
   AgentToolName,
 } from './AgentTypes';
 import {
+  applyAutoExpandedToolPack,
+  applyRuntimeToolExpansion,
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
   describeProviderToolCall,
+  formatAutoExpandedToolPackLines,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
-  resolveToolPackExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
+import {
+  AgentToolBindingStore,
+  createRequestToolBindingStore,
+  listCallableRequestTools,
+} from './toolBindingScope';
 import type { AppServerProcess } from './AppServerProcess';
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -86,6 +92,21 @@ function fromMcpName(mcpName: string): string {
 
 function toMcpName(toolName: string): string {
   return toolName.replace(/\./g, '__');
+}
+
+function shouldEmitThoughtStatus(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (trimmed.endsWith('?')) return true;
+
+  const lower = trimmed.toLowerCase();
+  if (/(^|\b)(need|needs|choose|confirm|select|pick|provide|enter|paste|upload|share|tell me|let me know|which|what|where|when)(\b|$)/.test(lower)) {
+    return true;
+  }
+  if (/(^|\b)(blocked|cannot|can't|unable|missing|permission|permissions|sign in|login|log in|authenticate|approval required)(\b|$)/.test(lower)) {
+    return true;
+  }
+  return false;
 }
 
 // ─── WebSocket Message Types ─────────────────────────────────────────────
@@ -207,16 +228,14 @@ export class AppServerProvider implements AgentProvider {
     let inputTokens = 0;
     let outputTokens = 0;
     const codexItems: CodexItem[] = [];
-    let currentTools = [...request.tools];
-    const toolCatalog = request.toolCatalog?.length ? request.toolCatalog : request.tools;
+    const toolCatalog = request.toolCatalog;
+    const toolBindingStore = createRequestToolBindingStore(request);
     const maxToolTurns = normalizeProviderMaxToolTurns(
       request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS,
     );
 
     const ws = this.ws;
     if (!ws) throw new Error('AppServerProvider: not connected');
-
-    this.writeContextFile(request);
 
     // Acquire or resume a thread
     const taskId = request.taskId ?? request.runId;
@@ -234,15 +253,17 @@ export class AppServerProvider implements AgentProvider {
     // Turn loop
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
+      const callableTools = toolBindingStore.beginTurn();
 
       const turnInput = nextTurnInput ?? (turn === 0 ? firstTurnInput : accumulatedMessage);
       nextTurnInput = null;
+      this.writeContextFile(request, callableTools);
 
       const turnResult = await this.runOneTurn(ws, {
         threadId,
         task: turnInput,
         request,
-        currentTools,
+        currentTools: callableTools,
         toolCatalog,
       });
       if (this.aborted) throw new Error('Task cancelled by user.');
@@ -256,33 +277,20 @@ export class AppServerProvider implements AgentProvider {
       }
 
       // Apply explicit tool pack expansion (from runtime.request_tool_pack)
-      if (turnResult.toolPackExpanded && turnResult.expandedTools && turnResult.expansion) {
-        currentTools = mergeExpandedTools(currentTools, toolCatalog, turnResult.expansion);
-        // Update context file so MCP shim exposes the expanded tool set on the next turn
-        this.writeContextFile(request, currentTools);
+      if (turnResult.toolPackExpanded && turnResult.expansion) {
+        toolBindingStore.queueTools(turnResult.expansion.tools);
       }
 
       // Check for auto tool pack expansion
       if (turnResult.kind === 'final') {
-        const autoExpansion = resolveAutoExpandedToolPack(
-          turnResult.message,
-          currentTools,
+        const autoExpansion = applyAutoExpandedToolPack({
+          message: turnResult.message,
           toolCatalog,
-        );
+          toolBindingStore,
+        });
         if (autoExpansion) {
-          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
-          // Update context file so MCP shim exposes the expanded tool set on the next turn
-          this.writeContextFile(request, currentTools);
           request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
-          const expandedNames = autoExpansion.scope === 'all'
-            ? ['all eligible tools']
-            : autoExpansion.tools;
-          nextTurnInput = [
-            `Host auto-expanded tool pack "${autoExpansion.pack}".`,
-            `Reason: ${autoExpansion.reason}`,
-            `Description: ${autoExpansion.description}`,
-            `Expanded tools: ${expandedNames.join(', ')}`,
-          ].join('\n');
+          nextTurnInput = formatAutoExpandedToolPackLines(autoExpansion, { includeCallableStatus: true }).join('\n');
           continue;
         }
 
@@ -291,6 +299,7 @@ export class AppServerProvider implements AgentProvider {
           request,
           itemId: `${this.itemPrefix('final')}-${Date.now()}`,
           text: turnResult.message,
+          emitToken: false,
         });
         codexItems.push(finalItem);
 
@@ -313,6 +322,7 @@ export class AppServerProvider implements AgentProvider {
       request,
       itemId: `${this.itemPrefix('final')}-${Date.now()}`,
       text: accumulatedMessage || 'Max tool turns reached without a final answer.',
+      emitToken: false,
     });
     codexItems.push(finalItem);
 
@@ -468,8 +478,8 @@ export class AppServerProvider implements AgentProvider {
       threadId: string;
       task: string;
       request: AgentProviderRequest;
-      currentTools: AgentProviderRequest['tools'];
-      toolCatalog: AgentProviderRequest['tools'];
+      currentTools: AgentProviderRequest['promptTools'];
+      toolCatalog: AgentProviderRequest['toolCatalog'];
     },
   ): Promise<{
     kind: 'final' | 'tool_calls';
@@ -478,19 +488,20 @@ export class AppServerProvider implements AgentProvider {
     outputTokens: number;
     toolPackExpanded: boolean;
     expansion?: { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] };
-    expandedTools?: AgentProviderRequest['tools'];
+    expandedTools?: AgentProviderRequest['toolCatalog'];
     codexItems: CodexItem[];
-  }> {
+    }> {
     const { threadId, task, request, currentTools, toolCatalog } = params;
 
     return new Promise((resolve, reject) => {
       let message = '';
+      let streamThoughts = false;
+      let pendingThoughtText = '';
       let lastInputTokens = 0;
       let lastOutputTokens = 0;
       let toolsCalled = false;
       let toolPackExpanded = false;
       let expansion: { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | undefined;
-      let expandedTools: AgentProviderRequest['tools'] | undefined;
       const turnCodexItems: CodexItem[] = [];
 
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -513,6 +524,15 @@ export class AppServerProvider implements AgentProvider {
 
       const handler = (event: MessageEvent): void => {
         try {
+          const flushPendingThoughtText = (): void => {
+            const text = pendingThoughtText.trim();
+            if (!text) return;
+            if (shouldEmitThoughtStatus(text)) {
+              request.onStatus?.(`thought:${text}`);
+            }
+            pendingThoughtText = '';
+          };
+
           resetTimer();
           const raw = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
@@ -529,6 +549,14 @@ export class AppServerProvider implements AgentProvider {
             case 'item/agentMessage/delta': {
               const delta = typeof params.delta === 'string' ? params.delta : '';
               message += delta;
+              if (streamThoughts) {
+                pendingThoughtText += delta;
+                if (/[.!?]\s*$|\n\s*$/.test(pendingThoughtText) || pendingThoughtText.length >= 160) {
+                  flushPendingThoughtText();
+                }
+              } else {
+                request.onToken?.(delta);
+              }
               break;
             }
 
@@ -537,6 +565,13 @@ export class AppServerProvider implements AgentProvider {
                 ? params.item as WsMsg
                 : null;
               if (item?.type === 'mcpToolCall') {
+                if (!toolsCalled) {
+                  if (message.trim()) {
+                    request.onStatus?.('thought-migrate');
+                  }
+                  streamThoughts = true;
+                }
+                flushPendingThoughtText();
                 toolsCalled = true;
                 const rawToolName = typeof item.tool === 'string' ? item.tool : '';
                 const toolName = fromMcpName(rawToolName);
@@ -601,23 +636,24 @@ export class AppServerProvider implements AgentProvider {
                 request.onItem?.({ item: completedItem, eventType: 'item.completed' });
                 turnCodexItems.push(completedItem);
 
-                // Check for tool pack expansion from runtime.request_tool_pack
-                if (toolName === 'runtime.request_tool_pack' && !error && result) {
+                // Check for runtime-driven scope expansion (tool search or pack load)
+                if ((toolName === 'runtime.request_tool_pack' || toolName === 'runtime.search_tools') && !error && result) {
                   const toolResult = {
                     summary: '',
                     data: (typeof result === 'object' && result !== null)
                       ? result as Record<string, unknown>
                       : {},
                   };
-                  const exp = resolveToolPackExpansion(
-                    { toolCatalog },
-                    toolName as AgentToolName,
-                    toolResult,
-                  );
+                  const transientToolBindingStore = AgentToolBindingStore.fromTools(currentTools, toolCatalog);
+                  const exp = applyRuntimeToolExpansion({
+                    request: { toolCatalog },
+                    toolBindingStore: transientToolBindingStore,
+                    toolName: toolName as AgentToolName,
+                    result: toolResult,
+                  });
                   if (exp) {
                     toolPackExpanded = true;
                     expansion = exp;
-                    expandedTools = mergeExpandedTools(currentTools, toolCatalog, exp);
                   }
                 }
               }
@@ -640,6 +676,7 @@ export class AppServerProvider implements AgentProvider {
             }
 
             case 'turn/completed': {
+              flushPendingThoughtText();
               cleanup();
               resolve({
                 kind: toolsCalled ? 'tool_calls' : 'final',
@@ -648,7 +685,6 @@ export class AppServerProvider implements AgentProvider {
                 outputTokens: lastOutputTokens,
                 toolPackExpanded,
                 expansion,
-                expandedTools,
                 codexItems: turnCodexItems,
               });
               break;
@@ -703,7 +739,7 @@ export class AppServerProvider implements AgentProvider {
     currentTools?: Array<{ name: string }>,
   ): void {
     try {
-      const toolNames = (currentTools ?? request.tools).map((t) => t.name);
+      const toolNames = (currentTools ?? listCallableRequestTools(request)).map((t) => t.name);
       fs.writeFileSync(
         this.contextPath,
         JSON.stringify({
@@ -712,6 +748,7 @@ export class AppServerProvider implements AgentProvider {
           mode: request.mode,
           taskId: request.taskId,
           toolNames,
+          toolCatalog: request.toolCatalog,
         }, null, 2),
         'utf-8',
       );

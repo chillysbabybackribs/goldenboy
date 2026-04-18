@@ -24,6 +24,7 @@ export const debugToolPack: ToolPackManifest = {
     'terminal.spawn',
     'terminal.write',
     'terminal.kill',
+    'browser.evaluate_js',
     'chat.thread_summary',
   ],
   relatedPackIds: ['terminal-heavy', 'file-edit', 'file-cache', 'browser-advanced'],

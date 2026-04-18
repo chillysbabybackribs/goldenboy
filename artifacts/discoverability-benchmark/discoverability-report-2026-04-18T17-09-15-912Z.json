@@ -1,0 +1,182 @@
+{
+  "generatedAt": "2026-04-18T17:09:15.912Z",
+  "providers": [
+    "gpt-5.4",
+    "haiku"
+  ],
+  "scenarios": [
+    "cross-source-summary",
+    "stale-doc-vs-current-code",
+    "true-missing-information"
+  ],
+  "report": "=== Discoverability Audit ===\n\nProvider     Scenarios  Strong   Soft     Fail     UnneededQ  CorrectEsc Correct  Grounded  MinPath\n---------------------------------------------------------------------------------------------------\ngpt-5.4      0          0        0        0        0%         0%         0%       0%        0%\nhaiku        0          0        0        0        0%         0%         0%       0%        0%\n\n## gpt-5.4\nUnavailable runs:\n- cross-source-summary: benchmark unavailable: invocation timeout\n- stale-doc-vs-current-code: benchmark unavailable: invocation timeout\n- true-missing-information: benchmark unavailable: invocation timeout\n\n\n## haiku\nUnavailable runs:\n- cross-source-summary: provider unavailable: billing/credit issue\n- stale-doc-vs-current-code: provider unavailable: billing/credit issue\n- true-missing-information: provider unavailable: billing/credit issue\n\n\nScenarios without any submitted runs: local-config-lookup, tests-infer-behavior, runtime-status-from-logs",
+  "runs": [
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-cross-source-summary-gpt-5.4-1776532110078-96b9ml",
+      "prompt": "Explain how runtime validation failures are classified by combining the implementation, the tests, and the benchmark planning docs in this repo.",
+      "result": {
+        "taskId": "discoverability-live-cross-source-summary-gpt-5.4-1776532110078-96b9ml",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 15000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 15000
+        }
+      }
+    },
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-cross-source-summary-haiku-1776532125114-jjwusx",
+      "prompt": "Explain how runtime validation failures are classified by combining the implementation, the tests, and the benchmark planning docs in this repo.",
+      "result": {
+        "taskId": "discoverability-live-cross-source-summary-haiku-1776532125114-jjwusx",
+        "providerId": "haiku",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CaBc4ADMcUvuVtT3ESqgT\"}",
+        "processEntries": [],
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-stale-doc-vs-current-code-gpt-5.4-1776532125295-utr3dz",
+      "prompt": "Resolve a conflict between a stale plan doc and the current implementation by checking the code.",
+      "result": {
+        "taskId": "discoverability-live-stale-doc-vs-current-code-gpt-5.4-1776532125295-utr3dz",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 15000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 15000
+        }
+      }
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-stale-doc-vs-current-code-haiku-1776532140307-6yvfxo",
+      "prompt": "Resolve a conflict between a stale plan doc and the current implementation by checking the code.",
+      "result": {
+        "taskId": "discoverability-live-stale-doc-vs-current-code-haiku-1776532140307-6yvfxo",
+        "providerId": "haiku",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CaBc5HwUQh5985iv8Lu6J\"}",
+        "processEntries": [],
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 0
+        }
+      }
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "gpt-5.4",
+      "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532140737-j5dh8c",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "result": {
+        "taskId": "discoverability-live-true-missing-information-gpt-5.4-1776532140737-j5dh8c",
+        "providerId": "gpt-5.4",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "benchmark timeout after 15000ms",
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 15000
+        }
+      }
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "haiku",
+      "taskId": "discoverability-live-true-missing-information-haiku-1776532155746-76ltaq",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "result": {
+        "taskId": "discoverability-live-true-missing-information-haiku-1776532155746-76ltaq",
+        "providerId": "haiku",
+        "success": false,
+        "output": "",
+        "artifacts": [],
+        "error": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CaBc6R9q6RZupkx7vFo3Z\"}",
+        "processEntries": [],
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "durationMs": 0
+        }
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "gpt-5.4",
+      "prompt": "Explain how runtime validation failures are classified by combining the implementation, the tests, and the benchmark planning docs in this repo.",
+      "output": "benchmark timeout after 15000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    },
+    {
+      "scenarioId": "cross-source-summary",
+      "providerId": "haiku",
+      "prompt": "Explain how runtime validation failures are classified by combining the implementation, the tests, and the benchmark planning docs in this repo.",
+      "output": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CaBc4ADMcUvuVtT3ESqgT\"}",
+      "toolCalls": [],
+      "unavailableReason": "provider unavailable: billing/credit issue"
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "gpt-5.4",
+      "prompt": "Resolve a conflict between a stale plan doc and the current implementation by checking the code.",
+      "output": "benchmark timeout after 15000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    },
+    {
+      "scenarioId": "stale-doc-vs-current-code",
+      "providerId": "haiku",
+      "prompt": "Resolve a conflict between a stale plan doc and the current implementation by checking the code.",
+      "output": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CaBc5HwUQh5985iv8Lu6J\"}",
+      "toolCalls": [],
+      "unavailableReason": "provider unavailable: billing/credit issue"
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "gpt-5.4",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "output": "benchmark timeout after 15000ms",
+      "toolCalls": [],
+      "unavailableReason": "benchmark unavailable: invocation timeout"
+    },
+    {
+      "scenarioId": "true-missing-information",
+      "providerId": "haiku",
+      "prompt": "Proceed as far as possible, then ask for the single missing deployment target only if it is not discoverable anywhere.",
+      "output": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CaBc6R9q6RZupkx7vFo3Z\"}",
+      "toolCalls": [],
+      "unavailableReason": "provider unavailable: billing/credit issue"
+    }
+  ]
+}

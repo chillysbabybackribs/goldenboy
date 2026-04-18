@@ -22,6 +22,14 @@ function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
 }
 
+function requireObjectInput(input: unknown, toolName: string): Record<string, unknown> {
+  if (typeof input === 'object' && input !== null && !Array.isArray(input)) {
+    return input as Record<string, unknown>;
+  }
+  const received = input === null ? 'null' : Array.isArray(input) ? 'array' : typeof input;
+  throw new Error(`Invalid input for ${toolName}: input must be an object; got ${received}.`);
+}
+
 function requireString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== 'string' || value.trim() === '') {
@@ -149,6 +157,30 @@ function queryTerms(query: string): string[] {
   ));
 }
 
+function currentSearchYear(): number {
+  return new Date().getFullYear();
+}
+
+function hasExplicitYear(query: string): boolean {
+  return /\b(?:19|20)\d{2}\b/.test(query);
+}
+
+function isFreshnessSensitiveQuery(query: string): boolean {
+  const normalized = query.toLowerCase();
+  return /\b(latest|current|today|recent|newest|up[- ]?to[- ]?date|breaking|news|release(?: notes?)?|pricing|price|cost|version|docs?|documentation|policy|policies|law|laws|regulation|regulations|guidance|schedule|scores?)\b/.test(normalized)
+    && !hasExplicitYear(query);
+}
+
+function extractReferencedYears(input: Array<string | undefined>): number[] {
+  const years = new Set<number>();
+  for (const text of input) {
+    for (const match of (text || '').match(/\b(?:19|20)\d{2}\b/g) || []) {
+      years.add(Number(match));
+    }
+  }
+  return Array.from(years).sort((a, b) => b - a);
+}
+
 function scoreEvidence(input: {
   query: string;
   title?: string;
@@ -156,6 +188,7 @@ function scoreEvidence(input: {
   summary?: string;
   keyFacts?: string[];
   matchSnippets?: string[];
+  dates?: string[];
 }): { score: number; reasons: string[]; sufficient: boolean } {
   const terms = queryTerms(input.query);
   const titleUrl = `${input.title || ''} ${input.url || ''}`.toLowerCase();
@@ -186,10 +219,37 @@ function scoreEvidence(input: {
     reasons.push('structured page facts');
   }
 
+  const freshnessSensitive = isFreshnessSensitiveQuery(input.query);
+  const currentYear = currentSearchYear();
+  const referencedYears = extractReferencedYears([
+    input.title,
+    input.url,
+    input.summary,
+    ...(input.keyFacts || []),
+    ...(input.matchSnippets || []),
+    ...(input.dates || []),
+  ]);
+  const newestYear = referencedYears[0] ?? null;
+  if (freshnessSensitive && newestYear !== null) {
+    if (newestYear >= currentYear) {
+      score += 5;
+      reasons.push(`current-year evidence (${newestYear})`);
+    } else if (newestYear === currentYear - 1) {
+      score += 1;
+      reasons.push(`recent evidence (${newestYear})`);
+    } else {
+      score -= 4;
+      reasons.push(`stale evidence (${newestYear})`);
+    }
+  }
+
   return {
     score,
     reasons,
-    sufficient: score >= 9 || (matchedTerms.length >= Math.min(4, Math.max(2, terms.length)) && score >= 7),
+    sufficient: freshnessSensitive
+      ? ((newestYear !== null && newestYear >= currentYear && score >= 9)
+        || (matchedTerms.length >= Math.min(4, Math.max(2, terms.length)) && newestYear !== null && newestYear >= currentYear && score >= 8))
+      : (score >= 9 || (matchedTerms.length >= Math.min(4, Math.max(2, terms.length)) && score >= 7)),
   };
 }
 
@@ -376,7 +436,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
       async execute(input) {
         requireBrowserCreated();
-        const query = requireString(objectInput(input), 'query');
+        const query = requireString(requireObjectInput(input, 'browser.search_web'), 'query');
         const result = await runBrowserOperation('browser.search-web', { query }, { invalidateCache: true });
         logBrowserCache(`Opened web search for "${query}"`);
         return result;
@@ -399,7 +459,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
       async execute(input, context) {
         requireBrowserCreated();
-        const obj = objectInput(input);
+        const obj = requireObjectInput(input, 'browser.research_search');
         const query = requireString(obj, 'query');
         const resultLimit = Math.min(optionalNumber(obj, 'resultLimit', 8), 12);
         const maxPages = Math.min(
@@ -419,11 +479,8 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const searchTabId = searchState.activeTabId;
         if (!searchTabId) throw new Error('No active browser tab after web search');
 
-        progress('caching the search page');
-        const [searchPage, searchResults] = await Promise.all([
-          cachePageForTab(pageExtractor, searchTabId),
-          browserService.extractSearchResults(searchTabId, resultLimit),
-        ]);
+        progress('extracting search results');
+        const searchResults = await browserService.extractSearchResults(searchTabId, resultLimit);
         const defaultRankedResults = {
           results: searchResults,
           modelId: null,
@@ -443,10 +500,6 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const rankedSearchResults = ranked.results.map(result => {
           const original = searchResults.find(item => item.index === result.index);
           return original || result;
-        });
-        const cacheMatches = pageKnowledgeStore.answerFromCache(query, {
-          tabId: searchTabId,
-          limit: 4,
         });
 
         const openedPages: Array<Record<string, unknown>> = [];
@@ -560,12 +613,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             maxPages,
             stopWhenAnswerFound,
             minEvidenceScore,
-            searchPage: {
-              tabId: searchPage.tabId,
-              pageId: searchPage.id,
-              title: searchPage.title,
-              url: searchPage.url,
-              chunkCount: searchPage.chunkIds.length,
+            searchSurface: {
+              tabId: searchTabId,
+              title: searchState.navigation.title,
+              url: searchState.navigation.url,
             },
             searchResults: rankedSearchResults.map(result => ({
               index: result.index,
@@ -573,12 +624,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
               url: result.url,
               snippet: compactText(result.snippet, 180),
             })),
-            searchPageSuggestedChunkIds: cacheMatches.suggestedChunkIds,
             openedPages,
             skippedResults,
             nextStep: openedPages.length > 0
-              ? 'Answer only from openedPages evidence or read suggested chunk ids with browser.read_cached_chunk.'
-              : 'Open a result or inspect the search page before answering.',
+              ? 'Answer only from openedPages evidence or open another result if more evidence is needed.'
+              : 'Open a result before answering.',
           },
         };
       },
@@ -637,7 +687,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.close_tab',
-      description: 'Close one or more browser tabs by id. Use browser.get_tabs first when tab ids are unknown, and read browser.get_tabs again before claiming the final tab state.',
+      description: 'Close one or more browser tabs by id. The browser keeps one tab alive; closing the final tab navigates it to the configured homepage (Google by default). Treat a single remaining homepage tab as the expected floor state, and use browser.get_tabs before claiming the final tab state.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -655,13 +705,24 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
 
         for (const tabId of ids) {
           await runBrowserOperation('browser.close-tab', { tabId }, { invalidateCache: true });
+          // Add 100ms delay between close operations to ensure proper synchronization
+          if (ids.length > 1) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
         }
+        const tabs = browserService.getTabs();
+        const homepage = browserService.getSettings().homepage;
+        const retainedLastTabId = ids.find((tabId) => tabs.some((tab) => tab.id === tabId)) ?? null;
         return {
-          summary: `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`,
+          summary: retainedLastTabId && tabs.length === 1
+            ? `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}; retained one homepage tab`
+            : `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`,
           data: {
             tabIds: ids,
+            homepage,
+            retainedLastTabId,
             activeTabId: browserService.getState().activeTabId,
-            tabs: browserService.getTabs(),
+            tabs,
           },
         };
       },
@@ -1217,7 +1278,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.evaluate_js',
-      description: 'Evaluate JavaScript in the active browser page. Use for inspection only unless the user asks to manipulate page state.',
+      description: 'Unsafe diagnostic escape hatch. Evaluate JavaScript in the active page outside canonical browser-operation semantics. Use for inspection/debugging unless the user explicitly asks to mutate page state.',
       inputSchema: {
         type: 'object',
         required: ['expression'],
@@ -1233,7 +1294,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         if (expression.length > 4000) throw new Error('JavaScript expression is too long');
         const result = await browserService.executeInPage(expression, optionalString(obj, 'tabId'));
         return {
-          summary: result.error ? `JavaScript evaluation failed: ${result.error}` : 'Evaluated JavaScript',
+          summary: result.error ? `Unsafe JavaScript evaluation failed: ${result.error}` : 'Executed unsafe JavaScript evaluation',
           data: result,
         };
       },
