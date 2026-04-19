@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { ProviderId } from '../../shared/types/model';
+import type { CodexReasoningEffort, ProviderId } from '../../shared/types/model';
 import type { AgentProvider, AgentProviderRequest, AgentProviderResult } from './AgentTypes';
 import type { AppServerProcess } from './AppServerProcess';
 import { AppServerProcess as ManagedAppServerProcess } from './AppServerProcess';
@@ -11,6 +11,7 @@ import { V2ToolBridge } from './V2ToolBridge';
 type AppServerBackedProviderOptions = {
   providerId: ProviderId;
   modelId: string;
+  reasoningEffort?: CodexReasoningEffort;
   process?: AppServerProcess;
   wsPort?: number;
 };
@@ -100,13 +101,19 @@ export class AppServerBackedProvider implements AgentProvider {
 
     try {
       const shimPath = path.join(__dirname, 'v2-mcp-shim.js');
-      const process = new ManagedAppServerProcess(bridge.getPort(), shimPath, contextPath);
-      await process.start();
-      const { wsPort } = await process.waitUntilReady();
+      const configuredProcess = new ManagedAppServerProcess(
+        bridge.getPort(),
+        shimPath,
+        contextPath,
+        this.options.modelId,
+        this.options.reasoningEffort,
+      );
+      await configuredProcess.start();
+      const { wsPort } = await configuredProcess.waitUntilReady();
       this.ownedBridge = bridge;
-      this.ownedProcess = process;
+      this.ownedProcess = configuredProcess;
       this.ownedContextPath = contextPath;
-      return { process, wsPort };
+      return { process: configuredProcess, wsPort };
     } catch (error) {
       await bridge.stop().catch(() => undefined);
       try {

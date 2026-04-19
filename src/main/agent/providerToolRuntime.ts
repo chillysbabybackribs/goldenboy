@@ -1,5 +1,6 @@
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
-import type { AnyProviderId, CodexItem } from '../../shared/types/model';
+import { isProviderId } from '../../shared/types/model';
+import type { AnyProviderId, CodexItem, ProviderId } from '../../shared/types/model';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import type { AgentProviderRequest, AgentToolName, AgentToolResult } from './AgentTypes';
@@ -7,12 +8,17 @@ import { resolveAutoExpandedToolPack, resolveRequestedToolPack } from './toolPac
 import type { AgentToolBindingStore } from './toolBindingScope';
 import { listCallableRequestTools } from './toolBindingScope';
 import path from 'path';
+import { runtimeLedgerStore } from '../models/runtimeLedgerStore';
+import {
+  estimateTokenCountFromText,
+  estimateTokenCountFromValue,
+} from './tokenUsageObservability';
 
 export const DEFAULT_PROVIDER_MAX_TOOL_TURNS = 20;
 export const MAX_PROVIDER_TOOL_TURNS = 40;
 
-const MAX_TOOL_RESULT_CHARS = 8_000;
-const MAX_TOOL_MEMORY_CHARS = 50_000;
+const MAX_TOOL_RESULT_CHARS = 3_000;
+const MAX_TOOL_MEMORY_CHARS = 16_000;
 const DEFAULT_PROVIDER_EMPTY_RESPONSE = 'The run ended without a text response. Please retry the task; no final answer was produced.';
 
 type ProviderToolCallItem = Extract<CodexItem, { type: 'mcp_tool_call' }>;
@@ -312,6 +318,7 @@ export async function executeProviderToolCall(
   try {
     const currentTools = input.currentTools ?? listCallableRequestTools(input.request);
     const toolCatalog = input.request.toolCatalog;
+    const toolInputTokens = estimateTokenCountFromValue(input.toolInput);
     const result = await agentToolExecutor.execute(input.toolName, input.toolInput, {
       runId: input.request.runId,
       agentId: input.request.agentId,
@@ -322,16 +329,36 @@ export async function executeProviderToolCall(
       onProgress: input.request.onStatus,
     });
 
+    const toolContent = formatToolResultForModel(result);
     recordToolMemory(input, { result });
+    recordProviderToolTokenUsage(input, {
+      toolName: input.toolName,
+      status: 'success',
+      toolInputTokens,
+      toolResultTokens: estimateTokenCountFromText(toolContent),
+      toolResultRawTokens: estimateTokenCountFromValue(result),
+      toolResultLength: toolContent.length,
+      toolResultPreview: toolContent,
+    });
 
     return {
       ok: true,
       result,
       resultDescription: describeProviderToolResult(result, false),
-      toolContent: formatToolResultForModel(result),
+      toolContent,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const toolInputTokens = estimateTokenCountFromValue(input.toolInput);
+    recordProviderToolTokenUsage(input, {
+      toolName: input.toolName,
+      status: 'error',
+      toolInputTokens,
+      toolResultTokens: estimateTokenCountFromText(errorMessage),
+      toolResultRawTokens: estimateTokenCountFromText(errorMessage),
+      toolResultLength: errorMessage.length,
+      toolResultPreview: errorMessage,
+    });
     recordToolMemory(input, { error: errorMessage });
     return {
       ok: false,
@@ -398,6 +425,37 @@ function recordToolMemory(
     input.providerId,
     input.request.runId,
   );
+}
+
+function recordProviderToolTokenUsage(
+  input: ExecuteProviderToolCallInput,
+  payload: {
+    toolName: AgentToolName;
+    status: 'success' | 'error';
+    toolInputTokens: number;
+    toolResultTokens: number;
+    toolResultRawTokens: number;
+    toolResultLength: number;
+    toolResultPreview: string;
+  },
+): void {
+  const ledgerProviderId: ProviderId | undefined = isProviderId(input.providerId) ? input.providerId : undefined;
+  runtimeLedgerStore.recordToolEvent({
+    taskId: input.request.taskId,
+    runId: input.request.runId,
+    providerId: ledgerProviderId,
+    summary: `Tool token accounting: ${payload.toolName}`,
+    metadata: {
+      category: 'tool-call',
+      status: payload.status,
+      toolName: payload.toolName,
+      toolInputTokens: payload.toolInputTokens,
+      toolResultTokens: payload.toolResultTokens,
+      toolResultRawTokens: payload.toolResultRawTokens,
+      toolResultLength: payload.toolResultLength,
+      toolResultPreview: payload.toolResultPreview.slice(0, 260),
+    },
+  });
 }
 
 function createProviderToolCallItem(

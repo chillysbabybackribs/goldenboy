@@ -115,7 +115,8 @@
                 </div>
                 <!-- Center: model selector -->
                 <div class="cc-model-selector" id="modelSelector" role="group" aria-label="Select model">
-                  <button class="cc-model-btn" id="modelBtnPrimary" type="button" data-owner="gpt-5.4">Codex</button>
+                  <button class="cc-model-btn" id="modelBtnPrimary" type="button" data-owner="gpt-5.4">Codex 5.4</button>
+                  <button class="cc-model-btn" id="modelBtnSpark" type="button" data-owner="gpt-5.3-codex-spark">Spark High</button>
                   <button class="cc-model-btn" id="modelBtnHaiku" type="button" data-owner="haiku">Haiku 4.5</button>
                 </div>
 
@@ -124,8 +125,8 @@
                   <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
                   <div class="cc-compose-utility-actions">
                     <button class="cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
-                    <button class="cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new chat" aria-label="Start a new chat">
-                      New chat
+                  <button class="cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new task" aria-label="Start a new task">
+                      New task
                     </button>
                   </div>
                 </div>
@@ -176,6 +177,22 @@
           <div class="cc-artifact-list" id="artifactList"></div>
         </section>
 
+        <section class="cc-sidecard cc-task-switcher-card" id="taskSwitcherCard">
+          <div class="cc-sidecard-header">
+            <span class="cc-sidecard-title">Task Sessions</span>
+          </div>
+          <div class="cc-task-switcher-body">
+            <div class="cc-task-switcher-section">
+              <div class="cc-task-switcher-section-title">Running</div>
+              <div class="cc-task-switcher-list" id="runningTasksList"></div>
+            </div>
+            <div class="cc-task-switcher-section">
+              <div class="cc-task-switcher-section-title">Completed</div>
+              <div class="cc-task-switcher-list" id="completedTasksList"></div>
+            </div>
+          </div>
+        </section>
+
         <section class="cc-sidecard cc-history-panel" id="historyOverlay" hidden>
           <div class="cc-sidecard-header cc-history-header">
             <span class="cc-sidecard-title">History</span>
@@ -192,7 +209,10 @@
     <div class="cc-status">
       <span id="modelLabel">Codex</span>
       <span id="taskCount">tasks: 0</span>
-      <span id="tokenStatusLabel">0 in / 0 out</span>
+      <button id="tokenStatusResetBtn" type="button" class="cc-status-token-reset" aria-label="Reset token usage counters">
+        <span id="tokenStatusLabel">0 in / 0 out</span>
+        <span aria-hidden="true" class="cc-token-status-reset-hint" title="Reset token usage">↺</span>
+      </button>
     </div>
   </div>
   <script type="module" src="command.js"></script>

@@ -211,6 +211,19 @@ function activeArtifact(overrides?: Partial<Record<string, unknown>>) {
   };
 }
 
+function invokeWithoutSubagents(
+  service: AgentModelService,
+  taskId: string,
+  prompt: string,
+  owner?: string,
+  options?: Parameters<typeof service.invoke>[3],
+) {
+  return service.invoke(taskId, prompt, owner, {
+    taskProfile: { canSpawnSubagents: false, ...options?.taskProfile },
+    ...options,
+  });
+}
+
 describe('AgentModelService conversation context reliability', () => {
   let userDataDir = '';
   const createdTaskIds: string[] = [];
@@ -262,24 +275,24 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Create a markdown artifact with sections 1, 2, and 3.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Create a markdown artifact with sections 1, 2, and 3.', 'gpt-5.4');
 
     fakeState.artifacts = [activeArtifact()];
     fakeState.activeArtifactId = 'artifact-1';
     artifactReadContentMock.mockReturnValue({
       content: '# Launch Brief\n\n## 1\nOverview\n\n## 2\nPlan\n\n## 3\nRisks\n',
     });
-    await service.invoke(taskId, 'Update section 2 with rollout risks and owners.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Update section 2 with rollout risks and owners.', 'gpt-5.4');
 
     artifactReadContentMock.mockReturnValue({
       content: '# Launch Brief\n\n## 1\nOverview\n\n## 2\nRollout risks and owners\n\n## 3\nRisks\n',
     });
-    await service.invoke(taskId, 'Remove section 3.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Remove section 3.', 'gpt-5.4');
 
     artifactReadContentMock.mockReturnValue({
       content: '# Launch Brief\n\n## 1\nOverview\n\n## 2\nRollout risks and owners\n',
     });
-    await service.invoke(taskId, 'Summarize the result.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Summarize the result.', 'gpt-5.4');
 
     const secondContext = contextForTask(runSpy, 'Update section 2 with rollout risks and owners.');
     const thirdContext = contextForTask(runSpy, 'Remove section 3.');
@@ -313,8 +326,8 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Draft the initial release checklist.', 'gpt-5.4');
-    await service.invoke(taskId, 'Continue this and add deployment verification steps.', 'haiku');
+    await invokeWithoutSubagents(service, taskId, 'Draft the initial release checklist.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Continue this and add deployment verification steps.', 'haiku');
 
     const secondContext = contextForTask(runSpy, 'Continue this and add deployment verification steps.');
 
@@ -336,10 +349,10 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Compare option A vs option B.', 'gpt-5.4');
-    await service.invoke(taskId, 'Focus only on B.', 'gpt-5.4');
-    await service.invoke(taskId, 'Convert that to CSV.', 'gpt-5.4');
-    await service.invoke(taskId, 'Append a row for benchmark confidence.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Compare option A vs option B.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Focus only on B.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Convert that to CSV.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Append a row for benchmark confidence.', 'gpt-5.4');
 
     const secondContext = contextForTask(runSpy, 'Focus only on B.');
     const thirdContext = contextForTask(runSpy, 'Convert that to CSV.');
@@ -363,13 +376,14 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Start a rollout plan for the migration.', 'gpt-5.4');
-    await service.invoke(taskId, 'Continue this and add risks for rollout.', 'haiku');
+    await invokeWithoutSubagents(service, taskId, 'Start a rollout plan for the migration.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Continue this and add risks for rollout.', 'haiku');
 
     const switchedContext = contextForTask(runSpy, 'Continue this and add risks for rollout.');
-    expect(switchedContext).toContain('The task began with the request: Start a rollout plan for the migration.');
-    expect(switchedContext).toContain('Earlier, the user said: Start a rollout plan for the migration.');
-    expect(switchedContext).toContain('Then, the assistant replied: Draft plan: discovery, migration, rollout.');
+    expect(switchedContext).toContain('## Continuation Context');
+    expect(switchedContext).toContain('### Relevant Prior Work');
+    expect(switchedContext).toContain('User: Start a rollout plan for the migration.');
+    expect(switchedContext).toContain('Assistant (gpt-5.4): Draft plan: discovery, migration, rollout.');
   });
 
   it('does not auto-hydrate prior thread history on provider switch for a fresh standalone prompt', async () => {
@@ -382,8 +396,8 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Start a rollout plan for the migration.', 'gpt-5.4');
-    await service.invoke(taskId, 'Write a one-line thank-you note.', 'haiku');
+    await invokeWithoutSubagents(service, taskId, 'Start a rollout plan for the migration.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Write a one-line thank-you note.', 'haiku');
 
     const switchedContext = contextForTask(runSpy, 'Write a one-line thank-you note.');
     expect(switchedContext).not.toContain('The task began with the request: Start a rollout plan for the migration.');
@@ -402,7 +416,7 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(priorTaskId, 'Start a rollout plan for the migration.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, priorTaskId, 'Start a rollout plan for the migration.', 'gpt-5.4');
 
     fakeState.tasks = [
       {
@@ -425,7 +439,7 @@ describe('AgentModelService conversation context reliability', () => {
       },
     ];
 
-    await service.invoke(currentTaskId, 'Reference the previous chat and continue the rollout plan.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, currentTaskId, 'Reference the previous chat and continue the rollout plan.', 'gpt-5.4');
 
     const recalledContext = contextForTask(runSpy, 'Reference the previous chat and continue the rollout plan.');
     expect(recalledContext).toContain('## Previous Chat Recall');
@@ -444,19 +458,19 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Research three vendors.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Research three vendors.', 'gpt-5.4');
     chatKnowledgeStore.recordToolMessage(taskId, JSON.stringify({
       tool: 'browser.research_search',
       input: { query: 'three vendors' },
       result: { payload: `${'x'.repeat(1200)}VERY_LARGE_TOOL_PAYLOAD` },
     }, null, 2), 'gpt-5.4');
-    await service.invoke(taskId, 'Focus on Beta.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Focus on Beta.', 'gpt-5.4');
     chatKnowledgeStore.recordToolMessage(taskId, JSON.stringify({
       tool: 'browser.read_cached_chunk',
       input: { pageId: 'beta' },
       result: { payload: `${'y'.repeat(1200)}VERY_LARGE_TOOL_PAYLOAD` },
     }, null, 2), 'gpt-5.4');
-    await service.invoke(taskId, 'Continue this and list only verified risks.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Continue this and list only verified risks.', 'gpt-5.4');
 
     const continuationContext = contextForTask(runSpy, 'Continue this and list only verified risks.');
     expect(continuationContext).toContain('Earlier, the user said: Research three vendors.');
@@ -485,13 +499,13 @@ describe('AgentModelService conversation context reliability', () => {
       content: 'category,cost,reliability\ncurrent,low,medium\n',
     });
 
-    await service.invoke(taskId, 'Explain the budget tradeoffs briefly.', 'gpt-5.4');
-    await service.invoke(taskId, 'Update this to CSV.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Explain the budget tradeoffs briefly.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'Update this to CSV.', 'gpt-5.4');
 
     const overlapContext = contextForTask(runSpy, 'Update this to CSV.');
     expect(overlapContext).toContain('Then, the assistant replied: The budget tradeoff is cost versus reliability.');
-    expect(overlapContext).toContain('Active artifact: Budget Sheet [id=artifact-1] (csv');
-    expect(overlapContext).toContain('Use artifact.get_active to resolve requests like "update this document"');
+    expect(overlapContext).toContain('Active artifact: Budget Sheet (csv)');
+    expect(overlapContext).toContain('## Task Memory');
   });
 
   it('resolves affirmative follow-ups against the latest assistant proposal', async () => {
@@ -504,8 +518,8 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'My shell cannot find pnpm.', 'gpt-5.4');
-    await service.invoke(taskId, 'go ahead', 'haiku');
+    await invokeWithoutSubagents(service, taskId, 'My shell cannot find pnpm.', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'go ahead', 'haiku');
 
     const followUpContext = contextForTask(runSpy, 'go ahead');
     expect(followUpContext).toContain('## Follow-Up Resolution');
@@ -524,8 +538,8 @@ describe('AgentModelService conversation context reliability', () => {
     const service = new AgentModelService();
     service.init();
 
-    await service.invoke(taskId, 'Why does pnpm fail in this terminal?', 'gpt-5.4');
-    await service.invoke(taskId, 'help me fix this', 'haiku');
+    await invokeWithoutSubagents(service, taskId, 'Why does pnpm fail in this terminal?', 'gpt-5.4');
+    await invokeWithoutSubagents(service, taskId, 'help me fix this', 'haiku');
 
     const followUpContext = contextForTask(runSpy, 'help me fix this');
     expect(followUpContext).toContain('## Follow-Up Resolution');

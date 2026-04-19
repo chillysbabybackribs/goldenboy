@@ -1,4 +1,47 @@
-import { BrowserActionableElement, BrowserFormFieldModel, BrowserFormModel } from '../../shared/types/browserIntelligence';
+import { BrowserActionableElement, BrowserFormModel } from '../../shared/types/browserIntelligence';
+import {
+  ADD_TO_CART_BUTTON_RE,
+  ADD_TO_CART_TEXT_RE,
+  CHECKOUT_BUTTON_RE,
+  CHECKOUT_CONTINUE_RE,
+  CHECKOUT_FORM_FIRST_RE,
+  CHECKOUT_FORM_LAST_RE,
+  CHECKOUT_FORM_POSTAL_RE,
+  CHECKOUT_SUCCESS_RE,
+  CART_ACTION_RE,
+  DRAG_SUCCESS_RE,
+  DIALOG_SUCCESS_RE,
+  FINISH_ORDER_RE,
+  HOVER_SUCCESS_RE,
+  LOGIN_PASSWORD_RE,
+  LOGIN_SUBMIT_RE,
+  LOGIN_USER_RE,
+  UPLOAD_BUTTON_RE,
+  UPLOAD_FIELD_RE,
+  findBestAction,
+  findBestForm,
+  findField,
+  includesText,
+  asObject,
+  normalizeOp,
+  optionalNumber,
+  optionalString,
+  requiredString,
+  scoreLoginForm,
+  scoreUploadForm,
+  compact,
+  textOfElement,
+} from './WebIntentVM.utils';
+import {
+  extractStructuredData,
+  readAuthState,
+  readCartState,
+  resolveCheckoutInfoTargetsFromDom,
+  resolveDragDropTargetsFromDom,
+  resolveHoverTargetFromDom,
+  resolveLoginTargetsFromDom,
+  selectRequestedFields,
+} from './WebIntentVM.helpers';
 
 export type WebIntentOpcode =
   | 'NAVIGATE'
@@ -76,177 +119,6 @@ export type WebIntentAdapter = {
   executeInPage: (expression: string, tabId?: string) => Promise<{ result: unknown; error: string | null }>;
 };
 
-const LOGIN_USER_RE = /\b(email|e-mail|username|user|login)\b/i;
-const LOGIN_PASSWORD_RE = /\bpassword|passcode|pin\b/i;
-const LOGIN_SUBMIT_RE = /\b(sign in|log in|login|continue|submit|next)\b/i;
-const DIALOG_SUCCESS_RE = /\b(alert|confirm|prompt|accepted|dismissed|clicked:|entered:|you successfully)\b/i;
-const HOVER_SUCCESS_RE = /\b(view profile|profile|caption|tooltip|menu|popover|visible|shown|name:|user)\b/i;
-const DRAG_SUCCESS_RE = /\b(dropped|success|complete|placed|accepted|in the can|inside)\b/i;
-const UPLOAD_FIELD_RE = /\b(file|upload|attachment|document|csv|path)\b/i;
-const UPLOAD_BUTTON_RE = /\b(upload|attach|import|submit file|send file)\b/i;
-const ADD_TO_CART_BUTTON_RE = /\b(add to cart|add item|add)\b/i;
-const CART_ACTION_RE = /\b(cart|shopping cart|basket|bag)\b/i;
-const ADD_TO_CART_TEXT_RE = /\badd to cart\b/i;
-const CHECKOUT_BUTTON_RE = /\b(checkout|pay now|place order|complete order|buy now|submit order)\b/i;
-const CHECKOUT_FORM_FIRST_RE = /\b(first name|firstname|given name|first)\b/i;
-const CHECKOUT_FORM_LAST_RE = /\b(last name|lastname|surname|family name|last)\b/i;
-const CHECKOUT_FORM_POSTAL_RE = /\b(postal|zip|zipcode|zip code|postcode)\b/i;
-const CHECKOUT_CONTINUE_RE = /\b(continue|next|review|proceed)\b/i;
-const FINISH_ORDER_RE = /\b(finish|place order|complete order|submit order|pay now)\b/i;
-const CHECKOUT_SUCCESS_RE = /\b(order complete|order confirmed|thank you|receipt|purchase complete|success)\b/i;
-const TEXT_NORMALIZE_RE = /\s+/g;
-
-function textOfElement(element: BrowserActionableElement): string {
-  return `${element.text || ''} ${element.ariaLabel || ''} ${element.role || ''}`.replace(TEXT_NORMALIZE_RE, ' ').trim();
-}
-
-function includesText(haystack: string, needle: string): boolean {
-  return haystack.toLowerCase().includes(needle.toLowerCase());
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
-}
-
-function requiredString(obj: Record<string, unknown>, key: string): string {
-  const value = obj[key];
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(`Expected non-empty string: ${key}`);
-  }
-  return value.trim();
-}
-
-function optionalString(obj: Record<string, unknown>, key: string): string | null {
-  const value = obj[key];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function optionalNumber(obj: Record<string, unknown>, key: string, fallback: number): number {
-  const value = obj[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function normalizeOp(op: string): WebIntentOpcode {
-  const upper = op.trim().toUpperCase();
-  switch (upper) {
-    case 'NAVIGATE':
-    case 'WAIT':
-    case 'ASSERT':
-    case 'INTENT.LOGIN':
-    case 'INTENT.ACCEPT_DIALOG':
-    case 'INTENT.DISMISS_DIALOG':
-    case 'INTENT.HOVER':
-    case 'INTENT.DRAG_DROP':
-    case 'INTENT.ADD_TO_CART':
-    case 'INTENT.OPEN_CART':
-    case 'INTENT.FILL_CHECKOUT_INFO':
-    case 'INTENT.FINISH_ORDER':
-    case 'INTENT.UPLOAD':
-    case 'INTENT.CHECKOUT':
-    case 'INTENT.EXTRACT':
-      return upper;
-    default:
-      throw new Error(`Unsupported intent opcode: ${op}`);
-  }
-}
-
-function findBestForm(forms: BrowserFormModel[], scorer: (form: BrowserFormModel) => number): BrowserFormModel | null {
-  let best: BrowserFormModel | null = null;
-  let bestScore = -1;
-  for (const form of forms) {
-    const score = scorer(form);
-    if (score > bestScore) {
-      bestScore = score;
-      best = form;
-    }
-  }
-  return bestScore > 0 ? best : null;
-}
-
-function scoreLoginForm(form: BrowserFormModel): number {
-  let score = 0;
-  const purpose = (form.purpose || '').toLowerCase();
-  if (purpose.includes('login') || purpose.includes('sign')) score += 3;
-  for (const field of form.fields) {
-    const label = `${field.label} ${field.name} ${field.placeholder}`;
-    if (field.kind === 'password' || LOGIN_PASSWORD_RE.test(label)) score += 4;
-    if (field.kind === 'email' || LOGIN_USER_RE.test(label)) score += 3;
-    if (field.visible) score += 1;
-  }
-  for (const submit of form.submitLabels) {
-    if (LOGIN_SUBMIT_RE.test(submit)) score += 2;
-  }
-  return score;
-}
-
-function scoreUploadForm(form: BrowserFormModel): number {
-  let score = 0;
-  for (const field of form.fields) {
-    const label = `${field.label} ${field.name} ${field.placeholder}`;
-    if (UPLOAD_FIELD_RE.test(label)) score += 3;
-    if (field.visible) score += 1;
-  }
-  for (const submit of form.submitLabels) {
-    if (UPLOAD_BUTTON_RE.test(submit)) score += 3;
-  }
-  return score;
-}
-
-function findField(fields: BrowserFormFieldModel[], matcher: (field: BrowserFormFieldModel) => boolean): BrowserFormFieldModel | null {
-  for (const field of fields) {
-    if (!field.visible) continue;
-    if (!field.ref?.selector) continue;
-    if (matcher(field)) return field;
-  }
-  return null;
-}
-
-function findBestAction(
-  elements: BrowserActionableElement[],
-  regex: RegExp,
-): BrowserActionableElement | null {
-  const candidates = elements
-    .filter(el => el.visible && el.enabled && !!el.ref?.selector)
-    .map((el) => {
-      const haystack = textOfElement(el);
-      let score = 0;
-      if (el.actionability.includes('clickable')) score += 3;
-      if (el.tagName === 'button') score += 2;
-      if (regex.test(haystack)) score += 5;
-      return { el, score };
-    })
-    .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score);
-  return candidates[0]?.el || null;
-}
-
-function compact(input: string, max = 180): string {
-  const text = input.replace(TEXT_NORMALIZE_RE, ' ').trim();
-  return text.length > max ? `${text.slice(0, max)}...` : text;
-}
-
-type AuthState = {
-  hasLoginMarkers: boolean;
-  hasAuthMarkers: boolean;
-  url: string;
-  title: string;
-};
-
-type LoginTargets = {
-  usernameSelector: string | null;
-  passwordSelector: string | null;
-  submitSelector: string | null;
-  formSelector: string | null;
-};
-
-type CheckoutInfoTargets = {
-  firstNameSelector: string | null;
-  lastNameSelector: string | null;
-  postalSelector: string | null;
-  submitSelector: string | null;
-  formSelector: string | null;
-};
-
 export class WebIntentVM {
   constructor(private readonly adapter: WebIntentAdapter) {}
 
@@ -264,7 +136,7 @@ export class WebIntentVM {
       const instruction = instructions[index] || { op: 'WAIT', args: {} };
       const started = Date.now();
       try {
-        const op = normalizeOp(String(instruction.op || ''));
+        const op = normalizeOp(String(instruction.op || '')) as WebIntentOpcode;
         const data = await this.executeInstruction(op, asObject(instruction.args), tabId);
         if (op === 'INTENT.EXTRACT') extracted.push(data);
         steps.push({
@@ -397,7 +269,7 @@ export class WebIntentVM {
     }
 
     if (kind === 'logged_in') {
-      const auth = await this.readAuthState(tabId);
+      const auth = await readAuthState(this.adapter, tabId);
       const matched = auth.hasAuthMarkers || !auth.hasLoginMarkers;
       if (!matched) throw new Error(`ASSERT logged_in failed on ${auth.url}`);
       return {
@@ -435,7 +307,7 @@ export class WebIntentVM {
       ))
       : null;
 
-    const fallbackTargets = await this.resolveLoginTargetsFromDom(tabId);
+    const fallbackTargets = await resolveLoginTargetsFromDom(this.adapter, tabId);
     const usernameSelector = userField?.ref.selector || fallbackTargets.usernameSelector;
     const passwordSelector = passField?.ref.selector || fallbackTargets.passwordSelector;
     const submitSelector = fallbackTargets.submitSelector;
@@ -472,7 +344,7 @@ export class WebIntentVM {
     }
 
     await this.adapter.waitForSettled(8_000);
-    const auth = await this.readAuthState(tabId);
+    const auth = await readAuthState(this.adapter, tabId);
     const page = await this.adapter.readPageState(tabId);
     const explicitSuccess = successText ? includesText(page.text, successText) : false;
     const ok = explicitSuccess || auth.hasAuthMarkers || !auth.hasLoginMarkers;
@@ -599,7 +471,7 @@ export class WebIntentVM {
       || 'hover';
     const resolved = selector
       ? { selector, label: targetText }
-      : await this.resolveHoverTargetFromDom(targetText, tabId);
+      : await resolveHoverTargetFromDom(this.adapter, targetText, tabId);
 
     if (!resolved.selector) {
       throw new Error(`Could not resolve hover target for "${targetText}"`);
@@ -642,7 +514,7 @@ export class WebIntentVM {
 
     const resolved = sourceSelector && targetSelector
       ? { sourceSelector, targetSelector, sourceLabel: sourceText, targetLabel: targetText }
-      : await this.resolveDragDropTargetsFromDom(sourceText, targetText, tabId);
+      : await resolveDragDropTargetsFromDom(this.adapter, sourceText, targetText, tabId);
 
     if (!resolved.sourceSelector || !resolved.targetSelector) {
       throw new Error(`Could not resolve drag/drop targets for "${sourceText}" -> "${targetText}"`);
@@ -679,7 +551,7 @@ export class WebIntentVM {
       || optionalString(args, 'product')
       || optionalString(args, 'name');
 
-    const before = await this.readCartState(tabId);
+    const before = await readCartState(this.adapter, tabId);
     const targetedAdd = await this.adapter.executeInPage(`
       (() => {
         const clean = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
@@ -728,7 +600,7 @@ export class WebIntentVM {
     }
 
     await this.adapter.waitForSettled(4_000);
-    const after = await this.readCartState(tabId);
+    const after = await readCartState(this.adapter, tabId);
     const page = await this.adapter.readPageState(tabId);
     const success = (
       (typeof before.count === 'number' && typeof after.count === 'number' && after.count > before.count)
@@ -886,7 +758,7 @@ export class WebIntentVM {
       ? findField(checkoutForm.fields, field => CHECKOUT_FORM_POSTAL_RE.test(`${field.label} ${field.name} ${field.placeholder}`))
       : null;
 
-    const fallbackTargets = await this.resolveCheckoutInfoTargetsFromDom(tabId);
+    const fallbackTargets = await resolveCheckoutInfoTargetsFromDom(this.adapter, tabId);
     const firstSelector = firstField?.ref.selector || fallbackTargets.firstNameSelector;
     const lastSelector = lastField?.ref.selector || fallbackTargets.lastNameSelector;
     const postalSelector = postalField?.ref.selector || fallbackTargets.postalSelector;
@@ -963,9 +835,9 @@ export class WebIntentVM {
       ? args.fields.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
       : [];
 
-    const extracted = await this.extractStructuredData(tabId);
+    const extracted = await extractStructuredData(this.adapter, tabId);
     const selected = requestedFields.length > 0
-      ? this.selectRequestedFields(requestedFields, extracted)
+      ? selectRequestedFields(requestedFields, extracted)
       : {};
 
     return {
@@ -977,589 +849,4 @@ export class WebIntentVM {
     };
   }
 
-  private async readAuthState(tabId?: string): Promise<AuthState> {
-    const probe = await this.adapter.executeInPage(`
-      (() => {
-        /* __WEB_INTENT_ASSERT_LOGIN__ */
-        const body = (document.body?.innerText || '').toLowerCase();
-        const hasPasswordInput = !!document.querySelector('input[type="password"]');
-        const hasLoginMarkers = /(log in|sign in|password|forgot password|create account)/i.test(body) && hasPasswordInput;
-        const hasAuthMarkers = /(logout|sign out|logged in|signed in|my account|dashboard|welcome|profile|account)/i.test(body);
-        return {
-          hasLoginMarkers,
-          hasAuthMarkers,
-          url: location.href,
-          title: document.title || '',
-        };
-      })()
-    `, tabId);
-
-    if (!probe.error && probe.result && typeof probe.result === 'object') {
-      const raw = probe.result as Record<string, unknown>;
-      return {
-        hasLoginMarkers: raw.hasLoginMarkers === true,
-        hasAuthMarkers: raw.hasAuthMarkers === true,
-        url: typeof raw.url === 'string' ? raw.url : '',
-        title: typeof raw.title === 'string' ? raw.title : '',
-      };
-    }
-
-    const page = await this.adapter.readPageState(tabId);
-    return {
-      hasLoginMarkers: /(log in|sign in|password)/i.test(page.text),
-      hasAuthMarkers: /(logout|sign out|logged in|signed in|my account|dashboard|welcome|profile)/i.test(page.text),
-      url: page.url,
-      title: page.title,
-    };
-  }
-
-  private async extractStructuredData(tabId?: string): Promise<{
-    url: string;
-    title: string;
-    heading: string;
-    excerpt: string;
-    keyValues: Array<{ key: string; value: string }>;
-  }> {
-    const result = await this.adapter.executeInPage(`
-      (() => {
-        /* __WEB_INTENT_EXTRACT__ */
-        const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
-        const pairs = [];
-
-        document.querySelectorAll('dl').forEach((list) => {
-          const terms = Array.from(list.querySelectorAll('dt'));
-          for (const term of terms) {
-            const key = clean(term.textContent || '');
-            const next = term.nextElementSibling;
-            if (!key || !next || next.tagName.toLowerCase() !== 'dd') continue;
-            const value = clean(next.textContent || '');
-            if (value) pairs.push({ key, value });
-          }
-        });
-
-        document.querySelectorAll('table').forEach((table) => {
-          const rows = Array.from(table.querySelectorAll('tr'));
-          for (const row of rows) {
-            const cells = Array.from(row.querySelectorAll('th,td'));
-            if (cells.length < 2) continue;
-            const key = clean(cells[0]?.textContent || '');
-            const value = clean(cells[1]?.textContent || '');
-            if (key && value) pairs.push({ key, value });
-          }
-        });
-
-        document.querySelectorAll('[data-label]').forEach((node) => {
-          const key = clean(node.getAttribute('data-label') || '');
-          const value = clean(node.textContent || '');
-          if (key && value) pairs.push({ key, value });
-        });
-
-        const heading = clean(document.querySelector('h1')?.textContent || document.title || '');
-        const text = clean(document.body?.innerText || '');
-        return {
-          url: location.href,
-          title: clean(document.title || ''),
-          heading,
-          excerpt: text.slice(0, 500),
-          keyValues: pairs.slice(0, 80),
-        };
-      })()
-    `, tabId);
-
-    if (!result.error && result.result && typeof result.result === 'object') {
-      const raw = result.result as Record<string, unknown>;
-      return {
-        url: typeof raw.url === 'string' ? raw.url : '',
-        title: typeof raw.title === 'string' ? raw.title : '',
-        heading: typeof raw.heading === 'string' ? raw.heading : '',
-        excerpt: typeof raw.excerpt === 'string' ? raw.excerpt : '',
-        keyValues: Array.isArray(raw.keyValues)
-          ? raw.keyValues
-            .map((item) => asObject(item))
-            .map(item => ({
-              key: String(item.key || '').trim(),
-              value: String(item.value || '').trim(),
-            }))
-            .filter(item => item.key && item.value)
-          : [],
-      };
-    }
-
-    const page = await this.adapter.readPageState(tabId);
-    return {
-      url: page.url,
-      title: page.title,
-      heading: page.mainHeading || page.title,
-      excerpt: page.text.slice(0, 500),
-      keyValues: [],
-    };
-  }
-
-  private selectRequestedFields(
-    fields: string[],
-    extracted: { keyValues: Array<{ key: string; value: string }>; excerpt: string },
-  ): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const field of fields) {
-      const match = extracted.keyValues.find(pair => {
-        return includesText(pair.key, field) || includesText(field, pair.key);
-      });
-      if (match) {
-        out[field] = match.value;
-        continue;
-      }
-      const re = new RegExp(`${escapeRegex(field)}\\s*[:\\-]\\s*([^\\n.,;]{1,140})`, 'i');
-      const found = extracted.excerpt.match(re);
-      if (found?.[1]) out[field] = found[1].trim();
-    }
-    return out;
-  }
-
-  private async readCartState(tabId?: string): Promise<{ count: number | null; hasRemove: boolean }> {
-    const probe = await this.adapter.executeInPage(`
-      (() => {
-        const badge = document.querySelector('.shopping_cart_badge,[data-test*="shopping-cart-badge"],[aria-label*="cart"] .badge');
-        const badgeText = badge?.textContent?.trim() || '';
-        const parsed = Number.parseInt(badgeText, 10);
-        const count = Number.isFinite(parsed) ? parsed : null;
-        const bodyText = (document.body?.innerText || '').toLowerCase();
-        const hasRemove = /\\bremove\\b/.test(bodyText);
-        return { count, hasRemove };
-      })()
-    `, tabId);
-    if (!probe.error && probe.result && typeof probe.result === 'object') {
-      const raw = probe.result as Record<string, unknown>;
-      return {
-        count: typeof raw.count === 'number' && Number.isFinite(raw.count) ? raw.count : null,
-        hasRemove: raw.hasRemove === true,
-      };
-    }
-    return { count: null, hasRemove: false };
-  }
-
-  private async resolveHoverTargetFromDom(
-    targetText: string,
-    tabId?: string,
-  ): Promise<{ selector: string | null; label: string }> {
-    const probe = await this.adapter.executeInPage(`
-      (() => {
-        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-        const isVisible = (el) => {
-          if (!(el instanceof Element)) return false;
-          const style = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          const semanticHoverNode = el.hasAttribute('data-hover-target');
-          return style.display !== 'none'
-            && style.visibility !== 'hidden'
-            && ((rect.width > 0 && rect.height > 0) || semanticHoverNode);
-        };
-        const escapeCss = (value) => {
-          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
-          return String(value).replace(/([ #;?%&,.+*~\\':"!^$[\\]()=>|\\/@])/g, '\\\\$1');
-        };
-        const cssPath = (el) => {
-          if (!(el instanceof Element)) return '';
-          if (el.id) return '#' + escapeCss(el.id);
-          const dataTest = el.getAttribute('data-test') || el.getAttribute('data-testid');
-          if (dataTest) return '[' + (el.hasAttribute('data-test') ? 'data-test' : 'data-testid') + '="' + escapeCss(dataTest) + '"]';
-          const parts = [];
-          let node = el;
-          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
-            let selector = node.tagName.toLowerCase();
-            const parent = node.parentElement;
-            if (parent) {
-              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
-              if (siblings.length > 1) selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-            }
-            parts.unshift(selector);
-            node = parent;
-          }
-          return parts.join(' > ');
-        };
-        const labelOf = (el) => clean([
-          el.getAttribute('aria-label') || '',
-          el.getAttribute('data-label') || '',
-          el.getAttribute('data-test') || '',
-          el.getAttribute('data-testid') || '',
-          el.getAttribute('title') || '',
-          el.id || '',
-          el.className && typeof el.className === 'string' ? el.className : '',
-          el.textContent || '',
-        ].join(' '));
-        const needle = ${JSON.stringify(targetText)}.toLowerCase();
-        const hoverRe = /hover|profile|figure|card|image|avatar|tooltip|menu|caption|user/i;
-        const nodes = Array.from(document.querySelectorAll('[data-hover-target],.figure,figure,[class*="hover"],[class*="profile"],[class*="card"],img,a,button,[role="button"],div,section'))
-          .filter(isVisible);
-        const best = nodes
-          .map((el, index) => {
-            const label = labelOf(el);
-            const lower = label.toLowerCase();
-            let score = 0;
-            if (needle && lower.includes(needle)) score += 10;
-            if (hoverRe.test(label)) score += 5;
-            if (el.matches('.figure,figure,[data-hover-target]')) score += 6;
-            if (el.querySelector && el.querySelector('.figcaption,[class*="caption"],[role="tooltip"]')) score += 4;
-            if (/first|1|one/i.test(needle) && index === 0) score += 3;
-            return { el, label, score };
-          })
-          .filter(item => item.score > 0)
-          .sort((a, b) => b.score - a.score)[0];
-        return {
-          selector: best ? cssPath(best.el) : null,
-          label: best ? best.label : ${JSON.stringify(targetText)},
-        };
-      })()
-    `, tabId);
-
-    if (!probe.error && probe.result && typeof probe.result === 'object') {
-      const raw = probe.result as Record<string, unknown>;
-      return {
-        selector: typeof raw.selector === 'string' && raw.selector ? raw.selector : null,
-        label: typeof raw.label === 'string' && raw.label ? raw.label : targetText,
-      };
-    }
-
-    return { selector: null, label: targetText };
-  }
-
-  private async resolveDragDropTargetsFromDom(
-    sourceText: string,
-    targetText: string,
-    tabId?: string,
-  ): Promise<{
-    sourceSelector: string | null;
-    targetSelector: string | null;
-    sourceLabel: string;
-    targetLabel: string;
-  }> {
-    const probe = await this.adapter.executeInPage(`
-      (() => {
-        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-        const isVisible = (el) => {
-          if (!(el instanceof Element)) return false;
-          const style = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          const semanticDragNode = el.hasAttribute('data-drag-source')
-            || el.hasAttribute('data-drop-target')
-            || el.getAttribute('draggable') === 'true'
-            || el.getAttribute('data-droppable') === 'true';
-          return style.display !== 'none'
-            && style.visibility !== 'hidden'
-            && ((rect.width > 0 && rect.height > 0) || semanticDragNode);
-        };
-        const escapeCss = (value) => {
-          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value));
-          return String(value).replace(/([ #;?%&,.+*~\\':"!^$[\\]()=>|\\/@])/g, '\\\\$1');
-        };
-        const cssPath = (el) => {
-          if (!(el instanceof Element)) return '';
-          if (el.id) return '#' + escapeCss(el.id);
-          const dataTest = el.getAttribute('data-test') || el.getAttribute('data-testid');
-          if (dataTest) return '[' + (el.hasAttribute('data-test') ? 'data-test' : 'data-testid') + '="' + escapeCss(dataTest) + '"]';
-          const parts = [];
-          let node = el;
-          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
-            let selector = node.tagName.toLowerCase();
-            const parent = node.parentElement;
-            if (parent) {
-              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
-              if (siblings.length > 1) selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-            }
-            parts.unshift(selector);
-            node = parent;
-          }
-          return parts.join(' > ');
-        };
-        const labelOf = (el) => clean([
-          el.getAttribute('aria-label') || '',
-          el.getAttribute('data-label') || '',
-          el.getAttribute('data-test') || '',
-          el.getAttribute('data-testid') || '',
-          el.getAttribute('title') || '',
-          el.id || '',
-          el.className && typeof el.className === 'string' ? el.className : '',
-          el.textContent || '',
-        ].join(' '));
-        const sourceNeedle = ${JSON.stringify(sourceText)}.toLowerCase();
-        const targetNeedle = ${JSON.stringify(targetText)}.toLowerCase();
-        const sourceBroadRe = /drag|circle|ball|token|item|source/i;
-        const targetBroadRe = /drop|target|can|bin|basket|zone|destination/i;
-        const sourceNodes = Array.from(document.querySelectorAll('[draggable="true"],[data-draggable="true"],[data-drag-source],.draggable,.circle,[class*="circle"],svg circle,button,[role="button"],div,span'))
-          .filter(isVisible);
-        const targetNodes = Array.from(document.querySelectorAll('[data-drop-target],[data-droppable="true"],.dropzone,.drop-zone,[class*="drop"],[class*="target"],[class*="can"],[aria-label],div,section'))
-          .filter(isVisible);
-        const score = (el, needle, broadRe, kind) => {
-          const label = labelOf(el);
-          const lower = label.toLowerCase();
-          let value = 0;
-          if (needle && lower.includes(needle)) value += 10;
-          if (broadRe.test(label)) value += 5;
-          if (kind === 'source' && el.getAttribute('draggable') === 'true') value += 6;
-          if (kind === 'target' && (el.hasAttribute('data-drop-target') || el.getAttribute('data-droppable') === 'true')) value += 6;
-          if (kind === 'source' && el.tagName.toLowerCase() === 'circle') value += 5;
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 8 && rect.height > 8) value += 1;
-          return { el, label, value };
-        };
-        const source = sourceNodes
-          .map(el => score(el, sourceNeedle, sourceBroadRe, 'source'))
-          .filter(item => item.value > 0)
-          .sort((a, b) => b.value - a.value)[0];
-        const target = targetNodes
-          .map(el => score(el, targetNeedle, targetBroadRe, 'target'))
-          .filter(item => item.value > 0 && item.el !== source?.el)
-          .sort((a, b) => b.value - a.value)[0];
-
-        return {
-          sourceSelector: source ? cssPath(source.el) : null,
-          targetSelector: target ? cssPath(target.el) : null,
-          sourceLabel: source ? source.label : ${JSON.stringify(sourceText)},
-          targetLabel: target ? target.label : ${JSON.stringify(targetText)},
-        };
-      })()
-    `, tabId);
-
-    if (!probe.error && probe.result && typeof probe.result === 'object') {
-      const raw = probe.result as Record<string, unknown>;
-      return {
-        sourceSelector: typeof raw.sourceSelector === 'string' && raw.sourceSelector ? raw.sourceSelector : null,
-        targetSelector: typeof raw.targetSelector === 'string' && raw.targetSelector ? raw.targetSelector : null,
-        sourceLabel: typeof raw.sourceLabel === 'string' && raw.sourceLabel ? raw.sourceLabel : sourceText,
-        targetLabel: typeof raw.targetLabel === 'string' && raw.targetLabel ? raw.targetLabel : targetText,
-      };
-    }
-
-    return {
-      sourceSelector: null,
-      targetSelector: null,
-      sourceLabel: sourceText,
-      targetLabel: targetText,
-    };
-  }
-
-  private async resolveLoginTargetsFromDom(tabId?: string): Promise<LoginTargets> {
-    const probe = await this.adapter.executeInPage(`
-      (() => {
-        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-        const isVisible = (el) => {
-          if (!(el instanceof HTMLElement)) return false;
-          const style = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-        };
-        const cssPath = (el) => {
-          if (!(el instanceof Element)) return '';
-          if (el.id) return '#' + CSS.escape(el.id);
-          const parts = [];
-          let node = el;
-          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
-            let selector = node.tagName.toLowerCase();
-            const parent = node.parentElement;
-            if (parent) {
-              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
-              if (siblings.length > 1) {
-                selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-              }
-            }
-            parts.unshift(selector);
-            node = parent;
-          }
-          return parts.join(' > ');
-        };
-        const fieldLabel = (field) => clean([
-          field.getAttribute('aria-label') || '',
-          field.getAttribute('name') || '',
-          field.getAttribute('id') || '',
-          field.getAttribute('placeholder') || '',
-          (field.id ? document.querySelector('label[for="' + CSS.escape(field.id) + '"]')?.textContent : '') || '',
-        ].join(' '));
-        const userRe = /email|e-mail|username|user|login/i;
-        const passRe = /password|passcode|pin/i;
-        const submitRe = /sign in|log in|login|continue|submit|next/i;
-
-        const forms = Array.from(document.querySelectorAll('form'));
-        const formCandidates = forms
-          .filter(form => form instanceof HTMLElement && isVisible(form))
-          .map((form) => {
-            const inputs = Array.from(form.querySelectorAll('input,textarea,select')).filter(node => node instanceof HTMLElement && isVisible(node));
-            const password = inputs.find(node => node instanceof HTMLInputElement && (node.type || '').toLowerCase() === 'password');
-            const username = inputs.find((node) => {
-              if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) return false;
-              const type = node instanceof HTMLInputElement ? (node.type || '').toLowerCase() : 'text';
-              if (type === 'password' || type === 'hidden') return false;
-              return userRe.test(fieldLabel(node)) || type === 'email' || type === 'text';
-            });
-            const submit = Array.from(form.querySelectorAll('button,input[type="submit"],[role="button"]'))
-              .find(node => node instanceof HTMLElement && isVisible(node) && submitRe.test(clean(node.textContent || node.getAttribute('value') || node.getAttribute('aria-label') || '')));
-            let score = 0;
-            if (password) score += 5;
-            if (username) score += 4;
-            if (submit) score += 2;
-            if (/login|sign/i.test(clean(form.getAttribute('aria-label') || form.id || form.className || ''))) score += 2;
-            return {
-              selector: cssPath(form),
-              usernameSelector: username ? cssPath(username) : '',
-              passwordSelector: password ? cssPath(password) : '',
-              submitSelector: submit ? cssPath(submit) : '',
-              score,
-            };
-          })
-          .sort((a, b) => b.score - a.score);
-
-        const bestForm = formCandidates[0];
-        if (bestForm && bestForm.passwordSelector && bestForm.usernameSelector) {
-          return {
-            usernameSelector: bestForm.usernameSelector,
-            passwordSelector: bestForm.passwordSelector,
-            submitSelector: bestForm.submitSelector || null,
-            formSelector: bestForm.selector || null,
-          };
-        }
-
-        const allInputs = Array.from(document.querySelectorAll('input,textarea,select')).filter(node => node instanceof HTMLElement && isVisible(node));
-        const username = allInputs.find((node) => {
-          if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) return false;
-          const type = node instanceof HTMLInputElement ? (node.type || '').toLowerCase() : 'text';
-          if (type === 'password' || type === 'hidden') return false;
-          return userRe.test(fieldLabel(node)) || type === 'email' || type === 'text';
-        });
-        const password = allInputs.find((node) => node instanceof HTMLInputElement && (node.type || '').toLowerCase() === 'password');
-        const submit = Array.from(document.querySelectorAll('button,input[type="submit"],[role="button"]'))
-          .find(node => node instanceof HTMLElement && isVisible(node) && submitRe.test(clean(node.textContent || node.getAttribute('value') || node.getAttribute('aria-label') || '')));
-
-        return {
-          usernameSelector: username ? cssPath(username) : null,
-          passwordSelector: password ? cssPath(password) : null,
-          submitSelector: submit ? cssPath(submit) : null,
-          formSelector: null,
-        };
-      })()
-    `, tabId);
-
-    if (!probe.error && probe.result && typeof probe.result === 'object') {
-      const raw = probe.result as Record<string, unknown>;
-      return {
-        usernameSelector: typeof raw.usernameSelector === 'string' && raw.usernameSelector ? raw.usernameSelector : null,
-        passwordSelector: typeof raw.passwordSelector === 'string' && raw.passwordSelector ? raw.passwordSelector : null,
-        submitSelector: typeof raw.submitSelector === 'string' && raw.submitSelector ? raw.submitSelector : null,
-        formSelector: typeof raw.formSelector === 'string' && raw.formSelector ? raw.formSelector : null,
-      };
-    }
-
-    return {
-      usernameSelector: null,
-      passwordSelector: null,
-      submitSelector: null,
-      formSelector: null,
-    };
-  }
-
-  private async resolveCheckoutInfoTargetsFromDom(tabId?: string): Promise<CheckoutInfoTargets> {
-    const probe = await this.adapter.executeInPage(`
-      (() => {
-        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
-        const isVisible = (el) => {
-          if (!(el instanceof HTMLElement)) return false;
-          const style = window.getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-        };
-        const cssPath = (el) => {
-          if (!(el instanceof Element)) return '';
-          if (el.id) return '#' + CSS.escape(el.id);
-          const parts = [];
-          let node = el;
-          while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
-            let selector = node.tagName.toLowerCase();
-            const parent = node.parentElement;
-            if (parent) {
-              const siblings = Array.from(parent.children).filter(child => child.tagName === node.tagName);
-              if (siblings.length > 1) selector += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-            }
-            parts.unshift(selector);
-            node = parent;
-          }
-          return parts.join(' > ');
-        };
-        const labelOf = (field) => clean([
-          field.getAttribute('aria-label') || '',
-          field.getAttribute('name') || '',
-          field.getAttribute('id') || '',
-          field.getAttribute('placeholder') || '',
-          (field.id ? document.querySelector('label[for="' + CSS.escape(field.id) + '"]')?.textContent : '') || '',
-        ].join(' '));
-        const firstRe = /first name|firstname|given name|first/i;
-        const lastRe = /last name|lastname|surname|family name|last/i;
-        const postalRe = /postal|zip|zipcode|zip code|postcode/i;
-        const continueRe = /continue|next|review|proceed/i;
-
-        const forms = Array.from(document.querySelectorAll('form'));
-        const best = forms
-          .filter(form => form instanceof HTMLElement && isVisible(form))
-          .map((form) => {
-            const fields = Array.from(form.querySelectorAll('input,textarea,select')).filter(node => node instanceof HTMLElement && isVisible(node));
-            const first = fields.find(node => firstRe.test(labelOf(node)));
-            const last = fields.find(node => lastRe.test(labelOf(node)));
-            const postal = fields.find(node => postalRe.test(labelOf(node)));
-            const submit = Array.from(form.querySelectorAll('button,input[type="submit"],[role="button"]'))
-              .find(node => node instanceof HTMLElement && isVisible(node) && continueRe.test(clean(node.textContent || node.getAttribute('value') || node.getAttribute('aria-label') || '')));
-            let score = 0;
-            if (first) score += 4;
-            if (last) score += 4;
-            if (postal) score += 4;
-            if (submit) score += 2;
-            return {
-              formSelector: cssPath(form),
-              firstNameSelector: first ? cssPath(first) : '',
-              lastNameSelector: last ? cssPath(last) : '',
-              postalSelector: postal ? cssPath(postal) : '',
-              submitSelector: submit ? cssPath(submit) : '',
-              score,
-            };
-          })
-          .sort((a, b) => b.score - a.score)[0];
-
-        if (best && best.firstNameSelector && best.lastNameSelector && best.postalSelector) {
-          return {
-            firstNameSelector: best.firstNameSelector,
-            lastNameSelector: best.lastNameSelector,
-            postalSelector: best.postalSelector,
-            submitSelector: best.submitSelector || null,
-            formSelector: best.formSelector || null,
-          };
-        }
-
-        return {
-          firstNameSelector: null,
-          lastNameSelector: null,
-          postalSelector: null,
-          submitSelector: null,
-          formSelector: null,
-        };
-      })()
-    `, tabId);
-
-    if (!probe.error && probe.result && typeof probe.result === 'object') {
-      const raw = probe.result as Record<string, unknown>;
-      return {
-        firstNameSelector: typeof raw.firstNameSelector === 'string' && raw.firstNameSelector ? raw.firstNameSelector : null,
-        lastNameSelector: typeof raw.lastNameSelector === 'string' && raw.lastNameSelector ? raw.lastNameSelector : null,
-        postalSelector: typeof raw.postalSelector === 'string' && raw.postalSelector ? raw.postalSelector : null,
-        submitSelector: typeof raw.submitSelector === 'string' && raw.submitSelector ? raw.submitSelector : null,
-        formSelector: typeof raw.formSelector === 'string' && raw.formSelector ? raw.formSelector : null,
-      };
-    }
-
-    return {
-      firstNameSelector: null,
-      lastNameSelector: null,
-      postalSelector: null,
-      submitSelector: null,
-      formSelector: null,
-    };
-  }
-}
-
-function escapeRegex(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

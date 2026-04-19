@@ -28,6 +28,11 @@ import {
   listCallableRequestTools,
 } from './toolBindingScope';
 import type { AppServerProcess } from './AppServerProcess';
+import { runtimeLedgerStore } from '../models/runtimeLedgerStore';
+import {
+  estimateTokenCountFromText,
+  estimateTokenCountFromValue,
+} from './tokenUsageObservability';
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -107,6 +112,79 @@ function shouldEmitThoughtStatus(text: string): boolean {
     return true;
   }
   return false;
+}
+
+function recordAppServerTurnTokenUsage(input: {
+  request: AgentProviderRequest;
+  providerId: ProviderId;
+  modelId: string;
+  stage: 'tool-planning' | 'final';
+  turnIndex: number;
+  inputTokens: number;
+  outputTokens: number;
+  promptText: string;
+  responseText: string;
+  toolCalls: number;
+  autoExpanded?: boolean;
+}): void {
+  runtimeLedgerStore.recordToolEvent({
+    taskId: input.request.taskId,
+    providerId: input.providerId,
+    runId: input.request.runId,
+    summary: `Model turn token accounting: ${input.stage} #${input.turnIndex}`,
+    metadata: {
+      category: 'model-turn',
+      providerId: input.providerId,
+      modelId: input.modelId,
+      stage: input.stage,
+      turnIndex: input.turnIndex,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      promptLength: input.promptText.length,
+      responseLength: input.responseText.length,
+      promptTokenEstimate: estimateTokenCountFromText(input.promptText),
+      responseTokenEstimate: estimateTokenCountFromText(input.responseText),
+      toolCalls: input.toolCalls,
+      autoExpanded: Boolean(input.autoExpanded),
+    },
+  });
+}
+
+function recordAppServerToolCallTokenUsage(input: {
+  request: AgentProviderRequest;
+  providerId: ProviderId;
+  toolName: AgentToolName;
+  status: 'success' | 'error';
+  toolInput: unknown;
+  result: unknown;
+  resultText: string;
+}): void {
+  runtimeLedgerStore.recordToolEvent({
+    taskId: input.request.taskId,
+  providerId: input.providerId,
+    runId: input.request.runId,
+    summary: `Tool token accounting: ${input.toolName}`,
+    metadata: {
+      category: 'tool-call',
+      status: input.status,
+      toolName: input.toolName,
+      toolInputTokens: estimateTokenCountFromValue(input.toolInput),
+      toolResultTokens: estimateTokenCountFromText(input.resultText),
+      toolResultRawTokens: estimateTokenCountFromValue(input.result),
+      toolResultLength: input.resultText.length,
+      toolResultPreview: input.resultText.slice(0, 260),
+    },
+  });
+}
+
+function summarizeAppServerToolResult(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (result == null) return 'null';
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return String(result);
+  }
 }
 
 // ─── WebSocket Message Types ─────────────────────────────────────────────
@@ -244,6 +322,9 @@ export class AppServerProvider implements AgentProvider {
 
     let accumulatedMessage = '';
     let nextTurnInput: string | null = null;
+    let previousInputTokens = 0;
+    let previousOutputTokens = 0;
+    let isBaselineCaptured = false;
 
     // Build the first turn's input text — prepend contextPrompt if present (same pattern as HaikuProvider)
     const firstTurnInput = request.contextPrompt?.trim()
@@ -268,9 +349,22 @@ export class AppServerProvider implements AgentProvider {
       });
       if (this.aborted) throw new Error('Task cancelled by user.');
 
-      inputTokens += turnResult.inputTokens;
-      outputTokens += turnResult.outputTokens;
+      const deltaInputTokens = turnResult.inputTokens - previousInputTokens;
+      const deltaOutputTokens = turnResult.outputTokens - previousOutputTokens;
+      const turnInputTokens = isBaselineCaptured && deltaInputTokens >= 0 && deltaOutputTokens >= 0
+        ? deltaInputTokens
+        : turnResult.inputTokens;
+      const turnOutputTokens = isBaselineCaptured && deltaInputTokens >= 0 && deltaOutputTokens >= 0
+        ? deltaOutputTokens
+        : turnResult.outputTokens;
+      previousInputTokens = turnResult.inputTokens;
+      previousOutputTokens = turnResult.outputTokens;
+      isBaselineCaptured = true;
+
+      inputTokens += turnInputTokens;
+      outputTokens += turnOutputTokens;
       accumulatedMessage = turnResult.message;
+      const toolCalls = turnResult.codexItems.filter((item) => item.type === 'mcp_tool_call').length;
 
       for (const item of turnResult.codexItems) {
         codexItems.push(item);
@@ -289,10 +383,36 @@ export class AppServerProvider implements AgentProvider {
           toolBindingStore,
         });
         if (autoExpansion) {
+          recordAppServerTurnTokenUsage({
+            request,
+            providerId: this.providerId,
+            modelId: this.modelId,
+            stage: 'tool-planning',
+            turnIndex: turn + 1,
+            inputTokens: turnInputTokens,
+            outputTokens: turnOutputTokens,
+            promptText: turnInput,
+            responseText: turnResult.message,
+            toolCalls,
+            autoExpanded: true,
+          });
           request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
           nextTurnInput = formatAutoExpandedToolPackLines(autoExpansion, { includeCallableStatus: true }).join('\n');
           continue;
         }
+
+        recordAppServerTurnTokenUsage({
+          request,
+          providerId: this.providerId,
+          modelId: this.modelId,
+          stage: 'final',
+          turnIndex: turn + 1,
+          inputTokens: turnInputTokens,
+          outputTokens: turnOutputTokens,
+          promptText: turnInput,
+          responseText: turnResult.message,
+          toolCalls,
+        });
 
         // Emit the final output
         const finalItem = publishProviderFinalOutput({
@@ -315,6 +435,18 @@ export class AppServerProvider implements AgentProvider {
       }
 
       // kind === 'tool_calls' -> next turn
+      recordAppServerTurnTokenUsage({
+        request,
+        providerId: this.providerId,
+        modelId: this.modelId,
+        stage: 'tool-planning',
+        turnIndex: turn + 1,
+        inputTokens: turnInputTokens,
+        outputTokens: turnOutputTokens,
+        promptText: turnInput,
+        responseText: turnResult.message,
+        toolCalls,
+      });
     }
 
     // Exhausted tool turns; synthesize final
@@ -620,6 +752,16 @@ export class AppServerProvider implements AgentProvider {
                   ? `error: ${error.message.slice(0, 80)}`
                   : 'done';
                 request.onStatus?.(`tool-done:${callDescription} -> ${resultSummary}`);
+                const toolResultText = summarizeAppServerToolResult(result);
+                recordAppServerToolCallTokenUsage({
+                  request,
+                  providerId: this.providerId,
+                  toolName: toolName as AgentToolName,
+                  status: error ? 'error' : 'success',
+                  toolInput,
+                  result,
+                  resultText: toolResultText,
+                });
 
                 const completedItem: CodexItem = {
                   id: typeof item.id === 'string' ? item.id : `mcp-${Date.now()}`,

@@ -104,7 +104,7 @@ function formatCodexToolSection(tools: Pick<AgentToolDefinition, 'name' | 'descr
 function formatHaikuToolPayload(tools: Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>[]): string {
   return JSON.stringify(tools.map((tool) => ({
     name: tool.name.replace(/\./g, '__'),
-    description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
+    description: tool.description,
     input_schema: tool.inputSchema,
   })));
 }

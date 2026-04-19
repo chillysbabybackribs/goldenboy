@@ -6,6 +6,7 @@ import {
   PRIMARY_PROVIDER_ID,
   type CodexEvent,
   type CodexItem,
+  type CodexReasoningEffort,
   type ProviderId,
 } from '../../shared/types/model';
 import { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolName } from './AgentTypes';
@@ -23,18 +24,29 @@ import {
   publishProviderFinalOutput,
 } from './providerToolRuntime';
 import { createRequestToolBindingStore } from './toolBindingScope';
+import { isTokenEfficientContextMode } from './invocationContextPolicy';
+import { runtimeLedgerStore } from '../models/runtimeLedgerStore';
+import { estimateTokenCountFromText } from './tokenUsageObservability';
 
 const CODEX_INACTIVITY_TIMEOUT_MS = 180_000;
 const CODEX_WEB_SEARCH_DISABLED_CONFIG = 'web_search="disabled"';
 
-const MAX_TOOL_DESCRIPTION_CHARS = 160;
-const MAX_TOOL_SCHEMA_CHARS = 600;
-const MAX_PROMPT_HISTORY_ENTRIES = 12;
-const MAX_PROMPT_HISTORY_CHARS = 12_000;
+const MAX_TOOL_DESCRIPTION_CHARS = 100;
+const MAX_TOOL_SCHEMA_CHARS = 320;
+const MAX_PROMPT_HISTORY_ENTRIES = 10;
+const MAX_PROMPT_HISTORY_CHARS = 4_000;
+const MAX_TOOL_REGISTRY_CHARS = 5_000;
+const MAX_TOOL_REGISTRY_NAME_LINES = 80;
+const MAX_TRANSCRIPT_ENTRY_CHARS = 800;
+
+const CODEX_TOKEN_EFFICIENT_TOOL_REGISTRY_CHARS = 2_800;
+const CODEX_TOKEN_EFFICIENT_MAX_TOOL_DESCRIPTION_CHARS = 60;
+const CODEX_TOKEN_EFFICIENT_MAX_TOOL_SCHEMA_CHARS = 96;
 
 type CodexProviderOptions = {
   providerId?: ProviderId;
   modelId?: string;
+  reasoningEffort?: CodexReasoningEffort;
 };
 
 type CodexToolTurnResponse = {
@@ -74,17 +86,98 @@ function compactPromptText(text: string, maxChars: number, suffix: string): stri
   return `${trimmed.slice(0, limit)}${suffix}`;
 }
 
+function resolveToolRegistryMaxChars(): number {
+  return isTokenEfficientContextMode() ? CODEX_TOKEN_EFFICIENT_TOOL_REGISTRY_CHARS : MAX_TOOL_REGISTRY_CHARS;
+}
+
+function resolveToolDescriptionLimit(): number {
+  return isTokenEfficientContextMode()
+    ? CODEX_TOKEN_EFFICIENT_MAX_TOOL_DESCRIPTION_CHARS
+    : MAX_TOOL_DESCRIPTION_CHARS;
+}
+
+function resolveToolSchemaLimit(): number {
+  return isTokenEfficientContextMode()
+    ? CODEX_TOKEN_EFFICIENT_MAX_TOOL_SCHEMA_CHARS
+    : MAX_TOOL_SCHEMA_CHARS;
+}
+
 function compactSchema(schema: unknown): string {
-  return compactPromptText(JSON.stringify(schema), MAX_TOOL_SCHEMA_CHARS, '...[schema truncated]');
+  const raw = isTokenEfficientContextMode() ? compactSchemaProjection(schema) : JSON.stringify(schema);
+  return compactPromptText(raw, resolveToolSchemaLimit(), '...[schema truncated]');
+}
+
+function compactSchemaProjection(schema: unknown): string {
+  if (schema === null || typeof schema !== 'object') return JSON.stringify(schema ?? {});
+  const inputSchema = schema as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+    [key: string]: unknown;
+  };
+  const properties = inputSchema.properties;
+  if (!properties || typeof properties !== 'object') {
+    return JSON.stringify(schema);
+  }
+
+  const propertyKeys = Object.keys(properties).slice(0, 12);
+  if (propertyKeys.length === 0) return JSON.stringify(inputSchema);
+
+  const required = Array.isArray(inputSchema.required) ? inputSchema.required.slice(0, 6) : [];
+  return JSON.stringify({
+    ...(inputSchema.type ? { type: inputSchema.type } : {}),
+    required: required.length > 0 ? required : undefined,
+    properties: propertyKeys.reduce<Record<string, unknown>>((acc, key) => {
+      const candidate = (properties as Record<string, { description?: string; type?: string }>)[key];
+      if (candidate && typeof candidate === 'object') {
+        acc[key] = {
+          ...(candidate.type ? { type: candidate.type } : {}),
+          ...(candidate.description ? { description: candidate.description } : {}),
+        };
+      }
+      return acc;
+    }, {}),
+  });
 }
 
 function buildToolRegistryText(tools: AgentProviderRequest['promptTools']): string {
   if (tools.length === 0) return 'No tools are available in this runtime.';
-  return tools.map((tool) => [
-    `- ${tool.name}`,
-    `  Description: ${compactPromptText(tool.description, MAX_TOOL_DESCRIPTION_CHARS, '...')}`,
-    `  Input schema: ${compactSchema(tool.inputSchema)}`,
-  ].join('\n')).join('\n\n');
+  const selected: string[] = [];
+  let usedChars = 0;
+
+  for (const tool of tools) {
+    const entry = [
+      `- ${tool.name}`,
+      `  Description: ${compactPromptText(tool.description, resolveToolDescriptionLimit(), '...')}`,
+      `  Input schema: ${compactSchema(tool.inputSchema)}`,
+    ].join('\n');
+
+    const entryWithSeparator = selected.length === 0 ? entry : `\n\n${entry}`;
+    if (usedChars + entryWithSeparator.length > resolveToolRegistryMaxChars()) {
+      const omitted = tools.length - selected.length;
+      if (selected.length === 0) {
+        const visibleNames = tools.slice(0, MAX_TOOL_REGISTRY_NAME_LINES).map((tool) => `- ${tool.name}`);
+        const additional = tools.length > visibleNames.length ? `\n...and ${tools.length - visibleNames.length} more.` : '';
+        return [
+          `Available tools: ${tools.length}.`,
+          `Tool definitions were too large for full prompt inclusion.`,
+          'Showing names only:',
+          ...visibleNames,
+          additional,
+        ].join('\n');
+      }
+      selected.push(`...tool registry truncated to ${usedChars} chars (${omitted} additional tool definitions omitted).`);
+    }
+    if (selected.length > 0 && usedChars + entryWithSeparator.length > resolveToolRegistryMaxChars()) break;
+
+    selected.push(entry);
+    usedChars += entryWithSeparator.length;
+  }
+
+  const omitted = tools.length - selected.length;
+  return [
+    `Available tools: ${tools.length} total, showing ${selected.length} with full details.` + (omitted > 0 ? ` ${omitted} omitted.` : ''),
+    ...selected,
+  ].join('\n');
 }
 
 function buildTranscriptHistory(transcript: TranscriptEntry[]): string {
@@ -95,9 +188,10 @@ function buildTranscriptHistory(transcript: TranscriptEntry[]): string {
   let usedChars = 0;
   for (let index = recent.length - 1; index >= 0; index -= 1) {
     const entry = recent[index];
-    const nextSize = entry.content.length + (selected.length > 0 ? 2 : 0);
+    const compactEntry = compactPromptText(entry.content, MAX_TRANSCRIPT_ENTRY_CHARS, '\n...[step truncated]');
+    const nextSize = compactEntry.length + (selected.length > 0 ? 2 : 0);
     if (selected.length > 0 && usedChars + nextSize > MAX_PROMPT_HISTORY_CHARS) break;
-    selected.unshift(entry);
+    selected.unshift({ ...entry, content: compactEntry });
     usedChars += nextSize;
   }
 
@@ -108,7 +202,7 @@ function buildTranscriptHistory(transcript: TranscriptEntry[]): string {
   }
   sections.push(selected.map((entry, index) => [
     `### Step ${omittedCount + index + 1} (${entry.type})`,
-    compactPromptText(entry.content, MAX_PROMPT_HISTORY_CHARS, '\n...[step truncated]'),
+    entry.content,
   ].join('\n')).join('\n\n'));
   return sections.join('\n\n');
 }
@@ -120,15 +214,11 @@ function buildToolPlanningPromptFrame(
 ): string {
 
   const sections = [
-    '# System Instructions',
     request.systemPrompt.trim(),
-    '# Codex Runtime Contract',
+    '# Turn Contract',
     [
-      'You are running inside the V2 runtime as a model transport only.',
-      'Do not execute shell commands, do not edit files directly, and do not use Codex built-in MCP or browser capabilities.',
-      'If you need external state, request one or more V2 tools and wait for the host to return results.',
-      'The user cannot see raw tool results or raw terminal/browser output unless you restate them in assistant text. Tool status lines are only compact progress indicators.',
-      'Respect runtime validation blocks exactly as written. Do not override INVALID or INCOMPLETE verdicts.',
+      'The shared system prompt already defines the runtime contract.',
+      'This turn-specific frame only defines the structured JSON response format for codex exec.',
       forceFinal
         ? 'The host will not execute any more tools in this turn. Produce the best final answer from the evidence already gathered.'
         : 'When you need tools, respond with kind="tool_calls" and provide only the minimal next calls needed.',
@@ -172,6 +262,7 @@ function buildToolPlanningPrompt(
 }
 
 function buildToolLoopOutputSchema(toolNames: AgentToolName[]): Record<string, unknown> {
+  void toolNames;
   return {
     type: 'object',
     additionalProperties: false,
@@ -190,7 +281,6 @@ function buildToolLoopOutputSchema(toolNames: AgentToolName[]): Record<string, u
           properties: {
             name: {
               type: 'string',
-              enum: toolNames,
             },
             arguments_json: {
               type: 'string',
@@ -268,9 +358,46 @@ function parseStructuredResponse(text: string): CodexToolTurnResponse {
   };
 }
 
+function recordCodexTurnTokenUsage(input: {
+  request: AgentProviderRequest;
+  providerId: ProviderId;
+  modelId: string;
+  stage: 'tool-planning' | 'final';
+  turnIndex: number;
+  inputTokens: number;
+  outputTokens: number;
+  promptText: string;
+  responseText: string;
+  toolCalls: number;
+  autoExpanded?: boolean;
+}): void {
+  runtimeLedgerStore.recordToolEvent({
+    taskId: input.request.taskId,
+    providerId: input.providerId,
+    runId: input.request.runId,
+    summary: `Model turn token accounting: ${input.stage} #${input.turnIndex}`,
+    metadata: {
+      category: 'model-turn',
+      providerId: input.providerId,
+      modelId: input.modelId,
+      stage: input.stage,
+      turnIndex: input.turnIndex,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      promptLength: input.promptText.length,
+      responseLength: input.responseText.length,
+      promptTokenEstimate: estimateTokenCountFromText(input.promptText),
+      responseTokenEstimate: estimateTokenCountFromText(input.responseText),
+      toolCalls: input.toolCalls,
+      autoExpanded: Boolean(input.autoExpanded),
+    },
+  });
+}
+
 export class CodexProvider implements AgentProvider {
   readonly providerId: ProviderId;
   readonly modelId: string;
+  readonly reasoningEffort?: CodexReasoningEffort;
   readonly supportsAppToolExecutor = true;
 
   private aborted = false;
@@ -279,6 +406,7 @@ export class CodexProvider implements AgentProvider {
   constructor(options: CodexProviderOptions = {}) {
     this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;
     this.modelId = options.modelId ?? this.providerId;
+    this.reasoningEffort = options.reasoningEffort;
   }
 
   static isAvailable(): { available: boolean; error?: string } {
@@ -325,10 +453,23 @@ export class CodexProvider implements AgentProvider {
     };
 
     if (toolBindingStore.getCallableTools().length === 0) {
+      const promptText = buildPrompt([], true);
       const finalResult = await this.invokeCodexTurn(
-        buildPrompt([], true),
+        promptText,
         buildFinalOnlyOutputSchema(),
       );
+      recordCodexTurnTokenUsage({
+        request,
+        providerId: this.providerId,
+        modelId: this.modelId,
+        stage: 'final',
+        turnIndex: 1,
+        inputTokens: finalResult.usage.inputTokens,
+        outputTokens: finalResult.usage.outputTokens,
+        promptText,
+        responseText: finalResult.response.message,
+        toolCalls: 0,
+      });
       inputTokens += finalResult.usage.inputTokens;
       outputTokens += finalResult.usage.outputTokens;
       const finalText = normalizeProviderFinalOutput(finalResult.response.message);
@@ -356,13 +497,26 @@ export class CodexProvider implements AgentProvider {
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
       const callableTools = toolBindingStore.beginTurn();
+      const promptText = buildPrompt(callableTools, false);
 
       const turnResult = await this.invokeCodexTurn(
-        buildPrompt(callableTools, false),
+        promptText,
         buildToolLoopOutputSchema(callableTools.map(tool => tool.name as AgentToolName)),
       );
       inputTokens += turnResult.usage.inputTokens;
       outputTokens += turnResult.usage.outputTokens;
+      recordCodexTurnTokenUsage({
+        request,
+        providerId: this.providerId,
+        modelId: this.modelId,
+        stage: turnResult.response.kind === 'final' ? 'final' : 'tool-planning',
+        turnIndex: turn + 1,
+        inputTokens: turnResult.usage.inputTokens,
+        outputTokens: turnResult.usage.outputTokens,
+        promptText,
+        responseText: turnResult.response.message,
+        toolCalls: turnResult.response.tool_calls.length,
+      });
 
       const response = turnResult.response;
       if (response.kind === 'final') {
@@ -503,10 +657,20 @@ export class CodexProvider implements AgentProvider {
       }
     }
 
-    const finalResult = await this.invokeCodexTurn(
-      buildPrompt(toolBindingStore.beginTurn(), true),
-      buildFinalOnlyOutputSchema(),
-    );
+    const finalPrompt = buildPrompt(toolBindingStore.beginTurn(), true);
+    const finalResult = await this.invokeCodexTurn(finalPrompt, buildFinalOnlyOutputSchema());
+    recordCodexTurnTokenUsage({
+      request,
+      providerId: this.providerId,
+      modelId: this.modelId,
+      stage: 'final',
+      turnIndex: maxToolTurns + 1,
+      inputTokens: finalResult.usage.inputTokens,
+      outputTokens: finalResult.usage.outputTokens,
+      promptText: finalPrompt,
+      responseText: finalResult.response.message,
+      toolCalls: 0,
+    });
     inputTokens += finalResult.usage.inputTokens;
     outputTokens += finalResult.usage.outputTokens;
     const finalText = normalizeProviderFinalOutput(finalResult.response.message);
@@ -549,6 +713,9 @@ export class CodexProvider implements AgentProvider {
             '--json',
             '--model',
             this.modelId,
+            ...(this.reasoningEffort
+              ? ['-c', `model_reasoning_effort=${JSON.stringify(this.reasoningEffort)}`]
+              : []),
             '-c',
             CODEX_WEB_SEARCH_DISABLED_CONFIG,
             '--dangerously-bypass-approvals-and-sandbox',

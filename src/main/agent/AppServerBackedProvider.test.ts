@@ -180,6 +180,8 @@ describe('AppServerBackedProvider', () => {
       5678,
       expect.stringContaining('v2-mcp-shim.js'),
       contextPath,
+      'gpt-5.4',
+      undefined,
     );
     expect(processStartMock).toHaveBeenCalledTimes(1);
     expect(processWaitUntilReadyMock).toHaveBeenCalledTimes(1);

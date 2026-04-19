@@ -15,12 +15,16 @@ import type {
   BrowserOperationExecutionContext,
   BrowserOperationKind,
 } from '../../shared/types/browserOperationLedger';
-import type { BrowserContextService } from './browserContext';
 import {
   buildTargetDescriptor,
   isReplaySupportedOperation,
   validateOperationOutcome,
 } from './browserDeterministicExecution';
+import {
+  requireBrowserRuntime,
+  resolveOperationTabId,
+} from './browserOperations.utils';
+import { executeNavigationOperations } from './browserOperations.navigation';
 import {
   decideBrowserExecution,
   finalizeBrowserExecutionDecision,
@@ -30,7 +34,6 @@ import { browserContextManager } from './browserContextManager';
 import { browserOperationLedger } from './browserOperationLedger';
 import type { BrowserOperationExecutionMeta } from './browserOperationReplayStore';
 import { browserOperationReplayStore } from './browserOperationReplayStore';
-import { normalizeNavigationTarget } from './navigationTarget';
 
 export type { BrowserOperationKind } from '../../shared/types/browserOperationLedger';
 
@@ -97,92 +100,6 @@ export type BrowserOperationResult = {
   summary: string;
   data: Record<string, unknown>;
 };
-
-function currentSearchYear(): number {
-  return new Date().getFullYear();
-}
-
-function hasExplicitYear(query: string): boolean {
-  return /\b(?:19|20)\d{2}\b/.test(query);
-}
-
-function isFreshnessSensitiveSearchQuery(query: string): boolean {
-  const normalized = query.toLowerCase();
-  return /\b(latest|current|today|recent|newest|up[- ]?to[- ]?date|breaking|news|release(?: notes?)?|pricing|price|cost|version|docs?|documentation|policy|policies|law|laws|regulation|regulations|guidance|schedule|scores?)\b/.test(normalized);
-}
-
-function prepareSearchEngineQuery(query: string): string {
-  const trimmed = query.trim();
-  if (!trimmed) return trimmed;
-  if (hasExplicitYear(trimmed) || !isFreshnessSensitiveSearchQuery(trimmed)) {
-    return trimmed;
-  }
-  return `${trimmed} ${currentSearchYear()}`;
-}
-
-function getDebugNavigateDelayMs(): number {
-  const raw = process.env.V2_DEBUG_NAVIGATE_DELAY_MS;
-  if (!raw) return 0;
-  const ms = parseInt(raw, 10);
-  return Number.isFinite(ms) && ms > 0 ? ms : 0;
-}
-
-function requireBrowserRuntime(browser: BrowserContextService): void {
-  if (!browser.isCreated()) {
-    throw new Error('Browser runtime not initialized');
-  }
-}
-
-async function waitForBrowserLoad(
-  browser: BrowserContextService,
-  timeoutMs: number = 5000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start <= timeoutMs) {
-    const state = browser.getState();
-    if (!state.navigation.isLoading) return;
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-}
-
-async function executeNavigation(
-  browser: BrowserContextService,
-  url: string,
-): Promise<BrowserOperationResult> {
-  browser.navigate(url);
-
-  const delayMs = getDebugNavigateDelayMs();
-  if (delayMs > 0) {
-    await new Promise(resolve => setTimeout(resolve, delayMs));
-  }
-
-  await waitForBrowserLoad(browser, 5000);
-
-  const state = browser.getState();
-  const metadata = await browser.getPageMetadata();
-  const preview = await browser.getPageText(2000);
-
-  return {
-    summary: `Navigated to ${state.navigation.url || url}`,
-    data: {
-      url: state.navigation.url || url,
-      title: state.navigation.title,
-      isLoading: state.navigation.isLoading,
-      tabCount: state.tabs.length,
-      pagePreview: preview.slice(0, 2000),
-      metadata,
-    },
-  };
-}
-
-function resolveOperationTabId(
-  state: ReturnType<BrowserContextService['getState']>,
-  payload: Record<string, unknown>,
-  context?: BrowserOperationExecutionContext,
-): string | null {
-  const payloadTabId = typeof payload.tabId === 'string' && payload.tabId ? payload.tabId : null;
-  return context?.tabId ?? payloadTabId ?? state.activeTabId ?? null;
-}
 
 export function executeBrowserOperation<K extends BrowserOperationKind>(
   input: {
@@ -256,134 +173,21 @@ export async function executeBrowserOperation(
 
     switch (input.kind) {
       case 'browser.navigate':
-        result = await executeNavigation(browser, input.payload.url);
-        break;
-
       case 'browser.search-web':
-        result = await executeNavigation(
-          browser,
-          normalizeNavigationTarget(prepareSearchEngineQuery(input.payload.query), { searchEngine: 'duckduckgo' }).url,
-        );
+      case 'browser.back':
+      case 'browser.forward':
+      case 'browser.reload':
+      case 'browser.stop':
+      case 'browser.create-tab':
+      case 'browser.close-tab':
+      case 'browser.activate-tab':
+      case 'browser.split-tab':
+      case 'browser.clear-split-view':
+        result = await executeNavigationOperations(browser, {
+          kind: input.kind,
+          payload: input.payload as Record<string, unknown>,
+        });
         break;
-
-      case 'browser.back': {
-        const before = browser.getState();
-        if (!before.navigation.canGoBack) {
-          throw new Error('Cannot go back: no history');
-        }
-        browser.goBack();
-        const after = browser.getState();
-        result = {
-          summary: 'Navigated back',
-          data: {
-            url: after.navigation.url,
-            title: after.navigation.title,
-            canGoBack: after.navigation.canGoBack,
-            canGoForward: after.navigation.canGoForward,
-          },
-        };
-        break;
-      }
-
-      case 'browser.forward': {
-        const before = browser.getState();
-        if (!before.navigation.canGoForward) {
-          throw new Error('Cannot go forward: no forward history');
-        }
-        browser.goForward();
-        const after = browser.getState();
-        result = {
-          summary: 'Navigated forward',
-          data: {
-            url: after.navigation.url,
-            title: after.navigation.title,
-            canGoBack: after.navigation.canGoBack,
-            canGoForward: after.navigation.canGoForward,
-          },
-        };
-        break;
-      }
-
-      case 'browser.reload': {
-        browser.reload();
-        const state = browser.getState();
-        result = {
-          summary: 'Page reload initiated',
-          data: { url: state.navigation.url, isLoading: state.navigation.isLoading },
-        };
-        break;
-      }
-
-      case 'browser.stop': {
-        browser.stop();
-        const state = browser.getState();
-        result = {
-          summary: 'Page loading stopped',
-          data: { url: state.navigation.url, isLoading: state.navigation.isLoading },
-        };
-        break;
-      }
-
-      case 'browser.create-tab': {
-        const { url, insertAfterTabId } = input.payload;
-        const tab = browser.createTab(url, insertAfterTabId);
-        result = {
-          summary: url ? `Opened tab: ${url}` : `Opened new tab (${tab.id})`,
-          data: {
-            tabId: tab.id,
-            url: url || '',
-            totalTabs: browser.getTabs().length,
-          },
-        };
-        break;
-      }
-
-      case 'browser.close-tab': {
-        const { tabId } = input.payload;
-        browser.closeTab(tabId);
-        result = {
-          summary: `Closed tab ${tabId}`,
-          data: { closedTabId: tabId, remainingTabs: browser.getTabs().length },
-        };
-        break;
-      }
-
-      case 'browser.activate-tab': {
-        const { tabId } = input.payload;
-        browser.activateTab(tabId);
-        const state = browser.getState();
-        result = {
-          summary: `Activated tab ${tabId}`,
-          data: { tabId, url: state.navigation.url, title: state.navigation.title },
-        };
-        break;
-      }
-
-      case 'browser.split-tab': {
-        const tab = browser.splitTab(input.payload.tabId);
-        result = {
-          summary: `Split browser tab into ${tab.id}`,
-          data: {
-            tabId: tab.id,
-            splitLeftTabId: browser.getState().splitLeftTabId,
-            splitRightTabId: browser.getState().splitRightTabId,
-          },
-        };
-        break;
-      }
-
-      case 'browser.clear-split-view': {
-        browser.clearSplitView();
-        const state = browser.getState();
-        result = {
-          summary: 'Cleared split view',
-          data: {
-            splitLeftTabId: state.splitLeftTabId,
-            splitRightTabId: state.splitRightTabId,
-          },
-        };
-        break;
-      }
 
       case 'browser.click': {
         const { selector, tabId } = input.payload;

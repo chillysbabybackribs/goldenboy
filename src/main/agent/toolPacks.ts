@@ -15,6 +15,7 @@ import { fileEditToolPack } from './tool-packs/fileEdit';
 import { fileCacheToolPack } from './tool-packs/fileCache';
 import { chatRecallToolPack } from './tool-packs/chatRecall';
 import { allToolsToolPack } from './tool-packs/allTools';
+import { loadEnvFlag, loadEnvValue } from './loadEnv';
 
 type NormalizedTaskKind =
   | 'orchestration'
@@ -44,18 +45,28 @@ export type PreflightToolPackExpansion = ToolPackExpansion & {
 export type ToolSearchMatch = {
   name: AgentToolName;
   description: string;
-  category: string;
   relatedPackIds: string[];
-  bindingState: 'discoverable' | 'callable';
   callableNow: boolean;
   invokableNow: boolean;
   invocationMethod: 'direct' | 'runtime.invoke_tool';
   availableNextTurn: boolean;
-  score: number;
-  reason: string;
 };
 
-export const DEFAULT_TOOL_PACK_PRESET: AgentToolPackPreset = 'mode-6';
+type ScoredToolSearchMatch = ToolSearchMatch & {
+  _score: number;
+  _reason: string;
+};
+
+function resolveDefaultToolPackPreset(): AgentToolPackPreset {
+  if (loadEnvFlag('V2_FULL_STRENGTH_EVAL')) return 'all';
+  const configured = loadEnvValue('V2_AGENT_TOOL_PACK_PRESET');
+  if (configured === 'all' || configured === 'mode-6' || configured === 'mode-4') {
+    return configured;
+  }
+  return 'mode-6';
+}
+
+export const DEFAULT_TOOL_PACK_PRESET: AgentToolPackPreset = resolveDefaultToolPackPreset();
 export const RUNTIME_SEARCH_TOOLS_TOOL_NAME = 'runtime.search_tools' as const;
 export const RUNTIME_REQUIRE_TOOLS_TOOL_NAME = 'runtime.require_tools' as const;
 export const RUNTIME_INVOKE_TOOL_NAME = 'runtime.invoke_tool' as const;
@@ -146,14 +157,7 @@ export function getToolPack(packId: string): ToolPackManifest | null {
 }
 
 export function buildRuntimeRequestToolDescription(): string {
-  return [
-    'Request an additional host-managed tool pack when the current scope is insufficient.',
-    'Prefer runtime.search_tools first when you only need a few exact tools; request a whole pack only when you need a broad surface.',
-    'If you are unsure which pack contains the needed capability, call runtime.list_tool_packs first.',
-    'Use this immediately when you need a broad category of tools instead of guessing or continuing with degraded output.',
-    'Requested pack tools become callable on the next turn unless they are already in the current scope.',
-    'Pass the pack id in `pack`. The input schema already validates the available pack ids.',
-  ].join('\n');
+  return 'Request a broader host-managed tool pack when runtime.search_tools is not enough. Requested pack tools become callable on the next turn.';
 }
 
 function packIdsForTool(name: AgentToolName): string[] {
@@ -238,29 +242,30 @@ export function searchToolCatalog(
 
   return toolCatalog
     .filter((tool) => tool.name !== RUNTIME_SEARCH_TOOLS_TOOL_NAME)
-    .map((tool) => {
+    .map((tool): ScoredToolSearchMatch => {
       const { score, reason } = scoreToolMatch(query, tool);
+      const callableNow = currentToolNames.has(tool.name);
+      const invocationMethod: ToolSearchMatch['invocationMethod'] = callableNow ? 'direct' : 'runtime.invoke_tool';
       return {
         name: tool.name,
         description: tool.description,
-        category: tool.name.split('.')[0] ?? 'general',
         relatedPackIds: packIdsForTool(tool.name),
-        bindingState: currentToolNames.has(tool.name) ? 'callable' : 'discoverable',
-        callableNow: currentToolNames.has(tool.name),
+        callableNow,
         invokableNow: true,
-        invocationMethod: currentToolNames.has(tool.name) ? 'direct' : 'runtime.invoke_tool',
-        availableNextTurn: !currentToolNames.has(tool.name),
-        score,
-        reason,
-      } satisfies ToolSearchMatch;
+        invocationMethod,
+        availableNextTurn: !callableNow,
+        _score: score,
+        _reason: reason,
+      };
     })
-    .filter((match) => match.score > 0)
+    .filter((match) => match._score > 0)
     .sort((left, right) => {
-      if (right.score !== left.score) return right.score - left.score;
+      if (right._score !== left._score) return right._score - left._score;
       if (left.callableNow !== right.callableNow) return Number(left.callableNow) - Number(right.callableNow);
       return left.name.localeCompare(right.name);
     })
-    .slice(0, limit);
+    .slice(0, limit)
+    .map(({ _score: _discardedScore, _reason: _discardedReason, ...match }) => match satisfies ToolSearchMatch);
 }
 
 export function resolveAllowedToolsForTaskKind(

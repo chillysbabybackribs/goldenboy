@@ -21,6 +21,7 @@ export type LiveRunCard = {
   cancelling: boolean;
   activeToolEl: HTMLElement | null;
   currentToolStack: ToolStackState | null;
+  pendingThoughtText: string;
   tokenBuffer: string;
   tokenVisibleLength: number;
   tokenTypingTimer: number | null;
@@ -110,6 +111,27 @@ function appendThoughtLine(card: LiveRunCard, text: string): void {
   card.stream.appendChild(line);
 }
 
+function normalizeThoughtTextForBuffer(text: string): string {
+  return text.replace(/\r\n/g, '\n');
+}
+
+function shouldFlushThoughtBuffer(text: string): boolean {
+  return /[.!?]["')\]]?\s*$|\n\s*$/.test(text) || text.length >= 220;
+}
+
+function flushPendingThoughtText(card: LiveRunCard): void {
+  const text = card.pendingThoughtText.trim();
+  if (!text) {
+    card.pendingThoughtText = '';
+    return;
+  }
+
+  for (const chunk of normalizeThoughtChunks(text)) {
+    appendThoughtLine(card, chunk);
+  }
+  card.pendingThoughtText = '';
+}
+
 function appendSystemLine(card: LiveRunCard, text: string): void {
   const line = document.createElement('div');
   line.className = 'chat-live-note';
@@ -149,6 +171,7 @@ export function createLiveRunCard(
     cancelling: false,
     activeToolEl: null,
     currentToolStack: null,
+    pendingThoughtText: '',
     tokenBuffer: '',
     tokenVisibleLength: 0,
     tokenTypingTimer: null,
@@ -172,6 +195,7 @@ export function markCancelling(taskId: string): void {
     card.tokenTypingTimer = null;
   }
 
+  flushPendingThoughtText(card);
   card.finalResponse?.classList.add('chat-response-complete');
   if (card.activeToolEl) {
     setToolRowState(card.activeToolEl, card.activeToolEl.textContent || 'Stopped tool', false);
@@ -190,6 +214,7 @@ export function appendToken(taskId: string, text: string): void {
   if (!card || card.cancelling || !text) return;
 
   ensureStatusCleared(card);
+  flushPendingThoughtText(card);
   card.tokenBuffer += text;
   card.tokenVisibleLength = card.tokenBuffer.length;
 
@@ -228,14 +253,16 @@ export function appendThought(taskId: string, text: string): void {
   const card = liveRunCards.get(taskId);
   if (!card || card.cancelling || card.tokenBuffer.length > 0) return;
 
-  const trimmed = text.trim();
+  const normalized = normalizeThoughtTextForBuffer(text);
+  const trimmed = normalized.trim();
   if (!trimmed) return;
   if (/^\+?\s*tool\b/i.test(trimmed) || /^tool (result|call):/i.test(trimmed)) return;
   if (/^##\s*(Critique Summary|Observation|Inference)\b/.test(trimmed)) return;
 
   ensureStatusCleared(card);
-  for (const chunk of normalizeThoughtChunks(trimmed)) {
-    appendThoughtLine(card, chunk);
+  card.pendingThoughtText += normalized;
+  if (shouldFlushThoughtBuffer(card.pendingThoughtText)) {
+    flushPendingThoughtText(card);
   }
   card.currentToolStack = null;
   card.callbacks.scheduleChatScrollToBottom(false, 1);
@@ -254,12 +281,14 @@ export function migrateBufferedOutputToThoughts(taskId: string): void {
   card.finalResponse = null;
   card.callbacks.updateLastAgentResponseText('');
   appendThought(taskId, text);
+  flushPendingThoughtText(card);
 }
 
 // ─── Tool Cards ─────────────────────────────────────────────────────────────
 
 function renderToolLine(card: LiveRunCard, kind: 'start' | 'done', text: string): void {
   ensureStatusCleared(card);
+  flushPendingThoughtText(card);
   const stack = ensureToolStack(card);
 
   if (kind === 'start') {
@@ -356,6 +385,7 @@ function flushFinalResult(taskId: string, result: any, _provider?: string): void
   if (!card) return;
 
   ensureStatusCleared(card);
+  flushPendingThoughtText(card);
 
   if (result.success) {
     const finalOutput = String(result.output || '');
@@ -396,6 +426,7 @@ function flushError(taskId: string, error: string): void {
   if (!card) return;
 
   ensureStatusCleared(card);
+  flushPendingThoughtText(card);
 
   if (card.finalResponse?.isConnected) {
     card.finalResponse.className = 'chat-msg-error chat-final-response';

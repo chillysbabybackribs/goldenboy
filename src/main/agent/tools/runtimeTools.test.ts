@@ -43,7 +43,6 @@ describe('runtime tools', () => {
     expect(result.data.matches).toEqual([
       expect.objectContaining({
         name: 'browser.close_tab',
-        bindingState: 'discoverable',
         callableNow: false,
         invokableNow: true,
         invocationMethod: 'runtime.invoke_tool',
@@ -51,7 +50,6 @@ describe('runtime tools', () => {
       }),
       expect.objectContaining({
         name: 'browser.get_tabs',
-        bindingState: 'callable',
         callableNow: true,
         invokableNow: true,
         invocationMethod: 'direct',

@@ -87,6 +87,8 @@ export class AppServerProcess extends EventEmitter {
     private readonly bridgePort: number,
     private readonly shimPath: string,
     private readonly contextPath: string,
+    private readonly modelId?: string,
+    private readonly reasoningEffort?: string,
   ) {
     super();
   }
@@ -188,7 +190,13 @@ export class AppServerProcess extends EventEmitter {
 
   private spawnProcess(): Promise<number> {
     return new Promise((resolve, reject) => {
-      const child = spawn('codex', ['app-server', '--listen', 'ws://127.0.0.1:0'], {
+      const child = spawn('codex', [
+        'app-server',
+        '--listen',
+        'ws://127.0.0.1:0',
+        ...(this.modelId ? ['-c', `model=${JSON.stringify(this.modelId)}`] : []),
+        ...(this.reasoningEffort ? ['-c', `model_reasoning_effort=${JSON.stringify(this.reasoningEffort)}`] : []),
+      ], {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
       });

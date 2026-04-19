@@ -94,6 +94,8 @@ describe('HaikuProvider', () => {
     recordToolMessageMock.mockReset();
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_MODEL;
+    delete process.env.ANTHROPIC_MAX_TOKENS;
+    delete process.env.V2_HAIKU_MAX_TOKENS;
   });
 
   it('requires an Anthropic API key', () => {
@@ -185,5 +187,21 @@ describe('HaikuProvider', () => {
     expect(executeMock).toHaveBeenCalledWith('filesystem.list', { path: '.' }, expect.any(Object));
     expect(tokens).toEqual(['Done.']);
     expect(result.output).toBe('Done.');
+  });
+
+  it('uses V2_HAIKU_MAX_TOKENS when set', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+    process.env.V2_HAIKU_MAX_TOKENS = '2222';
+    process.env.ANTHROPIC_MAX_TOKENS = '6666';
+
+    streamMock.mockReturnValue(createTextOnlyStream('Done.'));
+
+    const provider = new HaikuProvider();
+    await provider.invoke(buildRequest());
+
+    expect(streamMock).toHaveBeenCalledTimes(1);
+    const options = streamMock.mock.calls[0]?.[0];
+    expect(options?.max_tokens).toBe(2222);
   });
 });

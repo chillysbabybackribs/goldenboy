@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_TOOL_PACK_PRESET,
   getToolPack,
   resolveAllowedToolsForTaskKind,
   resolveAutoExpandedToolPack,
@@ -8,6 +9,11 @@ import {
 } from './toolPacks';
 
 describe('tool packs', () => {
+  afterEach(() => {
+    delete process.env.V2_FULL_STRENGTH_EVAL;
+    delete process.env.V2_AGENT_TOOL_PACK_PRESET;
+  });
+
   it('returns exact four-tool packs for the minimal preset', () => {
     const research = resolveAllowedToolsForTaskKind('research', 'mode-4');
     const orchestration = resolveAllowedToolsForTaskKind('orchestration', 'mode-4');
@@ -97,6 +103,10 @@ describe('tool packs', () => {
     expect(resolveAllowedToolsForTaskKind('browser-search', 'all')).toBe('all');
   });
 
+  it('defaults to the scoped preset when no evaluation override is present', () => {
+    expect(DEFAULT_TOOL_PACK_PRESET).toBe('mode-6');
+  });
+
   it('searches the tool catalog and ranks exact missing tools first', () => {
     const matches = searchToolCatalog(
       'close browser tabs',
@@ -115,12 +125,10 @@ describe('tool packs', () => {
       'browser.close_tab',
       'browser.get_tabs',
     ]);
-    expect(matches[0]?.bindingState).toBe('discoverable');
     expect(matches[0]?.callableNow).toBe(false);
     expect(matches[0]?.invokableNow).toBe(true);
     expect(matches[0]?.invocationMethod).toBe('runtime.invoke_tool');
     expect(matches[0]?.availableNextTurn).toBe(true);
-    expect(matches[1]?.bindingState).toBe('callable');
     expect(matches[1]?.callableNow).toBe(true);
     expect(matches[1]?.invokableNow).toBe(true);
     expect(matches[1]?.invocationMethod).toBe('direct');

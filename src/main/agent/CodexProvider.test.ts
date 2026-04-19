@@ -22,12 +22,25 @@ vi.mock('./AgentToolExecutor', () => ({
   },
 }));
 
+vi.mock('./AgentToolExecutor.js', () => ({
+  agentToolExecutor: {
+    execute: executeMock,
+  },
+}));
+
 vi.mock('../chatKnowledge/ChatKnowledgeStore', () => ({
   chatKnowledgeStore: {
     recordToolMessage: recordToolMessageMock,
   },
 }));
 
+vi.mock('../chatKnowledge/ChatKnowledgeStore.js', () => ({
+  chatKnowledgeStore: {
+    recordToolMessage: recordToolMessageMock,
+  },
+}));
+
+import * as providerToolRuntime from './providerToolRuntime';
 import { CodexProvider } from './CodexProvider.ts';
 
 type MockChildProcess = EventEmitter & {
@@ -93,11 +106,78 @@ function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProvi
 }
 
 describe('CodexProvider', () => {
+  let executeProviderToolCallWithEventsSpy: ReturnType<typeof vi.spyOn> | undefined;
+
   beforeEach(() => {
+    executeProviderToolCallWithEventsSpy?.mockRestore();
     spawnMock.mockReset();
     spawnSyncMock.mockClear();
     executeMock.mockReset();
     recordToolMessageMock.mockReset();
+    executeProviderToolCallWithEventsSpy = vi.spyOn(providerToolRuntime, 'executeProviderToolCallWithEvents').mockImplementation(async (input: any) => {
+      const startedItem = {
+        id: input.itemId,
+        type: 'mcp_tool_call',
+        server: 'v2',
+        tool: input.toolName,
+        arguments: (input.toolInput && typeof input.toolInput === 'object') ? input.toolInput : {},
+        result: null,
+        error: null,
+        status: 'in_progress',
+      };
+      input.request.onItem?.({ item: startedItem, eventType: 'item.started' });
+
+      try {
+        const result = await executeMock(input.toolName, input.toolInput, {
+          runId: input.request.runId,
+          agentId: input.request.agentId,
+          mode: input.request.mode,
+          taskId: input.request.taskId,
+          toolNames: input.currentTools.map((tool: { name: string }) => tool.name),
+          toolCatalog: input.request.toolCatalog,
+          onProgress: input.request.onStatus,
+        });
+
+        recordToolMessageMock(
+          input.request.taskId,
+          JSON.stringify({ tool: input.toolName, input: input.toolInput, result }),
+          input.providerId,
+          input.request.runId,
+        );
+
+        const completedItem = {
+          ...startedItem,
+          result,
+          status: 'completed',
+        };
+        input.request.onItem?.({ item: completedItem, eventType: 'item.completed' });
+
+        return {
+          ok: true as const,
+          result,
+          resultDescription: result?.summary ?? 'Tool completed',
+          toolContent: JSON.stringify(result),
+          callDescription: input.toolName,
+          startedItem,
+          completedItem,
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const completedItem = {
+          ...startedItem,
+          error: { message: errorMessage },
+          status: 'failed',
+        };
+        input.request.onItem?.({ item: completedItem, eventType: 'item.completed' });
+        return {
+          ok: false as const,
+          errorMessage,
+          callDescription: input.toolName,
+          startedItem,
+          completedItem,
+        };
+      }
+    });
   });
 
   it('reports Codex CLI availability', () => {
@@ -106,6 +186,42 @@ describe('CodexProvider', () => {
       cwd: process.cwd(),
       encoding: 'utf8',
     }));
+  });
+
+  it('passes model reasoning effort overrides to codex exec', async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const provider = new CodexProvider({
+      providerId: PRIMARY_PROVIDER_ID,
+      modelId: 'gpt-5.3-codex-spark',
+      reasoningEffort: 'high',
+    });
+    const resultPromise = provider.invoke(buildRequest());
+
+    await completeTurn(
+      child,
+      JSON.stringify({
+        kind: 'final',
+        tool_calls: [],
+        message: 'Configured.',
+      }),
+    );
+
+    await resultPromise;
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'codex',
+      expect.arrayContaining([
+        'exec',
+        '--json',
+        '--model',
+        'gpt-5.3-codex-spark',
+        '-c',
+        'model_reasoning_effort="high"',
+      ]),
+      expect.any(Object),
+    );
   });
 
   it('routes tool requests through the V2 tool executor', async () => {
@@ -316,6 +432,8 @@ describe('CodexProvider', () => {
     expect(promptText).toContain('Input schema: {"type":"object"');
     expect(promptText).not.toContain('Input schema: {\n');
     expect(promptText).toContain('# Prior Turn History');
+    expect(promptText).toContain('# Turn Contract');
+    expect(promptText).not.toContain('# Codex Runtime Contract');
     expect(promptText).toContain('keep message empty unless you need a short blocker, clarification request, or material state-change note');
   });
 
@@ -443,18 +561,20 @@ describe('CodexProvider', () => {
             {
               name: 'browser.close_tab',
               description: 'Close one browser tab',
-              category: 'browser',
               relatedPackIds: ['browser-automation'],
-              alreadyLoaded: false,
-              reason: 'tool name contains the query',
+              callableNow: false,
+              invokableNow: true,
+              invocationMethod: 'runtime.invoke_tool',
+              availableNextTurn: true,
             },
             {
               name: 'browser.get_tabs',
               description: 'List the currently open browser tabs',
-              category: 'browser',
               relatedPackIds: ['browser-automation'],
-              alreadyLoaded: false,
-              reason: 'description matches "tabs"',
+              callableNow: false,
+              invokableNow: true,
+              invocationMethod: 'runtime.invoke_tool',
+              availableNextTurn: true,
             },
           ],
           tools: ['browser.close_tab', 'browser.get_tabs'],
@@ -575,12 +695,11 @@ describe('CodexProvider', () => {
             {
               name: 'browser.close_tab',
               description: 'Close one browser tab',
-              category: 'browser',
               relatedPackIds: ['browser-automation'],
-              bindingState: 'discoverable',
               callableNow: false,
+              invokableNow: true,
+              invocationMethod: 'runtime.invoke_tool',
               availableNextTurn: true,
-              reason: 'tool name contains the query',
             },
           ],
           tools: ['browser.close_tab'],

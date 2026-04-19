@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   contextPromptBudgetForTaskKind,
+  contextPromptBudgetForTaskKindRaw,
   looksLikeContextDependentPrompt,
   shouldIncludeArtifactContext,
   shouldIncludeConversationContext,
@@ -55,9 +56,18 @@ describe('invocationContextPolicy', () => {
     })).toBe(false);
   });
 
-  it('uses smaller budgets for lightweight task kinds', () => {
-    expect(contextPromptBudgetForTaskKind('general')).toBe(2_500);
-    expect(contextPromptBudgetForTaskKind('implementation')).toBe(3_000);
-    expect(contextPromptBudgetForTaskKind('research')).toBe(4_000);
+  it('uses reduced budgets by default (token-efficient mode)', () => {
+    delete process.env.V2_FULL_STRENGTH_EVAL;
+    expect(contextPromptBudgetForTaskKind('general')).toBe(1_800);
+    expect(contextPromptBudgetForTaskKind('implementation')).toBe(2_160);
+    expect(contextPromptBudgetForTaskKind('research')).toBe(2_880);
+  });
+
+  it('uses full budgets when full-strength mode is enabled', () => {
+    process.env.V2_FULL_STRENGTH_EVAL = '1';
+    expect(contextPromptBudgetForTaskKind('general')).toBe(contextPromptBudgetForTaskKindRaw('general'));
+    expect(contextPromptBudgetForTaskKind('implementation')).toBe(contextPromptBudgetForTaskKindRaw('implementation'));
+    expect(contextPromptBudgetForTaskKind('research')).toBe(contextPromptBudgetForTaskKindRaw('research'));
+    delete process.env.V2_FULL_STRENGTH_EVAL;
   });
 });

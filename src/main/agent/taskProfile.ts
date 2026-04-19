@@ -5,9 +5,9 @@ import {
   DEFAULT_TOOL_PACK_PRESET,
   resolveAllowedToolsForTaskKind,
   resolveBrowserInitialSurfaceTools,
-  resolveFullSurfaceTools,
   resolveLocalFilesInitialSurfaceTools,
 } from './toolPacks';
+import { loadEnvFlag, loadEnvInteger } from './loadEnv';
 
 export type AgentTaskProfile = {
   kind: AgentTaskKind;
@@ -23,6 +23,13 @@ const STRICT_VALIDATION_MAX_TOOL_TURNS = 32;
 const DEBUG_MAX_TOOL_TURNS = 28;
 const REVIEW_MAX_TOOL_TURNS = 24;
 const DELEGATION_MAX_TOOL_TURNS = 40;
+
+function defaultMaxToolTurns(baseTurns: number): number {
+  if (loadEnvFlag('V2_FULL_STRENGTH_EVAL')) return DELEGATION_MAX_TOOL_TURNS;
+  const configured = loadEnvInteger('V2_AGENT_MAX_TOOL_TURNS');
+  if (configured == null) return baseTurns;
+  return Math.min(Math.max(configured, 1), DELEGATION_MAX_TOOL_TURNS);
+}
 
 function looksLikeBrowserRoutingDiscussion(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
@@ -53,9 +60,9 @@ function looksLikeRuntimeMetaTask(prompt: string): boolean {
 }
 
 function maxTurnsForPrompt(prompt: string): number {
-  return shouldUseStrictSourceValidation(prompt)
+  return defaultMaxToolTurns(shouldUseStrictSourceValidation(prompt)
     ? STRICT_VALIDATION_MAX_TOOL_TURNS
-    : DEFAULT_MAX_TOOL_TURNS;
+    : DEFAULT_MAX_TOOL_TURNS);
 }
 
 function looksLikeLocalFilesTask(prompt: string): boolean {
@@ -91,18 +98,6 @@ function initialAllowedToolsForPrompt(
 
   if ((kind === 'implementation' || kind === 'general') && looksLikeLocalFilesTask(prompt)) {
     return resolveLocalFilesInitialSurfaceTools();
-  }
-
-  if (kind === 'implementation') {
-    return resolveFullSurfaceTools('implementation');
-  }
-
-  if (kind === 'debug') {
-    return resolveFullSurfaceTools('debug');
-  }
-
-  if (kind === 'review') {
-    return resolveFullSurfaceTools('review');
   }
 
   return null;
@@ -166,7 +161,7 @@ function defaultTaskProfileForKind(
         skillNames: [],
         allowedTools: resolveAllowedToolsForTaskKind('orchestration', toolPackPreset),
         canSpawnSubagents: true,
-        maxToolTurns: DELEGATION_MAX_TOOL_TURNS,
+        maxToolTurns: defaultMaxToolTurns(DELEGATION_MAX_TOOL_TURNS),
         requiresBrowserSearchDirective: false,
       };
     case 'research':
@@ -174,7 +169,7 @@ function defaultTaskProfileForKind(
         kind: 'research',
         skillNames: [],
         allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('research', toolPackPreset),
-        canSpawnSubagents: false,
+        canSpawnSubagents: true,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: false,
       };
@@ -183,8 +178,8 @@ function defaultTaskProfileForKind(
         kind: 'browser-automation',
         skillNames: ['browser-operation'],
         allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('browser-automation', toolPackPreset),
-        canSpawnSubagents: false,
-        maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
+        canSpawnSubagents: true,
+        maxToolTurns: defaultMaxToolTurns(DEFAULT_MAX_TOOL_TURNS),
         requiresBrowserSearchDirective: false,
       };
     case 'implementation':
@@ -192,8 +187,8 @@ function defaultTaskProfileForKind(
         kind: 'implementation',
         skillNames: [],
         allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('implementation', toolPackPreset),
-        canSpawnSubagents: false,
-        maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
+        canSpawnSubagents: true,
+        maxToolTurns: defaultMaxToolTurns(DEFAULT_MAX_TOOL_TURNS),
         requiresBrowserSearchDirective: false,
       };
     case 'debug':
@@ -201,8 +196,8 @@ function defaultTaskProfileForKind(
         kind: 'debug',
         skillNames: [],
         allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('debug', toolPackPreset),
-        canSpawnSubagents: false,
-        maxToolTurns: DEBUG_MAX_TOOL_TURNS,
+        canSpawnSubagents: true,
+        maxToolTurns: defaultMaxToolTurns(DEBUG_MAX_TOOL_TURNS),
         requiresBrowserSearchDirective: false,
       };
     case 'review':
@@ -210,8 +205,8 @@ function defaultTaskProfileForKind(
         kind: 'review',
         skillNames: [],
         allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('review', toolPackPreset),
-        canSpawnSubagents: false,
-        maxToolTurns: REVIEW_MAX_TOOL_TURNS,
+        canSpawnSubagents: true,
+        maxToolTurns: defaultMaxToolTurns(REVIEW_MAX_TOOL_TURNS),
         requiresBrowserSearchDirective: false,
       };
     case 'general':
@@ -220,7 +215,7 @@ function defaultTaskProfileForKind(
         kind: 'general',
         skillNames: [],
         allowedTools: initialAllowedTools ?? resolveAllowedToolsForTaskKind('general', toolPackPreset),
-        canSpawnSubagents: false,
+        canSpawnSubagents: true,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: false,
       };

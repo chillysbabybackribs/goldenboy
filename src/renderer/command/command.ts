@@ -1,7 +1,8 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
+import { renderMarkdown } from './markdown.js';
 import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID, ProviderId, InvocationAttachment, ImageInvocationAttachment } from '../../shared/types/model.js';
 import type { PersistedTurnProcessEntry, TaskMemoryEntry } from '../../shared/types/model.js';
-import type { AppState, TaskRecord } from '../../shared/types/appState.js';
+import type { AppState, TaskRecord, TaskStatus } from '../../shared/types/appState.js';
 import type { ArtifactRecord } from '../../shared/types/artifacts.js';
 import type { DocumentImportRequest, DocumentInvocationAttachment } from '../../shared/types/attachments.js';
 import {
@@ -50,6 +51,7 @@ const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
 const chatNewBtn = document.getElementById('chatNewBtn') as HTMLButtonElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
 const modelBtnPrimary = document.getElementById('modelBtnPrimary') as HTMLButtonElement;
+const modelBtnSpark = document.getElementById('modelBtnSpark') as HTMLButtonElement;
 const modelBtnHaiku = document.getElementById('modelBtnHaiku') as HTMLButtonElement;
 const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
 const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
@@ -72,9 +74,12 @@ const activeArtifactFormat = document.getElementById('activeArtifactFormat') as 
 const activeArtifactMeta = document.getElementById('activeArtifactMeta') as HTMLDivElement;
 const activeArtifactOpenBtn = document.getElementById('activeArtifactOpenBtn') as HTMLButtonElement;
 const activeArtifactDeleteBtn = document.getElementById('activeArtifactDeleteBtn') as HTMLButtonElement;
+const runningTasksList = document.getElementById('runningTasksList') as HTMLDivElement;
+const completedTasksList = document.getElementById('completedTasksList') as HTMLDivElement;
 
 // Token usage — displayed in status bar
 const tokenStatusLabel = document.getElementById('tokenStatusLabel')!;
+const tokenStatusResetBtn = document.getElementById('tokenStatusResetBtn') as HTMLButtonElement;
 
 // Stop
 const chatStopBtn = document.getElementById('chatStopBtn') as HTMLButtonElement;
@@ -90,8 +95,11 @@ const imgFileInput = document.getElementById('imgFileInput') as HTMLInputElement
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-type SelectableOwner = typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID;
-type ExplicitSelectableOwner = SelectableOwner;
+const CODEX_SPARK_MODEL_ID = 'gpt-5.3-codex-spark' as const;
+const CODEX_SPARK_REASONING_EFFORT = 'high' as const;
+
+type ExplicitSelectableOwner = typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID;
+type SelectableOwner = ExplicitSelectableOwner | typeof CODEX_SPARK_MODEL_ID;
 type ProviderRuntimeView = {
   status?: string;
   model?: string;
@@ -110,10 +118,11 @@ type ConversationTurn = {
   anchorEl: HTMLElement | null;
 };
 
-const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, CODEX_SPARK_MODEL_ID, HAIKU_PROVIDER_ID];
 const SELECTED_OWNER_STORAGE_KEY = 'command-center-selected-owner';
 const OWNER_LABELS: Record<SelectableOwner, string> = {
-  [PRIMARY_PROVIDER_ID]: 'Codex',
+  [PRIMARY_PROVIDER_ID]: 'Codex 5.4',
+  [CODEX_SPARK_MODEL_ID]: 'Spark High',
   [HAIKU_PROVIDER_ID]: 'Haiku 4.5',
 };
 
@@ -136,7 +145,9 @@ let chatScrollControlsIdleTimer: number | null = null;
 let lastAgentResponseText = '';
 let chatCopyFeedbackTimer: number | null = null;
 let chatZoom = 1;
-let runningTaskId: string | null = null;
+const runningTaskIds = new Set<string>();
+const previousTaskStatuses = new Map<string, TaskStatus>();
+const pendingCompletionNotificationTaskIds = new Set<string>();
 let historyOpen = false;
 let renderedTurns: ConversationTurn[] = [];
 let selectedTurnIndex = -1;
@@ -149,6 +160,7 @@ const CHAT_ZOOM_MIN = 0.8;
 const CHAT_ZOOM_MAX = 2.6;
 const CHAT_ZOOM_STEP = 0.16;
 const ARTIFACT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'command-center-artifact-sidebar-collapsed';
+const COMPLETED_TASK_NOTIFICATION_STORAGE_KEY = 'command-center-completed-task-notifications';
 
 function isSelectableOwner(value: string): value is SelectableOwner {
   return SELECTABLE_OWNERS.includes(value as SelectableOwner);
@@ -158,15 +170,19 @@ function isExplicitSelectableOwner(value: string): value is ExplicitSelectableOw
   return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
 }
 
-function getProviderRuntime(state: any, owner: ExplicitSelectableOwner): ProviderRuntimeView | null {
-  return (state?.providers?.[owner] as ProviderRuntimeView | undefined) ?? null;
+function resolveProviderOwner(owner: SelectableOwner): ExplicitSelectableOwner {
+  return owner === CODEX_SPARK_MODEL_ID ? PRIMARY_PROVIDER_ID : owner;
+}
+
+function getProviderRuntime(state: any, owner: SelectableOwner): ProviderRuntimeView | null {
+  return (state?.providers?.[resolveProviderOwner(owner)] as ProviderRuntimeView | undefined) ?? null;
 }
 
 function getLastState(): AppState | null {
   return ((window as any).__lastState as AppState | undefined) ?? null;
 }
 
-function canSelectOwner(state: any, owner: ExplicitSelectableOwner): boolean {
+function canSelectOwner(state: any, owner: SelectableOwner): boolean {
   const runtime = getProviderRuntime(state, owner);
   if (!runtime) return false;
   return runtime.status !== 'unavailable' && runtime.status !== 'error';
@@ -190,6 +206,63 @@ function persistSelectedOwner(): void {
   }
 }
 
+function getStoredCompletedTaskNotificationIds(): Set<string> {
+  try {
+    const stored = window.localStorage.getItem(COMPLETED_TASK_NOTIFICATION_STORAGE_KEY);
+    if (!stored) return new Set();
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return new Set();
+    const ids = new Set<string>();
+    for (const value of parsed) {
+      if (typeof value === 'string' && value) ids.add(value);
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
+function persistCompletedTaskNotificationIds(): void {
+  try {
+    window.localStorage.setItem(
+      COMPLETED_TASK_NOTIFICATION_STORAGE_KEY,
+      JSON.stringify([...pendingCompletionNotificationTaskIds]),
+    );
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+}
+
+function clearCompletionNotification(taskId: string): void {
+  if (pendingCompletionNotificationTaskIds.delete(taskId)) {
+    persistCompletedTaskNotificationIds();
+  }
+}
+
+function syncCompletionNotifications(tasks: TaskRecord[]): void {
+  const nextTaskIds = new Set<string>();
+  for (const task of tasks) {
+    nextTaskIds.add(task.id);
+    const previousStatus = previousTaskStatuses.get(task.id);
+    if (previousStatus === 'running' && task.status !== 'running') {
+      pendingCompletionNotificationTaskIds.add(task.id);
+    }
+    if (task.status === 'running' || task.status === 'queued') {
+      pendingCompletionNotificationTaskIds.delete(task.id);
+    }
+    previousTaskStatuses.set(task.id, task.status);
+  }
+
+  for (const taskId of Array.from(previousTaskStatuses.keys())) {
+    if (!nextTaskIds.has(taskId)) {
+      previousTaskStatuses.delete(taskId);
+      pendingCompletionNotificationTaskIds.delete(taskId);
+    }
+  }
+
+  persistCompletedTaskNotificationIds();
+}
+
 function getFallbackSelectableOwner(state: any, preferredOwner: SelectableOwner = PRIMARY_PROVIDER_ID): SelectableOwner {
   if (canSelectOwner(state, preferredOwner)) return preferredOwner;
   return SELECTABLE_OWNERS.find((owner) => canSelectOwner(state, owner)) ?? preferredOwner;
@@ -205,13 +278,45 @@ function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as an
   syncModelToggleState(state);
 }
 
-function getModelBtn(owner: ExplicitSelectableOwner): HTMLButtonElement {
-  return owner === PRIMARY_PROVIDER_ID ? modelBtnPrimary : modelBtnHaiku;
+function getModelBtn(owner: SelectableOwner): HTMLButtonElement {
+  if (owner === PRIMARY_PROVIDER_ID) return modelBtnPrimary;
+  if (owner === CODEX_SPARK_MODEL_ID) return modelBtnSpark;
+  return modelBtnHaiku;
+}
+
+function getActiveSelectableOwner(state: any, owner: ExplicitSelectableOwner | null): SelectableOwner | null {
+  if (!owner) return null;
+  if (owner === PRIMARY_PROVIDER_ID) {
+    const runtime = getProviderRuntime(state, PRIMARY_PROVIDER_ID);
+    if (runtime?.model === CODEX_SPARK_MODEL_ID) return CODEX_SPARK_MODEL_ID;
+  }
+  return owner;
+}
+
+type SparkToolStatusKind = 'start' | 'done' | 'progress';
+
+function parseSparkToolStatus(status: string): { kind: SparkToolStatusKind; text: string } | null {
+  const trimmed = status.trim();
+  if (!trimmed || !/^\s*tool\b/i.test(trimmed)) return null;
+
+  const match = trimmed.match(/^\s*tool(?:\s*[-_]?\s*(call|start|started|progress|result|done|completed|complete|error|failed))?\s*[:\-]?\s*(.+)$/i);
+  if (!match) return null;
+
+  const kindHint = (match[1] || '').toLowerCase();
+  const detail = String(match[2] || '').trim().replace(/^->\s*/, '');
+  if (!detail) return null;
+
+  if (kindHint === 'result' || kindHint === 'done' || kindHint === 'completed' || kindHint === 'complete' || kindHint === 'error' || kindHint === 'failed') {
+    return { kind: 'done', text: detail };
+  }
+  if (kindHint === 'progress') {
+    return { kind: 'progress', text: detail };
+  }
+  return { kind: 'start', text: detail };
 }
 
 function syncModelToggleState(state: any = (window as any).__lastState): void {
-  const busy = Boolean(runningTaskId);
-  for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
+  for (const owner of SELECTABLE_OWNERS) {
     const btn = getModelBtn(owner);
     const runtime = getProviderRuntime(state, owner);
     const status = runtime?.status ?? 'unavailable';
@@ -220,7 +325,7 @@ function syncModelToggleState(state: any = (window as any).__lastState): void {
 
     btn.classList.toggle('cc-model-btn-active', active);
     btn.classList.toggle('cc-model-btn-unavailable', !available && !active);
-    btn.disabled = busy || (active && !available);
+    btn.disabled = active && !available;
 
     const details = [OWNER_LABELS[owner], runtime?.model || status, runtime?.errorDetail || '']
       .filter(Boolean);
@@ -228,12 +333,29 @@ function syncModelToggleState(state: any = (window as any).__lastState): void {
   }
 }
 
+function getActiveRunningTaskId(state: any = (window as any).__lastState): string | null {
+  const activeTaskId = state?.activeTaskId ?? null;
+  return activeTaskId && runningTaskIds.has(activeTaskId) ? activeTaskId : null;
+}
+
+function syncStopButton(state: any = (window as any).__lastState): void {
+  if (!getActiveRunningTaskId(state)) {
+    chatStopBtn.hidden = true;
+    chatStopBtn.disabled = false;
+    chatStopBtn.textContent = 'STOP';
+    return;
+  }
+
+  chatStopBtn.hidden = false;
+  chatStopBtn.disabled = false;
+  chatStopBtn.textContent = 'STOP';
+}
+
 function initializeModelToggle(): void {
   selectedOwner = getStoredSelectedOwner();
 
-  for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
+  for (const owner of SELECTABLE_OWNERS) {
     getModelBtn(owner).addEventListener('click', () => {
-      if (runningTaskId) return;
       setSelectedOwner(owner, (window as any).__lastState);
     });
   }
@@ -561,87 +683,6 @@ chatScrollBottomBtn.addEventListener('click', () => {
   chatThread.scrollTo({ top: chatThread.scrollHeight, behavior: 'smooth' });
   updateChatScrollControls();
 });
-
-// ─── Markdown Rendering ────────────────────────────────────────────────────
-
-function renderInlineMarkdown(text: string): string {
-  return escapeHtml(text)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-}
-
-function renderMarkdown(text: string): string {
-  // Normalize: convert literal <br> tags and \r\n to newlines before splitting
-  const normalized = text
-    .replace(/\r\n/g, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .trim();
-
-  const lines = normalized.split('\n');
-  const parts: string[] = [];
-  let paragraph: string[] = [];
-  let listItems: string[] = [];
-  let listOrdered = false;
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    parts.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
-    paragraph = [];
-  };
-
-  const flushList = () => {
-    if (listItems.length === 0) return;
-    const tag = listOrdered ? 'ol' : 'ul';
-    parts.push(`<${tag}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
-    listItems = [];
-    listOrdered = false;
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = Math.min(3, heading[1].length);
-      parts.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-      continue;
-    }
-
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      // If we were building an ordered list, flush it first
-      if (listItems.length > 0 && listOrdered) flushList();
-      flushParagraph();
-      listOrdered = false;
-      listItems.push(trimmed.slice(2));
-      continue;
-    }
-
-    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
-    if (orderedMatch) {
-      // If we were building an unordered list, flush it first
-      if (listItems.length > 0 && !listOrdered) flushList();
-      flushParagraph();
-      listOrdered = true;
-      listItems.push(orderedMatch[1]);
-      continue;
-    }
-
-    flushList();
-    paragraph.push(trimmed);
-  }
-
-  flushParagraph();
-  flushList();
-  return parts.join('');
-}
-
 
 // ─── Chat Message Helpers ──────────────────────────────────────────────────
 
@@ -1333,7 +1374,7 @@ async function submitChat(): Promise<void> {
 
   chatCounter++;
   let taskId = getActiveTaskIdFromState();
-  const owner = selectedOwner;
+  const owner = resolveProviderOwner(selectedOwner);
 
   if (!taskId) {
     const workspaceAPI = getWorkspaceAPI();
@@ -1364,10 +1405,20 @@ async function submitChat(): Promise<void> {
 
     const pendingAttachments: InvocationAttachment[] = [...imageAttachments, ...documentAttachments];
     const effectivePrompt = prompt || (documentAttachments.length > 0 ? 'Review the attached document(s).' : prompt);
-    const invokeOptions = pendingAttachments.length > 0 || effectivePrompt !== prompt
+    const invokeOptions = (
+      pendingAttachments.length > 0
+      || effectivePrompt !== prompt
+      || selectedOwner === CODEX_SPARK_MODEL_ID
+    )
       ? {
         attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
         displayPrompt: prompt,
+        codexConfig: selectedOwner === CODEX_SPARK_MODEL_ID
+          ? {
+            modelId: CODEX_SPARK_MODEL_ID,
+            reasoningEffort: CODEX_SPARK_REASONING_EFFORT,
+          }
+          : undefined,
       }
       : undefined;
 
@@ -1391,35 +1442,33 @@ async function submitChat(): Promise<void> {
     selectTurn(liveTurn.index);
     clearAttachments();
     chatStopBtn.hidden = false;
-
-    runningTaskId = taskId;
+    runningTaskIds.add(taskId);
     createLiveRunCard(taskId, resolvedOwner, undefined, container);
 
     const result = await modelApi.invoke(taskId, effectivePrompt, resolvedOwner, invokeOptions);
     replaceWithResult(taskId, result, result?.providerId || resolvedOwner);
   } catch (err: any) {
     const message = err?.message || String(err);
-    if (runningTaskId === taskId) {
+    if (runningTaskIds.has(taskId)) {
       replaceWithError(taskId, message);
     } else {
       getWorkspaceAPI()?.addLog('error', 'system', `Failed to send chat: ${message}`, taskId);
     }
   } finally {
-    runningTaskId = null;
-    chatStopBtn.hidden = true;
-    chatStopBtn.disabled = false;
-    chatStopBtn.textContent = 'STOP';
+    runningTaskIds.delete(taskId);
+    syncStopButton();
     chatInput.focus();
   }
 }
 chatStopBtn.addEventListener('click', () => {
+  const activeRunningTaskId = getActiveRunningTaskId();
   const modelApi = getModelAPI();
-  if (runningTaskId && modelApi?.cancel) {
+  if (activeRunningTaskId && modelApi?.cancel) {
     // Immediately mark the card as cancelling and disable the button
-    markCancellingInternal(runningTaskId);
+    markCancellingInternal(activeRunningTaskId);
     chatStopBtn.textContent = 'Stopping…';
     chatStopBtn.disabled = true;
-    void modelApi.cancel(runningTaskId);
+    void modelApi.cancel(activeRunningTaskId);
   }
 });
 chatCopyLastBtn.addEventListener('click', () => {
@@ -1433,6 +1482,9 @@ chatZoomResetBtn.addEventListener('click', () => {
 });
 chatZoomInBtn.addEventListener('click', () => {
   adjustChatZoom(CHAT_ZOOM_STEP);
+});
+tokenStatusResetBtn.addEventListener('click', () => {
+  void resetTokenUsageCounter();
 });
 chatInput.addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1806,6 +1858,102 @@ function renderHistoryPanel(state: AppState | null): void {
   }
 }
 
+function appendTaskSwitcherItem(
+  list: HTMLDivElement,
+  task: TaskRecord,
+  activeTaskId: string | null,
+  hasCompletedNotification: boolean,
+): void {
+  const item = document.createElement('button');
+  let className = 'cc-task-switcher-item';
+  if (task.id === activeTaskId) className += ' active';
+  if (hasCompletedNotification) className += ' has-completion-notification';
+  item.className = className;
+  item.type = 'button';
+  item.title = `${task.title} · ${task.status} · ${formatHistoryDate(task.updatedAt)}`;
+  item.setAttribute('aria-label', `Switch to task ${task.title}`);
+
+  const titleRow = document.createElement('div');
+  titleRow.className = 'cc-task-switcher-item-title-row';
+
+  const title = document.createElement('span');
+  title.className = 'cc-task-switcher-item-title';
+  title.textContent = task.title;
+
+  if (task.status === 'running') {
+    const runningIndicator = document.createElement('span');
+    runningIndicator.className = 'cc-task-switcher-item-running-indicator';
+    runningIndicator.setAttribute('aria-hidden', 'true');
+    titleRow.append(title, runningIndicator);
+  } else {
+    titleRow.append(title);
+  }
+
+  const meta = document.createElement('span');
+  const statusLabel = task.status === 'running'
+    ? 'Running'
+    : task.status === 'queued'
+      ? 'Queued'
+      : task.status === 'failed'
+        ? 'Failed'
+        : 'Completed';
+  meta.className = 'cc-task-switcher-item-meta';
+  meta.textContent = `${statusLabel} · ${formatHistoryDate(task.updatedAt)}`;
+
+  item.append(titleRow, meta);
+
+  if (hasCompletedNotification && task.status !== 'running') {
+    const completionNotification = document.createElement('span');
+    completionNotification.className = 'cc-task-switcher-item-completion-notification';
+    completionNotification.textContent = 'Completed';
+    item.append(completionNotification);
+  }
+
+  item.addEventListener('click', () => {
+    clearCompletionNotification(task.id);
+    switchToTask(task.id);
+  });
+  list.appendChild(item);
+}
+
+function renderTaskSwitcherPanel(state: AppState | null): void {
+  const tasks = state?.tasks ?? [];
+  const activeTaskId = state?.activeTaskId ?? null;
+
+  runningTasksList.innerHTML = '';
+  completedTasksList.innerHTML = '';
+
+  const runningTasks = [...tasks].filter((task) => task.status === 'running').sort((a, b) => b.updatedAt - a.updatedAt);
+  const completedTasks = [...tasks].filter((task) => task.status !== 'running').sort((a, b) => b.updatedAt - a.updatedAt);
+
+  if (runningTasks.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'cc-task-switcher-empty';
+    empty.textContent = 'No running tasks';
+    runningTasksList.appendChild(empty);
+  } else {
+    for (const task of runningTasks) {
+      appendTaskSwitcherItem(runningTasksList, task, activeTaskId, false);
+    }
+  }
+
+  if (completedTasks.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'cc-task-switcher-empty';
+    empty.textContent = 'No completed tasks';
+    completedTasksList.appendChild(empty);
+  } else {
+    for (const task of completedTasks) {
+      appendTaskSwitcherItem(
+        completedTasksList,
+        task,
+        activeTaskId,
+        pendingCompletionNotificationTaskIds.has(task.id),
+      );
+    }
+  }
+}
+
 function openHistoryPopup(): void {
   renderHistoryPanel(getLastState());
   setHistoryOpen(true);
@@ -1842,6 +1990,9 @@ async function startNewChat(): Promise<void> {
   currentRenderedTaskId = null;
   renderedTaskMemoryKey = null;
   clearChatThread();
+  chatStopBtn.hidden = true;
+  chatStopBtn.disabled = false;
+  chatStopBtn.textContent = 'STOP';
   chatInput.focus();
 }
 
@@ -1849,6 +2000,7 @@ function switchToTask(taskId: string): void {
   const workspaceAPI = getWorkspaceAPI();
   if (!workspaceAPI) return;
 
+  clearCompletionNotification(taskId);
   void workspaceAPI.setActiveTask(taskId);
   // renderState will pick up the change and call refreshTaskConversation
 }
@@ -1896,13 +2048,32 @@ function formatTokenCount(n: number): string {
 function updateTokenUsageDisplay(state: any): void {
   const usage = state?.tokenUsage;
   if (!usage) return;
-  tokenStatusLabel.textContent = `${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out`;
+  const rendered = `${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out`;
+  tokenStatusLabel.textContent = rendered;
+  tokenStatusResetBtn.title = `Reset token usage (${rendered})`;
+}
+
+async function resetTokenUsageCounter(): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI) return;
+
+  tokenStatusResetBtn.disabled = true;
+  try {
+    await workspaceAPI.resetTokenUsage();
+    await workspaceAPI.addLog('info', 'system', 'Token usage reset from command center');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await workspaceAPI.addLog('error', 'system', `Failed to reset token usage: ${message}`);
+  } finally {
+    tokenStatusResetBtn.disabled = false;
+  }
 }
 
 // ─── Full State Render ─────────────────────────────────────────────────────
 
 function renderState(state: any): void {
   (window as any).__lastState = state;
+  syncCompletionNotifications(state?.tasks ?? []);
   const normalizedOwner = normalizeSelectedOwner(selectedOwner, state);
   if (normalizedOwner !== selectedOwner) {
     selectedOwner = normalizedOwner;
@@ -1911,11 +2082,13 @@ function renderState(state: any): void {
     selectedOwner = normalizedOwner;
   }
   syncModelToggleState(state);
+  syncStopButton(state);
   const active = state.tasks.find((t: any) => t.id === state.activeTaskId);
   renderLogs(state.logs);
   renderActiveArtifact(state);
   renderArtifactList(state);
   renderHistoryPanel(state);
+  renderTaskSwitcherPanel(state);
   renderTaskArtifactLinks(state, state.activeTaskId);
 
   taskCount.textContent = `tasks: ${state.tasks.length}`;
@@ -1927,7 +2100,7 @@ function renderState(state: any): void {
     ? active.owner
     : null;
   const footerOwner = activeProviderId && isExplicitSelectableOwner(activeProviderId)
-    ? activeProviderId
+    ? getActiveSelectableOwner(state, activeProviderId) ?? selectedOwner
     : selectedOwner;
   modelLabel.textContent = OWNER_LABELS[footerOwner];
 
@@ -1965,14 +2138,28 @@ if (commandWindowAPI && modelApi?.onProgress) {
         migrateBufferedOutputToThoughts(progress.taskId);
       } else if (text.startsWith('thought:')) {
         appendThought(progress.taskId, text.slice('thought:'.length));
-      } else if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
-        appendToolStatusInternal(progress.taskId, text);
-      } else if (text.startsWith('Calling ')) {
-        appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
-      } else if (text.startsWith('Tool result: ')) {
-        appendToolActivity(progress.taskId, 'result', text.slice('Tool result: '.length));
-      } else if (text && !/^Turn completed/.test(text)) {
-        appendThought(progress.taskId, text);
+      } else {
+        const sparkToolStatus = parseSparkToolStatus(text);
+        if (sparkToolStatus) {
+          const prefix = sparkToolStatus.kind === 'start'
+            ? 'tool-start:'
+            : sparkToolStatus.kind === 'progress'
+              ? 'tool-progress:'
+              : 'tool-done:';
+          appendToolStatusInternal(progress.taskId, `${prefix}${sparkToolStatus.text}`);
+        } else if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
+          appendToolStatusInternal(progress.taskId, text);
+        } else if (text.startsWith('Calling ')) {
+          appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
+        } else if (/^Tool result:/i.test(text) || /^tool result:/i.test(text) || /^tool-result:/i.test(text)) {
+          const label = text.replace(/^Tool result:\s*/i, '').replace(/^tool result:\s*/i, '').replace(/^tool-result:\s*/i, '');
+          appendToolActivity(progress.taskId, 'result', label);
+        } else if (text.startsWith('Tool call:') || /^tool\s*call:\s*/i.test(text)) {
+          const label = text.replace(/^Tool call:\s*/i, '').replace(/^tool call:\s*/i, '');
+          appendToolActivity(progress.taskId, 'call', label);
+        } else if (text && !/^Turn completed/i.test(text)) {
+          appendThought(progress.taskId, text);
+        }
       }
     }
   });
@@ -2084,6 +2271,9 @@ setLogsOpen(false);
 initializeChatZoom();
 initializeModelToggle();
 initializeArtifactSidebar();
+for (const taskId of getStoredCompletedTaskNotificationIds()) {
+  pendingCompletionNotificationTaskIds.add(taskId);
+}
 
 if (!commandWindowAPI) {
   console.error('[command] workspaceAPI is not available; command controls are disabled.');

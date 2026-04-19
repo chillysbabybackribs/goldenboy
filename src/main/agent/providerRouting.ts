@@ -33,9 +33,10 @@ export function resolvePrimaryProviderBackend(
   configuredMode = process.env.CODEX_PROVIDER,
   execAvailable = true,
 ): PrimaryProviderBackend {
+  void taskKind;
   if (!execAvailable) return 'app-server';
   if (configuredMode === 'exec') return 'exec';
-  return shouldPreferExecForTaskKind(taskKind) ? 'exec' : 'app-server';
+  return 'app-server';
 }
 
 export function providerSupportsPrompt(

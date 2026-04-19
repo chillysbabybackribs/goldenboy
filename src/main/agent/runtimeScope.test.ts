@@ -1,3 +1,4 @@
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
@@ -13,6 +14,11 @@ import {
 } from './runtimeScope';
 
 describe('runtime scope', () => {
+  afterEach(() => {
+    delete process.env.V2_FULL_STRENGTH_EVAL;
+    delete process.env.V2_AGENT_MAX_TOOL_TURNS;
+  });
+
   it('enables orchestration mode when prompt requests multiple agents', () => {
     const scope = scopeForPrompt('Split this work across multiple agents and run in parallel');
     expect(looksLikeOrchestrationTask('Split this work across multiple agents and run in parallel')).toBe(true);
@@ -43,7 +49,7 @@ describe('runtime scope', () => {
       'browser.get_dialogs',
       'browser.run_intent_program',
     ]));
-    expect(scope.canSpawnSubagents).toBe(false);
+    expect(scope.canSpawnSubagents).toBe(true);
     expect(scope.skillNames).toEqual([]);
     expect(withBrowserSearchDirective(prompt)).toBe(prompt);
   });
@@ -118,24 +124,20 @@ describe('runtime scope', () => {
     expect(withBrowserSearchDirective(prompt)).toBe(prompt);
   });
 
-  it('detects implementation work and keeps non-orchestration execution broad', () => {
+  it('detects implementation work and starts from the baseline implementation surface', () => {
     const prompt = 'Patch this TypeScript file and run the local build';
     const scope = scopeForPrompt(prompt);
     expect(looksLikeImplementationTask(prompt)).toBe(true);
     expect(looksLikeLocalCodeTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
     expect(scope.allowedTools).toEqual(expect.arrayContaining([
-      'filesystem.list',
       'filesystem.search',
       'filesystem.read',
       'filesystem.write',
       'filesystem.patch',
       'terminal.exec',
-      'terminal.spawn',
-      'terminal.write',
-      'terminal.kill',
     ]));
-    expect(scope.canSpawnSubagents).toBe(false);
+    expect(scope.canSpawnSubagents).toBe(true);
     expect(scope.skillNames).toEqual([]);
   });
 
@@ -150,13 +152,8 @@ describe('runtime scope', () => {
       'filesystem.search',
       'filesystem.read',
       'filesystem.patch',
-      'filesystem.list',
       'terminal.exec',
       'terminal.spawn',
-      'terminal.write',
-      'terminal.kill',
-      'browser.evaluate_js',
-      'chat.thread_summary',
     ]));
     expect(debugScope.skillNames).toEqual([]);
 
@@ -170,12 +167,9 @@ describe('runtime scope', () => {
       'filesystem.search',
       'filesystem.read',
       'chat.thread_summary',
-      'chat.read_last',
       'chat.search',
-      'chat.read_window',
-      'chat.read_message',
     ]));
-    expect(reviewScope.canSpawnSubagents).toBe(false);
+    expect(reviewScope.canSpawnSubagents).toBe(true);
     expect(reviewScope.skillNames).toEqual([]);
   });
 

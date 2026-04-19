@@ -68,9 +68,7 @@ export class AgentPromptBuilder {
       ? input.skills.map(skill => `\n\n## Skill: ${skill.name}\n\n${compactSkillBody(skill.body)}`).join('')
       : '';
 
-    const toolText = input.tools.length > 0
-      ? input.tools.map(tool => tool.name).join(', ')
-      : 'No tools registered.';
+    const toolText = buildToolScopeSummary(input.tools);
 
     return [
       baseContract,
@@ -209,6 +207,27 @@ function normalizeListSection(section: string): string {
     .map(line => line.trimEnd())
     .join('\n')
     .trim();
+}
+
+function buildToolScopeSummary(tools: AgentToolDefinition[]): string {
+  if (tools.length === 0) return 'No tools registered.';
+
+  const categoryCounts = tools.reduce<Map<string, number>>((counts, tool) => {
+    const category = tool.name.split('.')[0] || 'general';
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+    return counts;
+  }, new Map());
+
+  const categorySummary = Array.from(categoryCounts.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([category, count]) => `${category}:${count}`)
+    .join(', ');
+
+  return [
+    'Callable tools are supplied through the provider tool surface for this run.',
+    `Current callable surface: ${tools.length} tools across ${categoryCounts.size} categories (${categorySummary}).`,
+    'Hydrate missing capabilities through runtime.search_tools, runtime.require_tools, or a requested tool pack instead of assuming more tools exist.',
+  ].join('\n');
 }
 
 function buildCurrentDateTimeLine(): string {

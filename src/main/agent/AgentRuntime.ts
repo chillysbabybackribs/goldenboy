@@ -211,7 +211,7 @@ function estimateProviderToolPayloadChars(
   if (agentId === 'haiku') {
     return JSON.stringify(tools.map((tool) => ({
       name: tool.name.replace(/\./g, '__'),
-      description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
+      description: tool.description,
       input_schema: tool.inputSchema,
     }))).length;
   }

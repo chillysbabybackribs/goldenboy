@@ -80,6 +80,28 @@ describe('live run chat stream', () => {
     expect(entries[3]?.text).toContain('Final answer is streaming here.');
   });
 
+  it('flushes a chunked thought before the next tool row starts', () => {
+    createCard('task-chunked-thought');
+
+    appendThought('task-chunked-thought', 'Need concrete pricing and context-window details');
+    appendThought('task-chunked-thought', ' from the official model pages, so I’m pulling the relevant sections');
+    appendThought('task-chunked-thought', ' from the docs before I compare them');
+    appendToolStatus('task-chunked-thought', 'tool-start:Browser: activate tab');
+
+    const stream = container.querySelector('[data-task-id="task-chunked-thought"] .chat-stream') as HTMLElement;
+    const entries = Array.from(stream.children).map((el) => ({
+      className: el.className,
+      text: el.textContent?.trim() || '',
+    }));
+
+    expect(entries.map((entry) => entry.className)).toEqual([
+      'chat-thought-line',
+      'chat-tool-stack',
+    ]);
+    expect(entries[0]?.text).toContain('Need concrete pricing and context-window details from the official model pages, so I’m pulling the relevant sections from the docs before I compare them');
+    expect(entries[1]?.text).toContain('Browser: activate tab');
+  });
+
   it('keeps the final response inline at the end of the stream when completed', () => {
     createCard('task-final');
 

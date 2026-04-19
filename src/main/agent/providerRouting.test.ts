@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickProviderForPrompt } from './providerRouting.ts';
+import { pickProviderForPrompt, resolvePrimaryProviderBackend } from './providerRouting.ts';
 import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 
 describe('provider routing', () => {
@@ -52,5 +52,12 @@ describe('provider routing', () => {
       { kind: 'research' },
       capabilities,
     )).toBe(PRIMARY_PROVIDER_ID);
+  });
+
+  it('prefers app-server for the primary backend unless exec is explicitly forced', () => {
+    expect(resolvePrimaryProviderBackend('implementation', undefined, true)).toBe('app-server');
+    expect(resolvePrimaryProviderBackend('review', undefined, true)).toBe('app-server');
+    expect(resolvePrimaryProviderBackend('implementation', 'exec', true)).toBe('exec');
+    expect(resolvePrimaryProviderBackend('implementation', undefined, false)).toBe('app-server');
   });
 });

@@ -28,6 +28,13 @@ export type ProviderCapability =
   | 'planning'
   | 'synthesis';
 
+export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+export type CodexInvocationOverride = {
+  modelId?: string;
+  reasoningEffort?: CodexReasoningEffort;
+};
+
 // ─── Provider Definition (static, configured at startup) ──────────────────
 
 export type ProviderDefinition = {
@@ -123,6 +130,7 @@ export type AgentInvocationOptions = {
   taskProfile?: AgentTaskProfileOverride;
   attachments?: InvocationAttachment[];
   displayPrompt?: string;
+  codexConfig?: CodexInvocationOverride;
 };
 
 // ─── Codex CLI Event Types (from `codex exec --json`) ─────────────────────
@@ -387,17 +395,19 @@ export type RoutingMatch =
 
 // ─── Codex Configuration ──────────────────────────────────────────────────
 
-export type CodexApprovalMode = 'full-auto' | 'dangerously-bypass';
+export type CodexApprovalMode = 'full-auto';
 
 export type CodexInvocationConfig = {
   approvalMode: CodexApprovalMode;
   sandbox: 'read-only' | 'workspace-write' | null;
   timeoutMs: number;
   ephemeral: boolean;
+  modelId?: string;
+  reasoningEffort?: CodexReasoningEffort;
 };
 
 export const DEFAULT_CODEX_CONFIG: CodexInvocationConfig = {
-  approvalMode: 'dangerously-bypass',
+  approvalMode: 'full-auto',
   sandbox: null,
   timeoutMs: 300_000,
   ephemeral: false,

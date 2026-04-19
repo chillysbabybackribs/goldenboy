@@ -1,6 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk';
-import * as fs from 'fs';
-import * as path from 'path';
 import type { CodexItem } from '../../shared/types/model';
 import { DEFAULT_HAIKU_CONFIG } from '../../shared/types/model';
 import { AgentProvider, AgentProviderRequest, AgentProviderResult } from './AgentTypes';
@@ -15,35 +13,9 @@ import {
   publishProviderFinalOutput,
 } from './providerToolRuntime';
 import { createRequestToolBindingStore } from './toolBindingScope';
-
-function loadEnvValue(key: string): string | null {
-  if (process.env[key]) return process.env[key] || null;
-
-  const envPath = path.join(process.cwd(), '.env');
-  if (!fs.existsSync(envPath)) return null;
-
-  const lines = fs.readFileSync(envPath, 'utf-8').split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
-    const eq = trimmed.indexOf('=');
-    const name = trimmed.slice(0, eq).trim();
-    if (name !== key) continue;
-
-    let value = trimmed.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (value) {
-      process.env[key] = value;
-      return value;
-    }
-  }
-  return null;
-}
+import { loadEnvInteger, loadEnvValue } from './loadEnv';
+import { runtimeLedgerStore } from '../models/runtimeLedgerStore';
+import { estimateTokenCountFromText } from './tokenUsageObservability';
 
 function textFromContent(content: Anthropic.Messages.ContentBlock[]): string {
   return content
@@ -62,6 +34,118 @@ function fromAnthropicToolName(name: string) {
 
 const MODEL_STREAM_TIMEOUT_MS = 180_000;
 const FINAL_SYNTHESIS_TIMEOUT_MS = 120_000;
+const MAX_TOOL_DESCRIPTION_CHARS = 100;
+const MAX_TOOL_SCHEMA_PROPERTIES = 40;
+const MAX_TOOL_SCHEMA_ENUM_ITEMS = 20;
+const MAX_TOOL_SCHEMA_ENUM_STRINGS = 80;
+
+function compactPromptText(text: string, maxChars: number, suffix: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const limit = Math.max(0, maxChars - suffix.length);
+  return `${trimmed.slice(0, limit)}${suffix}`;
+}
+
+function recordHaikuTurnTokenUsage(input: {
+  request: AgentProviderRequest;
+  providerId?: 'haiku';
+  modelId: string;
+  stage: 'tool-planning' | 'final';
+  turnIndex: number;
+  inputTokens: number;
+  outputTokens: number;
+  promptText: string;
+  responseText: string;
+  toolCalls: number;
+  autoExpanded?: boolean;
+}): void {
+  runtimeLedgerStore.recordToolEvent({
+    taskId: input.request.taskId,
+    providerId: input.providerId ?? 'haiku',
+    runId: input.request.runId,
+    summary: `Model turn token accounting: ${input.stage} #${input.turnIndex}`,
+    metadata: {
+      category: 'model-turn',
+      providerId: input.providerId ?? 'haiku',
+      modelId: input.modelId,
+      stage: input.stage,
+      turnIndex: input.turnIndex,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      promptLength: input.promptText.length,
+      responseLength: input.responseText.length,
+      promptTokenEstimate: estimateTokenCountFromText(input.promptText),
+      responseTokenEstimate: estimateTokenCountFromText(input.responseText),
+      toolCalls: input.toolCalls,
+      autoExpanded: Boolean(input.autoExpanded),
+    },
+  });
+}
+
+function compactToolSchema(value: unknown, depth = 0): unknown {
+  if (value == null || typeof value !== 'object') return value;
+
+  if (Array.isArray(value)) {
+    return value.slice(0, MAX_TOOL_SCHEMA_ENUM_ITEMS).map((item) => compactToolSchema(item, depth + 1));
+  }
+
+  const source = value as Record<string, unknown>;
+  const compacted: Record<string, unknown> = {};
+  const safeKeys = new Set([
+    'type',
+    'enum',
+    'required',
+    'properties',
+    'items',
+    'additionalProperties',
+    'oneOf',
+    'anyOf',
+    'allOf',
+    'minimum',
+    'maximum',
+    'minLength',
+    'maxLength',
+    'pattern',
+    'format',
+    'const',
+  ]);
+
+  for (const [key, childValue] of Object.entries(source)) {
+    if (key === 'description' || key === 'title' || key === '$schema' || key === '$id') continue;
+    if (!safeKeys.has(key) && depth > 0) continue;
+
+    if (key === 'properties' && childValue && typeof childValue === 'object') {
+      const properties = childValue as Record<string, unknown>;
+      compacted[key] = Object.fromEntries(
+        Object.entries(properties)
+          .slice(0, MAX_TOOL_SCHEMA_PROPERTIES)
+          .map(([propertyName, propertySchema]) => [
+            propertyName,
+            compactToolSchema(propertySchema, depth + 1),
+          ]),
+      );
+      continue;
+    }
+
+    if (key === 'enum' && Array.isArray(childValue)) {
+      compacted[key] = childValue
+        .slice(0, MAX_TOOL_SCHEMA_ENUM_ITEMS)
+        .map((item) => (typeof item === 'string'
+          ? compactPromptText(item, MAX_TOOL_SCHEMA_ENUM_STRINGS, '...')
+          : item));
+      continue;
+    }
+
+    if (depth > 2 && (typeof childValue === 'object')) {
+      compacted[key] = {};
+      continue;
+    }
+
+    compacted[key] = compactToolSchema(childValue, depth + 1);
+  }
+
+  return compacted;
+}
 
 async function finalMessageWithTimeout(
   stream: { finalMessage: () => Promise<Anthropic.Messages.Message>; abort: () => void },
@@ -116,9 +200,47 @@ function buildInitialUserContent(request: AgentProviderRequest): string | Anthro
   return content;
 }
 
+function buildAnthropicToolCacheKey(
+  tools: AgentProviderRequest['promptTools'],
+  compactDescriptions: boolean,
+): string {
+  return JSON.stringify({
+    compactDescriptions,
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      description: compactDescriptions
+        ? compactPromptText(tool.description, MAX_TOOL_DESCRIPTION_CHARS, '...')
+        : tool.description,
+      schema: compactToolSchema(tool.inputSchema),
+    })),
+  });
+}
+
+function buildAnthropicTools(
+  tools: AgentProviderRequest['promptTools'],
+  compactDescriptions: boolean,
+  cache: Map<string, Anthropic.Messages.Tool[]>,
+): Anthropic.Messages.Tool[] {
+  const cacheKey = buildAnthropicToolCacheKey(tools, compactDescriptions);
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  const built = tools.map((tool) => ({
+    name: toAnthropicToolName(tool.name),
+    description: compactDescriptions
+      ? compactPromptText(tool.description, MAX_TOOL_DESCRIPTION_CHARS, '...')
+      : tool.description,
+    input_schema: compactToolSchema(tool.inputSchema) as Anthropic.Messages.Tool.InputSchema,
+  }));
+
+  cache.set(cacheKey, built);
+  return built;
+}
+
 export class HaikuProvider implements AgentProvider {
   readonly modelId: string;
   readonly supportsAppToolExecutor = true;
+  private readonly maxTokens: number;
 
   private readonly client: Anthropic;
   private aborted = false;
@@ -130,6 +252,12 @@ export class HaikuProvider implements AgentProvider {
     }
 
     this.modelId = loadEnvValue('ANTHROPIC_MODEL') || DEFAULT_HAIKU_CONFIG.modelId;
+    this.maxTokens = Math.max(
+      1,
+      loadEnvInteger('V2_HAIKU_MAX_TOKENS')
+      ?? loadEnvInteger('ANTHROPIC_MAX_TOKENS')
+      ?? DEFAULT_HAIKU_CONFIG.maxTokens,
+    );
     this.client = new Anthropic({ apiKey });
   }
 
@@ -157,28 +285,27 @@ export class HaikuProvider implements AgentProvider {
 
     const toolCatalog = request.toolCatalog;
     const toolBindingStore = createRequestToolBindingStore(request);
+    const anthropicToolCache = new Map<string, Anthropic.Messages.Tool[]>();
 
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
     let finalOutput = '';
     let reachedToolTurnLimit = false;
+    const modelId = this.modelId;
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) {
         throw new Error('Task cancelled by user.');
       }
+      const turnPromptText = JSON.stringify(messages);
       const callableTools = toolBindingStore.beginTurn();
 
       let turnTextBuffer = '';
       const turnTextChunks: string[] = [];
-      const tools: Anthropic.Messages.Tool[] = callableTools.map(tool => ({
-        name: toAnthropicToolName(tool.name),
-        description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
-        input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,
-      }));
+      const tools = buildAnthropicTools(callableTools, true, anthropicToolCache);
       const allowedToolNames = new Set(callableTools.map(tool => tool.name));
 
       const stream = this.client.messages.stream({
         model: this.modelId as Anthropic.Messages.MessageCreateParams['model'],
-        max_tokens: DEFAULT_HAIKU_CONFIG.maxTokens,
+        max_tokens: this.maxTokens,
         system: [
           {
             type: 'text',
@@ -229,6 +356,18 @@ export class HaikuProvider implements AgentProvider {
           toolCatalog,
           toolBindingStore,
         });
+        recordHaikuTurnTokenUsage({
+          request,
+          modelId,
+          stage: autoExpansion ? 'tool-planning' : 'final',
+          turnIndex: turn + 1,
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          promptText: turnPromptText,
+          responseText: finalOutput,
+          toolCalls: 0,
+          autoExpanded: Boolean(autoExpansion),
+        });
         if (autoExpansion) {
           messages.push({
             role: 'assistant',
@@ -245,8 +384,22 @@ export class HaikuProvider implements AgentProvider {
         for (const chunk of turnTextChunks) {
           request.onToken?.(chunk);
         }
+        // Final answer emitted; model turn complete.
         break;
       }
+
+      recordHaikuTurnTokenUsage({
+        request,
+        providerId: 'haiku',
+        modelId,
+        stage: 'tool-planning',
+        turnIndex: turn + 1,
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        promptText: turnPromptText,
+        responseText: finalOutput,
+        toolCalls: toolUses.length,
+      });
 
       messages.push({
         role: 'assistant',
@@ -320,14 +473,20 @@ export class HaikuProvider implements AgentProvider {
     }
 
     if (reachedToolTurnLimit) {
-      const tools: Anthropic.Messages.Tool[] = toolBindingStore.beginTurn().map(tool => ({
-        name: toAnthropicToolName(tool.name),
-        description: `${tool.description}\n\nV2 tool name: ${tool.name}`,
-        input_schema: tool.inputSchema as Anthropic.Messages.Tool.InputSchema,
-      }));
+      const finalPromptText = JSON.stringify([
+        ...messages,
+        {
+          role: 'user',
+          content: [
+            'The tool-call turn limit has been reached. Stop using tools and provide the best final answer from the evidence already gathered.',
+            'If the evidence is insufficient, say exactly what could not be verified and which constraints prevented a concrete answer.',
+          ].join('\n'),
+        },
+      ]);
+      const tools = buildAnthropicTools(toolBindingStore.beginTurn(), false, anthropicToolCache);
       const synthesisStream = this.client.messages.stream({
         model: this.modelId as Anthropic.Messages.MessageCreateParams['model'],
-        max_tokens: DEFAULT_HAIKU_CONFIG.maxTokens,
+        max_tokens: this.maxTokens,
         system: [
           {
             type: 'text',
@@ -362,6 +521,18 @@ export class HaikuProvider implements AgentProvider {
       inputTokens += synthesisResponse.usage.input_tokens;
       outputTokens += synthesisResponse.usage.output_tokens;
       finalOutput = textFromContent(synthesisResponse.content);
+      recordHaikuTurnTokenUsage({
+        request,
+        providerId: 'haiku',
+        modelId,
+        stage: 'final',
+        turnIndex: maxToolTurns + 1,
+        inputTokens: synthesisResponse.usage.input_tokens,
+        outputTokens: synthesisResponse.usage.output_tokens,
+        promptText: finalPromptText,
+        responseText: finalOutput,
+        toolCalls: 0,
+      });
     }
 
     const finalItem = publishProviderFinalOutput({

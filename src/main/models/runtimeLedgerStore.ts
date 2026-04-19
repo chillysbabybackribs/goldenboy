@@ -1,123 +1,36 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { app } from 'electron';
 import { generateId } from '../../shared/utils/ids';
 import { appStateStore } from '../state/appStateStore';
 import { eventBus } from '../events/eventBus';
 import { AppEventType } from '../../shared/types/events';
 import type {
   ProviderId,
-  RuntimeArtifactSnapshot,
-  RuntimeBrowserTabSnapshot,
-  RuntimeDecisionSnapshot,
   RuntimeLedgerEvent,
-  RuntimeEvidenceSnapshot,
-  RuntimeRunSnapshot,
   RuntimeTaskEntitySnapshot,
   RuntimeTaskAwareness,
   TaskMemoryEntry,
-  TaskMemoryEntryKind,
 } from '../../shared/types/model';
-
-const RUNTIME_LEDGER_FILE = 'runtime-ledger.json';
-const MAX_EVENTS = 5_000;
-const MAX_TASK_EVENTS = 40;
-const MAX_CONTEXT_CHARS = 2_400;
-const MAX_TASK_SWITCH_CONTEXT_CHARS = 1_600;
-const CONTINUATION_STOP_WORDS = new Set([
-  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'then', 'than', 'have', 'what',
-  'when', 'where', 'which', 'should', 'could', 'would', 'there', 'their', 'about', 'after',
-  'before', 'while', 'your', 'you', 'just', 'task', 'work', 'continue', 'resume', 'switch',
-  'same', 'previous', 'prior', 'last', 'chat', 'thread', 'conversation', 'model',
-]);
-
-function ledgerPath(): string {
-  return path.join(app.getPath('userData'), RUNTIME_LEDGER_FILE);
-}
-
-function loadLedger(): RuntimeLedgerEvent[] {
-  try {
-    const filePath = ledgerPath();
-    if (!fs.existsSync(filePath)) return [];
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as RuntimeLedgerEvent[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLedger(events: RuntimeLedgerEvent[]): void {
-  try {
-    fs.writeFileSync(ledgerPath(), JSON.stringify(events, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Failed to persist runtime ledger:', err);
-  }
-}
-
-function truncate(text: string, maxChars: number, suffix = '...[truncated]'): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, Math.max(0, maxChars - suffix.length))}${suffix}`;
-}
-
-function compact(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function limitUnique(items: string[], limit: number): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of items) {
-    const value = compact(item);
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    out.push(value);
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
-function extractKeywords(text: string): string[] {
-  return Array.from(new Set(
-    text
-      .toLowerCase()
-      .match(/[a-z0-9]{4,}/g)
-      ?.filter((token) => !CONTINUATION_STOP_WORDS.has(token)) || [],
-  ));
-}
-
-function formatTimestamp(timestamp: number | null): string | null {
-  return timestamp ? new Date(timestamp).toISOString() : null;
-}
-
-function looksLikeCrossTaskContinuation(prompt: string): boolean {
-  const lower = prompt.toLowerCase();
-  return /\b(previous|prior|earlier|last)\s+task\b/.test(lower)
-    || /\b(switch|switched|handoff|pick up|continue|resume|carry on|same work)\b/.test(lower)
-    || /\bfrom before\b/.test(lower)
-    || /\bwhat were we\b/.test(lower);
-}
-
-function mapTaskMemoryKind(kind: TaskMemoryEntryKind, metadata?: Record<string, unknown>): RuntimeLedgerEvent['kind'] {
-  if (kind === 'user_prompt') return 'user_prompt';
-  if (kind === 'model_result') return 'model_result';
-  if (kind === 'browser_finding') return 'browser_finding';
-  if (kind === 'handoff') return 'handoff';
-
-  const category = typeof metadata?.category === 'string' ? metadata.category : '';
-  if (category === 'claim') return 'claim';
-  if (category === 'evidence') return 'evidence';
-  if (category === 'critique') return 'critique';
-  if (category === 'verification') return 'verification';
-  return 'verification';
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function asBoolean(value: unknown): boolean | null {
-  return typeof value === 'boolean' ? value : null;
-}
+import {
+  asBoolean,
+  asString,
+  compactText,
+  deriveArtifactSnapshots,
+  deriveBrowserTabSnapshots,
+  deriveCurrentRunSnapshot,
+  deriveDecisionSnapshots,
+  deriveEvidenceSnapshots,
+  findRelevantPriorTaskAwareness,
+  formatTimestamp,
+  limitUnique,
+  loadLedger,
+  looksLikeCrossTaskContinuation,
+  mapTaskMemoryKind,
+  MAX_CONTEXT_CHARS,
+  MAX_EVENTS,
+  MAX_TASK_EVENTS,
+  MAX_TASK_SWITCH_CONTEXT_CHARS,
+  saveLedger,
+  truncateText,
+} from './runtimeLedgerStore.utils';
 
 export class RuntimeLedgerStore {
   private events: RuntimeLedgerEvent[] = loadLedger();
@@ -266,7 +179,7 @@ export class RuntimeLedgerStore {
       kind: mapTaskMemoryKind(entry.kind, entry.metadata),
       scope: 'task',
       source: 'task-memory',
-      summary: truncate(compact(entry.text), 500),
+      summary: truncateText(compactText(entry.text), 500),
       metadata: entry.metadata,
     });
   }
@@ -352,14 +265,22 @@ export class RuntimeLedgerStore {
   }
 
   getTaskEntitySnapshot(taskId: string): RuntimeTaskEntitySnapshot {
+    const state = appStateStore.getState();
     const taskEvents = this.events.filter((event) => event.taskId === taskId);
     return {
       taskId,
-      currentRun: this.deriveCurrentRunSnapshot(taskEvents),
-      artifacts: this.deriveArtifactSnapshots(taskId, taskEvents),
-      browserTabs: this.deriveBrowserTabSnapshots(taskId, taskEvents),
-      decisions: this.deriveDecisionSnapshots(taskEvents),
-      evidence: this.deriveEvidenceSnapshots(taskEvents),
+      currentRun: deriveCurrentRunSnapshot(taskEvents),
+      artifacts: deriveArtifactSnapshots(state, taskId, taskEvents),
+      browserTabs: deriveBrowserTabSnapshots(
+        {
+          browserRuntime: state.browserRuntime,
+          activeTaskId: state.activeTaskId,
+        },
+        taskEvents,
+        taskId,
+      ),
+      decisions: deriveDecisionSnapshots(taskEvents),
+      evidence: deriveEvidenceSnapshots(taskEvents),
     };
   }
 
@@ -374,7 +295,13 @@ export class RuntimeLedgerStore {
       || (!currentAwareness.latestModelResult && !currentAwareness.latestBrowserFinding);
     if (!shouldOfferPriorTaskContext) return null;
 
-    const priorAwareness = this.findRelevantPriorTaskAwareness(input.taskId, input.prompt);
+    const state = appStateStore.getState();
+    const priorAwareness = findRelevantPriorTaskAwareness({
+      currentTaskId: input.taskId,
+      prompt: input.prompt,
+      tasks: state.tasks,
+      getTaskAwareness: (taskId: string) => this.getTaskAwareness(taskId),
+    });
     if (!priorAwareness) return null;
 
     const sections: string[] = [
@@ -423,7 +350,7 @@ export class RuntimeLedgerStore {
       sections.push(...recentHistory);
     }
 
-    return truncate(sections.join('\n'), MAX_TASK_SWITCH_CONTEXT_CHARS, '\n...[prior task context truncated]');
+    return truncateText(sections.join('\n'), MAX_TASK_SWITCH_CONTEXT_CHARS, '\n...[prior task context truncated]');
   }
 
   buildHydrationContext(input: {
@@ -507,7 +434,7 @@ export class RuntimeLedgerStore {
       sections.push(...recentHistory);
     }
 
-    return truncate(sections.join('\n'), MAX_CONTEXT_CHARS, '\n...[ledger context truncated]');
+    return truncateText(sections.join('\n'), MAX_CONTEXT_CHARS, '\n...[ledger context truncated]');
   }
 
   private attachBrowserEventListeners(): void {
@@ -551,185 +478,6 @@ export class RuntimeLedgerStore {
     });
   }
 
-  private findRelevantPriorTaskAwareness(currentTaskId: string, prompt: string): RuntimeTaskAwareness | null {
-    const tasks = appStateStore.getState().tasks
-      .filter((task) => task.id !== currentTaskId)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-    if (tasks.length === 0) return null;
-
-    const promptKeywords = extractKeywords(prompt);
-    let best: { score: number; awareness: RuntimeTaskAwareness } | null = null;
-
-    for (const [index, task] of tasks.entries()) {
-      const awareness = this.getTaskAwareness(task.id);
-      if (!awareness.lastUpdatedAt) continue;
-
-      const searchableText = [
-        awareness.taskTitle,
-        awareness.latestUserPrompt,
-        awareness.latestModelResult,
-        awareness.latestBrowserFinding,
-        ...awareness.openIssues,
-        ...awareness.evidence,
-        ...awareness.decisions,
-      ].filter(Boolean).join(' ');
-      const matches = promptKeywords.filter((keyword) => searchableText.toLowerCase().includes(keyword)).length;
-      const recencyScore = Math.max(0, 8 - index);
-      const activeWorkBonus = awareness.taskStatus === 'running' ? 3 : 0;
-      const score = (matches * 10) + recencyScore + activeWorkBonus;
-
-      if (!best || score > best.score) {
-        best = { score, awareness };
-      }
-    }
-
-    if (!best) return null;
-    if (best.score <= 0 && !looksLikeCrossTaskContinuation(prompt)) return null;
-    return best.awareness;
-  }
-
-  private deriveCurrentRunSnapshot(taskEvents: RuntimeLedgerEvent[]): RuntimeRunSnapshot | null {
-    const runs = new Map<string, RuntimeRunSnapshot>();
-    for (const event of taskEvents) {
-      const runId = asString(event.runId);
-      if (!runId) continue;
-      const existing = runs.get(runId) || {
-        runId,
-        taskId: event.taskId ?? null,
-        providerId: event.providerId ?? null,
-        status: null,
-        startedAt: null,
-        completedAt: null,
-        latestToolCallLabel: null,
-        latestToolStatus: null,
-        latestToolSummary: null,
-      };
-      if (!existing.providerId && event.providerId) existing.providerId = event.providerId;
-      if (event.kind === 'task_status') {
-        const status = asString(event.metadata?.status) as RuntimeRunSnapshot['status'];
-        existing.status = status ?? existing.status;
-        if (status === 'running') existing.startedAt = event.timestamp;
-        if (status === 'completed' || status === 'failed') existing.completedAt = event.timestamp;
-      }
-      if (event.kind === 'tool') {
-        existing.latestToolCallLabel = asString(event.metadata?.toolName) ?? existing.latestToolCallLabel;
-        existing.latestToolStatus = asString(event.metadata?.status) as RuntimeRunSnapshot['latestToolStatus'] ?? existing.latestToolStatus;
-        existing.latestToolSummary = event.summary;
-      }
-      runs.set(runId, existing);
-    }
-
-    return Array.from(runs.values())
-      .sort((a, b) => {
-        const aTime = a.completedAt ?? a.startedAt ?? 0;
-        const bTime = b.completedAt ?? b.startedAt ?? 0;
-        return bTime - aTime;
-      })[0] || null;
-  }
-
-  private deriveArtifactSnapshots(taskId: string, taskEvents: RuntimeLedgerEvent[]): RuntimeArtifactSnapshot[] {
-    const state = appStateStore.getState();
-    const artifacts = state.artifacts
-      .filter((artifact) => artifact.linkedTaskIds.includes(taskId) || state.activeArtifactId === artifact.id);
-    const latestArtifactEventById = new Map<string, RuntimeLedgerEvent>();
-
-    for (const event of taskEvents) {
-      if (event.kind !== 'artifact') continue;
-      const artifactId = asString(event.metadata?.artifactId);
-      if (!artifactId) continue;
-      latestArtifactEventById.set(artifactId, event);
-    }
-
-    return artifacts
-      .map((artifact) => {
-        const latestEvent = latestArtifactEventById.get(artifact.id) || null;
-        return {
-          artifactId: artifact.id,
-          taskId,
-          title: artifact.title,
-          format: artifact.format,
-          status: artifact.status,
-          isActive: state.activeArtifactId === artifact.id,
-          lastUpdatedAt: artifact.updatedAt,
-          lastAction: asString(latestEvent?.metadata?.action),
-          lastSummary: latestEvent?.summary ?? null,
-        };
-      })
-      .sort((a, b) => {
-        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-        return b.lastUpdatedAt - a.lastUpdatedAt;
-      });
-  }
-
-  private deriveBrowserTabSnapshots(taskId: string, taskEvents: RuntimeLedgerEvent[]): RuntimeBrowserTabSnapshot[] {
-    const state = appStateStore.getState();
-    const runtimeTabs = state.browserRuntime.tabs;
-    const latestBrowserEventById = new Map<string, RuntimeLedgerEvent>();
-
-    for (const event of taskEvents) {
-      if (event.kind !== 'browser') continue;
-      const tabId = asString(event.metadata?.tabId);
-      if (!tabId) continue;
-      latestBrowserEventById.set(tabId, event);
-    }
-
-    const tabIds = new Set<string>([
-      ...runtimeTabs.map((tab) => tab.id),
-      ...latestBrowserEventById.keys(),
-    ]);
-
-    return Array.from(tabIds)
-      .map((tabId) => {
-        const tab = runtimeTabs.find((item) => item.id === tabId) || null;
-        const latestEvent = latestBrowserEventById.get(tabId) || null;
-        const title = tab?.navigation.title || asString(latestEvent?.metadata?.title);
-        const url = tab?.navigation.url || asString(latestEvent?.metadata?.url);
-        return {
-          tabId,
-          taskId,
-          title,
-          url,
-          isActive: state.browserRuntime.activeTabId === tabId,
-          isLoading: tab?.navigation.isLoading ?? asBoolean(latestEvent?.metadata?.isLoading),
-          lastUpdatedAt: latestEvent?.timestamp ?? Date.now(),
-          lastAction: asString(latestEvent?.metadata?.action),
-          lastSummary: latestEvent?.summary ?? null,
-        };
-      })
-      .filter((tab) => Boolean(tab.title || tab.url || tab.lastSummary))
-      .sort((a, b) => {
-        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-        return b.lastUpdatedAt - a.lastUpdatedAt;
-      });
-  }
-
-  private deriveDecisionSnapshots(taskEvents: RuntimeLedgerEvent[]): RuntimeDecisionSnapshot[] {
-    return taskEvents
-      .filter((event): event is RuntimeLedgerEvent & { kind: 'verification' | 'handoff' } => event.kind === 'verification' || event.kind === 'handoff')
-      .slice(-5)
-      .reverse()
-      .map((event) => ({
-        taskId: event.taskId ?? null,
-        summary: event.summary,
-        sourceKind: event.kind,
-        timestamp: event.timestamp,
-        providerId: event.providerId ?? null,
-      }));
-  }
-
-  private deriveEvidenceSnapshots(taskEvents: RuntimeLedgerEvent[]): RuntimeEvidenceSnapshot[] {
-    return taskEvents
-      .filter((event): event is RuntimeLedgerEvent & { kind: 'evidence' | 'browser_finding' } => event.kind === 'evidence' || event.kind === 'browser_finding')
-      .slice(-5)
-      .reverse()
-      .map((event) => ({
-        taskId: event.taskId ?? null,
-        summary: event.summary,
-        sourceKind: event.kind,
-        timestamp: event.timestamp,
-        providerId: event.providerId ?? null,
-      }));
-  }
 }
 
 export const runtimeLedgerStore = new RuntimeLedgerStore();

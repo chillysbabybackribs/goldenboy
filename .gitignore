@@ -3,3 +3,15 @@ dist/
 node_modules/
 .tmp/
 .superpowers/brainstorm/
+artifacts/
+runtime-ledger.json
+token_ledger.json
+auto_logger.py
+docs/god-file-audit-*.md
+
+# Keep source tree TypeScript-first; generated JS/types/source maps in src are
+# produced by the build pipeline and should not be tracked.
+src/**/*.js
+!src/main/agent/v2-mcp-shim.js
+src/**/*.d.ts
+src/**/*.js.map

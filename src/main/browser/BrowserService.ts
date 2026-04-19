@@ -5,8 +5,7 @@
 // Manages multiple tabs (each a WebContentsView), bookmarks, extensions,
 // settings, zoom, find-in-page, downloads, and permissions.
 
-import { BrowserWindow, WebContentsView, session, shell, Event as ElectronEvent, Menu, MenuItem, clipboard, WebContents } from 'electron';
-import * as path from 'path';
+import { BrowserWindow, WebContentsView, session, shell, Event as ElectronEvent, clipboard, WebContents } from 'electron';
 import {
   BrowserState, BrowserNavigationState, BrowserSurfaceStatus,
   BrowserHistoryEntry, BrowserDownloadState, BrowserPermissionRequest,
@@ -54,11 +53,26 @@ import { pageKnowledgeStore } from '../browserKnowledge/PageKnowledgeStore';
 import { normalizeNavigationTarget } from './navigationTarget';
 import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 import { DEFAULT_BROWSER_CONTEXT_ID } from './browserContext';
+import { BrowserGoogleAuthManager } from './browserGoogleAuth';
 import type {
   BrowserNetworkInterceptionPolicy,
   BrowserOperationNetworkCapture,
   BrowserOperationNetworkScope,
 } from './browserNetworkSupport';
+import { buildBrowserContextMenu } from './browserContextMenu';
+import {
+  areViewBoundsEqual,
+  getBrowserTabPreloadPath,
+  buildSourceDocument,
+  isGoogleCookieDomain,
+  isGoogleOrYouTubeRequest,
+  isSafeExternalUrl,
+  isSafeNavigationUrl,
+  isSafeUrlForTabOpen,
+  isTabEntryViewAlive,
+  sanitizeBrowserUserAgent,
+  type ViewBounds,
+} from './browserService.utils';
 
 const PROFILE_ID = 'workspace-browser';
 const PARTITION = 'persist:workspace-browser';
@@ -70,105 +84,12 @@ const ENABLE_BACKGROUND_PAGE_EXTRACTION = false;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5.0;
-const GOOGLE_AUTH_MISMATCH_PATH = '/CookieMismatch';
-const GOOGLE_AUTH_START_URL = 'https://accounts.google.com/';
-const GOOGLE_COOKIE_DOMAIN_SUFFIXES = [
-  'google.com',
-  'youtube.com',
-  'googleusercontent.com',
-];
-
-/** Paths on accounts.google.com that indicate an OAuth / sign-in flow. */
-const GOOGLE_OAUTH_PATH_PATTERNS = [
-  '/o/oauth2/',
-  '/signin/oauth',
-  '/AccountChooser',
-  '/ServiceLogin',
-  '/v3/signin/',
-  '/signin/v2/',
-];
-
-/** How long to keep the local OAuth relay server alive (ms). */
-const OAUTH_RELAY_TIMEOUT_MS = 5 * 60 * 1000;
-const ALLOWED_POPUP_PROTOCOLS = new Set(['http:', 'https:']);
-const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
 const BROWSER_SURFACE_BACKGROUND = '#000000';
-type ViewBounds = { x: number; y: number; width: number; height: number };
-
-function isSafeExternalUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    return ALLOWED_POPUP_PROTOCOLS.has(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
-function isSafeNavigationUrl(rawUrl: string): boolean {
-  const trimmed = rawUrl.trim();
-  if (!trimmed || trimmed === 'about:blank') return false;
-  try {
-    const parsed = new URL(trimmed);
-    return ALLOWED_NAVIGATION_PROTOCOLS.has(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
-function isSafeUrlForTabOpen(rawUrl: string): boolean {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) return false;
-  if (trimmed === 'about:blank') return true;
-  return isSafeNavigationUrl(trimmed);
-}
-
 type TabEntry = {
   id: string;
   view: WebContentsView;
   info: TabInfo;
 };
-
-function getBrowserTabPreloadPath(): string {
-  return path.join(__dirname, '..', '..', '..', 'preload', 'preload', 'browserTabPreload.js');
-}
-
-function sanitizeBrowserUserAgent(userAgent: string): string {
-  return userAgent
-    .replace(/\s*Electron\/[\d.]+/g, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
-
-function isGoogleOrYouTubeRequest(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    const hostname = parsed.hostname.toLowerCase();
-    return hostname === 'google.com'
-      || hostname.endsWith('.google.com')
-      || hostname === 'youtube.com'
-      || hostname.endsWith('.youtube.com');
-  } catch {
-    return false;
-  }
-}
-
-function isGoogleCookieDomain(domain: string): boolean {
-  const normalized = domain.replace(/^\./, '').toLowerCase();
-  return GOOGLE_COOKIE_DOMAIN_SUFFIXES.some(suffix => normalized === suffix || normalized.endsWith(`.${suffix}`));
-}
-
-function areViewBoundsEqual(a: ViewBounds, b: ViewBounds): boolean {
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-}
-
-function isTabEntryViewAlive(entry: TabEntry | undefined): boolean {
-  if (!entry) return false;
-  try {
-    return !entry.view.webContents.isDestroyed();
-  } catch {
-    return false;
-  }
-}
 
 export class BrowserService {
   private tabs: Map<string, TabEntry> = new Map();
@@ -191,13 +112,25 @@ export class BrowserService {
   private attachedTabIds = new Set<string>();
   private appliedBoundsByTabId = new Map<string, ViewBounds>();
   private sessionInstance: Electron.Session | null = null;
-  private lastGoogleCookieMismatchAt: number | null = null;
-  private oauthRelayTimer: ReturnType<typeof setTimeout> | null = null;
   private instrumentation: BrowserInstrumentation;
   private downloadManager = new BrowserDownloadManager({
     resolveTabIdByWebContentsId: (webContentsId) => this.resolveTabIdByWebContentsId(webContentsId),
     emitLog: (level, message) => this.emitLog(level, message),
     syncState: () => this.syncState(),
+  });
+  private googleAuthManager = new BrowserGoogleAuthManager({
+    emitLog: (level, message) => this.emitLog(level, message),
+    isSafeNavigationUrl: (url) => isSafeNavigationUrl(url),
+    isSafeExternalUrl: (url) => isSafeExternalUrl(url),
+    getSession: () => this.sessionInstance,
+    loadUrlInTab: (tab, url) => {
+      if (!tab.view.webContents.isDestroyed()) {
+        void tab.view.webContents.loadURL(url);
+      }
+    },
+    openExternal: (url) => {
+      void shell.openExternal(url);
+    },
   });
   private dialogManager = new BrowserDialogManager({
     resolveEntry: (tabId) => this.resolveEntry(tabId),
@@ -805,10 +738,10 @@ export class BrowserService {
         return;
       }
 
-      if (this.isGoogleOAuthUrl(url)) {
+      if (this.googleAuthManager.isGoogleOAuthUrl(url)) {
         e.preventDefault();
         this.emitLog('info', `Intercepted Google sign-in — opening in system browser`);
-        void this.openGoogleSignInExternally(entry, url);
+        void this.googleAuthManager.openGoogleSignInExternally(entry, url);
       }
     });
 
@@ -820,13 +753,13 @@ export class BrowserService {
       nav.lastNavigationAt = Date.now();
       this.addHistoryEntry(url, nav.title, nav.favicon);
       this.syncTabAndMaybeNavigation(entry);
-      void this.handleGoogleAuthNavigation(entry, url);
+      void this.googleAuthManager.handleGoogleAuthNavigation(entry, url);
 
       // Fallback: catch Google OAuth URLs that arrived via server-side
       // redirects (302) which bypass will-navigate.
-      if (this.isGoogleOAuthUrl(url)) {
+      if (this.googleAuthManager.isGoogleOAuthUrl(url)) {
         this.emitLog('info', `Intercepted Google sign-in (redirect) — opening in system browser`);
-        void this.openGoogleSignInExternally(entry, url);
+        void this.googleAuthManager.openGoogleSignInExternally(entry, url);
       }
     });
 
@@ -879,74 +812,21 @@ export class BrowserService {
     });
 
     wc.on('context-menu', (_e: ElectronEvent, params: Electron.ContextMenuParams) => {
-      const menu = new Menu();
-      const currentUrl = wc.getURL();
-      const canViewSource = !!currentUrl
-        && currentUrl !== 'about:blank'
-        && !currentUrl.startsWith('devtools://')
-        && !currentUrl.startsWith('view-source:');
-
-      // ── Text editing actions ──
-      if (params.isEditable) {
-        menu.append(new MenuItem({ label: 'Undo', role: 'undo', enabled: params.editFlags.canUndo }));
-        menu.append(new MenuItem({ label: 'Redo', role: 'redo', enabled: params.editFlags.canRedo }));
-        menu.append(new MenuItem({ type: 'separator' }));
-        menu.append(new MenuItem({ label: 'Cut', role: 'cut', enabled: params.editFlags.canCut }));
-        menu.append(new MenuItem({ label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy }));
-        menu.append(new MenuItem({ label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste }));
-        menu.append(new MenuItem({ label: 'Delete', role: 'delete', enabled: params.editFlags.canDelete }));
-        menu.append(new MenuItem({ type: 'separator' }));
-        menu.append(new MenuItem({ label: 'Select All', role: 'selectAll', enabled: params.editFlags.canSelectAll }));
-      } else {
-        // ── Selection actions (non-editable) ──
-        if (params.selectionText) {
-          menu.append(new MenuItem({ label: 'Copy', role: 'copy' }));
-          menu.append(new MenuItem({ type: 'separator' }));
-        }
-        menu.append(new MenuItem({ label: 'Select All', role: 'selectAll' }));
-      }
-
-      // ── Link actions ──
-      if (params.linkURL) {
-        menu.append(new MenuItem({ type: 'separator' }));
-        menu.append(new MenuItem({
-          label: 'Open Link in New Tab',
-          click: () => this.createTabIfSafe(params.linkURL),
-        }));
-        menu.append(new MenuItem({
-          label: 'Copy Link Address',
-          click: () => clipboard.writeText(params.linkURL),
-        }));
-      }
-
-      // ── Image actions ──
-      if (params.hasImageContents && params.srcURL) {
-        menu.append(new MenuItem({ type: 'separator' }));
-        menu.append(new MenuItem({
-          label: 'Open Image in New Tab',
-          click: () => this.createTabIfSafe(params.srcURL),
-        }));
-        menu.append(new MenuItem({
-          label: 'Copy Image Address',
-          click: () => clipboard.writeText(params.srcURL),
-        }));
-      }
-
-      // ── Page actions ──
-      menu.append(new MenuItem({ type: 'separator' }));
-      menu.append(new MenuItem({ label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() }));
-      menu.append(new MenuItem({ label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() }));
-      menu.append(new MenuItem({ label: 'Reload', click: () => wc.reload() }));
-      menu.append(new MenuItem({
-        label: 'View Page Source',
-        enabled: canViewSource,
-        click: () => { if (canViewSource) void this.openPageSource(currentUrl); },
-      }));
-      menu.append(new MenuItem({
-        label: 'Inspect Element',
-        click: () => wc.inspectElement(params.x, params.y),
-      }));
-
+      const menu = buildBrowserContextMenu({
+        currentUrl: wc.getURL(),
+        params,
+        canGoBack: wc.navigationHistory.canGoBack(),
+        canGoForward: wc.navigationHistory.canGoForward(),
+        openInNewTab: (url) => this.createTabIfSafe(url),
+        copyText: (text) => clipboard.writeText(text),
+        openPageSource: (url) => {
+          void this.openPageSource(url);
+        },
+        inspectElement: (x, y) => wc.inspectElement(x, y),
+        goBack: () => wc.navigationHistory.goBack(),
+        goForward: () => wc.navigationHistory.goForward(),
+        reload: () => wc.reload(),
+      });
       menu.popup();
     });
 
@@ -1022,178 +902,6 @@ export class BrowserService {
     // Emit a full state sync so renderers refresh tab-level loading/error status
     // without requiring activation.
     this.syncState();
-  }
-
-  private async handleGoogleAuthNavigation(entry: TabEntry, rawUrl: string): Promise<void> {
-    if (!this.sessionInstance) return;
-
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      return;
-    }
-
-    if (parsed.hostname !== 'accounts.google.com' || parsed.pathname !== GOOGLE_AUTH_MISMATCH_PATH) {
-      return;
-    }
-
-    this.lastGoogleCookieMismatchAt = Date.now();
-    const cleared = await this.clearGoogleAuthCookies();
-    this.emitLog(
-      'warn',
-      `Detected Google CookieMismatch; cleared ${cleared} Google-family cookies and restarted auth flow`,
-    );
-
-    if (!entry.view.webContents.isDestroyed()) {
-      entry.view.webContents.loadURL(GOOGLE_AUTH_START_URL);
-    }
-  }
-
-  private async clearGoogleAuthCookies(): Promise<number> {
-    if (!this.sessionInstance) return 0;
-
-    const cookies = await this.sessionInstance.cookies.get({});
-    let cleared = 0;
-
-    for (const cookie of cookies) {
-      if (!cookie.domain || !cookie.name || !isGoogleCookieDomain(cookie.domain)) {
-        continue;
-      }
-
-      const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.replace(/^\./, '')}${cookie.path}`;
-      try {
-        await this.sessionInstance.cookies.remove(url, cookie.name);
-        cleared++;
-      } catch {
-        // Ignore individual removal failures and continue clearing the jar.
-      }
-    }
-
-    return cleared;
-  }
-
-  // ─── Google OAuth System-Browser Relay ────────────────────────────────────
-
-  /**
-   * Returns true if the URL is a Google sign-in / OAuth page that should be
-   * opened in the system browser instead of the embedded one.
-   */
-  private isGoogleOAuthUrl(rawUrl: string): boolean {
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      return false;
-    }
-    if (parsed.hostname !== 'accounts.google.com') return false;
-    return GOOGLE_OAUTH_PATH_PATTERNS.some(p => parsed.pathname.startsWith(p));
-  }
-
-  /**
-   * Intercepts a Google OAuth navigation, opens it in the system browser,
-   * and polls for the resulting cookies to appear in Chrome's cookie store.
-   * Once detected, imports them into the Electron session so the embedded
-   * browser ends up authenticated.
-   */
-  private async openGoogleSignInExternally(entry: TabEntry, oauthUrl: string): Promise<void> {
-    if (!this.sessionInstance) return;
-
-    // Prevent duplicate relays
-    this.stopOAuthRelay();
-
-    const ses = this.sessionInstance;
-    const tabWc = entry.view.webContents;
-
-    // Extract the original destination the user was trying to reach
-    let continueUrl: string | null = null;
-    try {
-      const parsed = new URL(oauthUrl);
-      continueUrl = parsed.searchParams.get('continue')
-        || parsed.searchParams.get('redirect_uri')
-        || null;
-    } catch { /* ignore */ }
-
-    // Show a placeholder in the embedded tab while the user authenticates
-    if (!tabWc.isDestroyed()) {
-      tabWc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
-        `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;
-justify-content:center;height:100vh;margin:0;background:#0a0a0a;color:#ccc}
-.card{text-align:center;padding:40px}
-h2{margin-bottom:8px;color:#fff}
-p{color:#888;max-width:340px;line-height:1.6}
-.spinner{width:24px;height:24px;border:2px solid #333;border-top-color:#aaa;
-border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
-@keyframes spin{to{transform:rotate(360deg)}}
-</style></head><body><div class="card">
-<h2>Sign in with Google</h2>
-<p>Your system browser has been opened. Complete sign-in there, then return here — this page will update automatically.</p>
-<div class="spinner"></div>
-</div></body></html>`,
-      )}`);
-    }
-
-    if (!isSafeExternalUrl(oauthUrl)) {
-      this.emitLog('warn', `Blocked unsafe OAuth URL for external launch: ${oauthUrl}`);
-      return;
-    }
-
-    // Open the original OAuth URL in the system browser
-    void shell.openExternal(oauthUrl);
-
-    // Poll Chrome's cookie database for fresh Google session cookies.
-    // Once they appear, import them and navigate to the destination.
-    const POLL_INTERVAL = 3000;
-    let elapsed = 0;
-
-    const poll = async () => {
-      elapsed += POLL_INTERVAL;
-      if (elapsed > OAUTH_RELAY_TIMEOUT_MS) {
-        this.stopOAuthRelay();
-        this.emitLog('warn', 'Google sign-in polling timed out after 5 minutes');
-        return;
-      }
-
-      try {
-        const result = await importChromeCookies(ses, true);
-        // Check if we got any Google cookies this round
-        const hasGoogleCookies = result.domains.some(d => {
-          const norm = d.replace(/^\./, '').toLowerCase();
-          return GOOGLE_COOKIE_DOMAIN_SUFFIXES.some(s => norm === s || norm.endsWith(`.${s}`));
-        });
-
-        if (hasGoogleCookies && result.imported > 0) {
-          this.emitLog('info', `Google sign-in complete: imported ${result.imported} cookies (${result.domains.length} domains)`);
-          this.stopOAuthRelay();
-
-          // Navigate to the original destination
-          const destination = (continueUrl && isSafeNavigationUrl(continueUrl))
-            ? continueUrl
-            : 'https://myaccount.google.com/';
-          if (!tabWc.isDestroyed()) {
-            tabWc.loadURL(destination);
-          }
-          return;
-        }
-      } catch (err) {
-        this.emitLog('warn', `OAuth poll: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      // Keep polling
-      this.oauthRelayTimer = setTimeout(() => void poll(), POLL_INTERVAL);
-    };
-
-    // Start polling after initial delay to let the system browser load
-    this.oauthRelayTimer = setTimeout(() => void poll(), POLL_INTERVAL);
-  }
-
-  private stopOAuthRelay(): void {
-    if (this.oauthRelayTimer) {
-      clearTimeout(this.oauthRelayTimer);
-      this.oauthRelayTimer = null;
-    }
   }
 
   // ─── Navigation ──────────────────────────────────────────────────────────
@@ -1344,7 +1052,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
       const response = await this.sessionInstance.fetch(url);
       const source = await response.text();
       const contentType = response.headers.get('content-type') || 'unknown';
-      await tab.view.webContents.loadURL(this.renderSourceDocument({
+      await tab.view.webContents.loadURL(buildSourceDocument({
         url,
         source,
         title: `Source: ${url}`,
@@ -1353,7 +1061,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
       }));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      await tab.view.webContents.loadURL(this.renderSourceDocument({
+      await tab.view.webContents.loadURL(buildSourceDocument({
         url,
         source: `Unable to load page source.\n\n${message}`,
         title: `Source Error: ${url}`,
@@ -1362,83 +1070,6 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
       }));
       this.emitLog('warn', `View page source failed for ${url}: ${message}`);
     }
-  }
-
-  private renderSourceDocument(input: {
-    url: string;
-    source: string;
-    title: string;
-    meta: string;
-    contentType: string;
-  }): string {
-    const escapedTitle = this.escapeHtml(input.title);
-    const escapedUrl = this.escapeHtml(input.url);
-    const escapedMeta = this.escapeHtml(input.meta);
-    const escapedContentType = this.escapeHtml(input.contentType);
-    const escapedSource = this.escapeHtml(input.source);
-
-    return `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
-    <title>${escapedTitle}</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      }
-      body {
-        margin: 0;
-        background: #111827;
-        color: #e5e7eb;
-      }
-      header {
-        padding: 12px 16px;
-        border-bottom: 1px solid #374151;
-        background: #0f172a;
-      }
-      h1 {
-        margin: 0 0 6px;
-        font-size: 14px;
-        font-weight: 600;
-      }
-      p {
-        margin: 2px 0;
-        font-size: 12px;
-        color: #9ca3af;
-        word-break: break-all;
-      }
-      pre {
-        margin: 0;
-        padding: 16px;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font-size: 12px;
-        line-height: 1.5;
-      }
-    </style>
-  </head>
-  <body>
-    <header>
-      <h1>${escapedTitle}</h1>
-      <p>${escapedUrl}</p>
-      <p>${escapedMeta}</p>
-      <p>Content-Type: ${escapedContentType}</p>
-    </header>
-    <pre>${escapedSource}</pre>
-  </body>
-</html>`)}`;
-  }
-
-  private escapeHtml(value: string): string {
-    return value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 
   // ─── Bookmarks ──────────────────────────────────────────────────────────
@@ -1609,14 +1240,14 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
       googleCookieCount: cookies.filter(cookie => cookie.domain && isGoogleCookieDomain(cookie.domain)).length,
       importChromeCookies: this.settings.importChromeCookies,
       googleAuthCompatibilityActive: true,
-      lastGoogleCookieMismatchAt: this.lastGoogleCookieMismatchAt,
+      lastGoogleCookieMismatchAt: this.googleAuthManager.getLastGoogleCookieMismatchAt(),
       activeTabUserAgent,
       activeTabHasElectronUA: /Electron\/[\d.]+/i.test(activeTabUserAgent),
     };
   }
 
   async clearGoogleAuthState(): Promise<{ cleared: number }> {
-    const cleared = await this.clearGoogleAuthCookies();
+    const cleared = await this.googleAuthManager.clearGoogleAuthCookies();
     this.emitLog('info', `Cleared ${cleared} Google-family cookies from the app session`);
     return { cleared };
   }
@@ -2235,7 +1866,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     if (this.disposed) return;
     this.disposed = true;
 
-    this.stopOAuthRelay();
+    this.googleAuthManager.stopOAuthRelay();
     if (this.stateSyncTimer) {
       clearTimeout(this.stateSyncTimer);
       this.stateSyncTimer = null;

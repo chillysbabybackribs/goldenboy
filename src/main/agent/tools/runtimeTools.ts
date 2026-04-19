@@ -159,13 +159,7 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
   return [
     {
       name: 'runtime.search_tools',
-      description: [
-        'Search the full host-managed tool catalog and identify the most relevant exact tools to hydrate into the active runtime scope.',
-        'Use this first when you need a capability that is not currently exposed.',
-        'This tool returns the best matching tools plus callable-vs-next-turn hydration metadata.',
-        'When the runtime hydrates searched tools, newly selected tools become callable on the next turn unless they are already in the current scope.',
-        'Prefer this over loading an entire pack when you only need a few tools.',
-      ].join('\n'),
+      description: 'Search the runtime tool catalog for exact tools to hydrate before requesting a broader tool pack.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -201,14 +195,11 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
             matches: matches.map((match) => ({
               name: match.name,
               description: match.description,
-              category: match.category,
               relatedPackIds: match.relatedPackIds,
-              bindingState: match.bindingState,
               callableNow: match.callableNow,
               invokableNow: match.invokableNow,
               invocationMethod: match.invocationMethod,
               availableNextTurn: match.availableNextTurn,
-              reason: match.reason,
             })),
             tools: matches.map((match) => match.name),
             suggestedPackIds: Array.from(new Set(matches.flatMap((match) => match.relatedPackIds))),
@@ -224,12 +215,7 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'runtime.require_tools',
-      description: [
-        'Grant exact tool access through the stable runtime gateway without widening the prompt-bound tool surface.',
-        'Use this after runtime.search_tools when you know the exact tools you need right now.',
-        'Granted tools are immediately invokable through runtime.invoke_tool in the same run.',
-        'This does not replace runtime.request_tool_pack, which is still the right path for broader surfaces.',
-      ].join('\n'),
+      description: 'Grant exact tool access for immediate runtime.invoke_tool calls without widening the prompt-bound tool surface.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -297,11 +283,7 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'runtime.invoke_tool',
-      description: [
-        'Invoke an exact tool by name through the stable runtime gateway.',
-        'Use this when a searched or required tool exists in the runtime catalog but is not directly bound into the prompt tool surface.',
-        'This preserves scoped prompting while avoiding next-turn binding drift.',
-      ].join('\n'),
+      description: 'Invoke an exact tool through the runtime gateway when it exists in the catalog but is not directly prompt-bound.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -339,7 +321,7 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'runtime.list_tool_packs',
-      description: 'List the available host-managed tool packs, including their baseline tools, full tool membership, scope, and related packs. Use this first when you suspect the current runtime tool scope is too narrow.',
+      description: 'List the available host-managed tool packs and the tools they can expose.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -390,10 +372,7 @@ export function createRuntimeToolDefinitions(): AgentToolDefinition[] {
           summary: `Requested tool pack: ${pack}`,
           data: {
             pack: manifest.id,
-            description: manifest.description,
             tools: manifest.tools,
-            scope: manifest.scope ?? 'named',
-            relatedPackIds: manifest.relatedPackIds ?? [],
             reason: reason ?? null,
             hydration: {
               callableNow: [],

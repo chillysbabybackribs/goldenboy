@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { app } from 'electron';
 import { generateId } from '../../shared/utils/ids';
@@ -55,7 +56,10 @@ const STOP_WORDS = new Set([
 ]);
 
 function cacheRoot(): string {
-  return path.join(app.getPath('userData'), CHAT_CACHE_DIR);
+  const userDataRoot = typeof app?.getPath === 'function'
+    ? app.getPath('userData')
+    : (process.env.V2_TEST_USER_DATA || os.tmpdir());
+  return path.join(userDataRoot, CHAT_CACHE_DIR);
 }
 
 function safeSegment(value: string): string {
