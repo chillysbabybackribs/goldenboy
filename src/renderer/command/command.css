@@ -924,6 +924,28 @@
   margin: 0 0 10px;
 }
 
+.chat-markdown p + p {
+  position: relative;
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.chat-markdown p + p::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.12) 10%,
+    rgba(255, 255, 255, 0.12) 90%,
+    rgba(255, 255, 255, 0)
+  );
+}
+
 .chat-markdown p:last-child {
   margin-bottom: 0;
 }
