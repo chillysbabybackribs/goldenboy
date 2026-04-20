@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import * as path from 'path';
+import { app } from 'electron';
 import { AgentRuntimeConfig, AgentSkill, AgentToolDefinition } from './AgentTypes';
 import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 import { APP_WORKSPACE_ROOT, resolveWorkspacePath } from '../workspaceRoot';
@@ -11,7 +13,7 @@ import {
   shouldUseStrictSourceValidation,
 } from './sourceValidationPolicy';
 
-const AGENT_CONTRACT_PATH = resolveWorkspacePath('AGENT.md');
+const AGENT_CONTRACT_PATH = resolveWorkspacePath('AGENTS.md');
 const ALWAYS_ON_CONTRACT_SECTIONS = new Set([
   'Application Mental Model',
   'Runtime Path',
@@ -19,6 +21,7 @@ const ALWAYS_ON_CONTRACT_SECTIONS = new Set([
   'Result Validation Discipline',
   'Token Discipline',
   'Sub-Agent Rules',
+  'Skill Loading',
   'Response Style',
 ]);
 
@@ -29,6 +32,7 @@ type CachedFileText = {
 };
 
 let cachedContract: CachedFileText | null = null;
+const systemPromptTemplateCache = new Map<string, string>();
 
 export class AgentPromptBuilder {
   /**
@@ -40,19 +44,17 @@ export class AgentPromptBuilder {
     skills: AgentSkill[];
     tools: AgentToolDefinition[];
   }): string {
+    const templateKey = buildSystemPromptTemplateKey(input);
+    const cachedTemplate = systemPromptTemplateCache.get(templateKey);
+    if (cachedTemplate) {
+      return cachedTemplate.replace('__CURRENT_DATETIME__', buildCurrentDateTimeLine());
+    }
+
     const baseContract = buildBaseContract(readCachedContract());
+    const skillText = buildSkillPromptSection(input.skills);
+    const toolText = buildToolPromptSummary(input.tools);
 
-    // For now, include skills if provided (backward compat).
-    // Future: defer all skills to lazy loading, pass empty array by default.
-    const skillText = input.skills.length > 0
-      ? input.skills.map(skill => `\n\n## Skill: ${skill.name}\n\n${compactSkillBody(skill.body)}`).join('')
-      : '\n\n## Skills\n\nNo task-specific skills loaded.';
-
-    const toolText = input.tools.length > 0
-      ? input.tools.map(tool => tool.name).join(', ')
-      : 'No tools registered.';
-
-    return [
+    const template = [
       baseContract,
       `\n\n## Source Validation\n\n${ALWAYS_ON_SOURCE_VALIDATION_RULE}`,
       `\n\n## Constraint Ledger\n\n${CONSTRAINT_LEDGER_PROTOCOL}`,
@@ -61,18 +63,23 @@ export class AgentPromptBuilder {
       shouldUseStrictSourceValidation(input.config.task)
         ? `\n\n## Strict Source Validation Protocol\n\n${STRICT_SOURCE_VALIDATION_PROTOCOL}`
         : '',
-      `\n\n## Active Runtime\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\n${buildCurrentDateTimeLine()}`,
+      `\n\n## Tool Catalog\n\nThe full tool catalog is pre-written to disk at startup. Do NOT rely on runtime.search_tools or runtime.load_tools for tool discovery — use the catalog instead.\n\n1. Read the manifest at: ${path.join(app.getPath('userData'), 'tool-catalog', 'catalog-manifest.json')} via filesystem.read to see available chunks and their token costs.\n2. Read only the chunk(s) relevant to your task (e.g. catalog-browser.json for browser tasks).\n3. Execute tools via browser.evaluate_js against the tool runtime page at: file://${path.join(process.cwd(), 'dist', 'renderer', 'tool-runtime.html')} using window.runTool(category, name, input).\n4. For batched calls use window.runBatch(calls, outPath) — results are written to disk, only a confirmation string is returned.`,
+      `\n\n## Active Runtime\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\n__CURRENT_DATETIME__`,
       `\n\n## Workspace Root\n\nAbsolute workspace root: ${APP_WORKSPACE_ROOT}\nResolve relative repository paths from this root unless a tool result explicitly reports a different cwd.${input.config.cwd ? `\nCurrent working directory: ${input.config.cwd}` : ''}`,
       input.config.systemPromptAddendum?.trim()
         ? `\n\n## Additional Invocation Instructions\n\n${input.config.systemPromptAddendum.trim()}`
         : '',
-      '\n\n## Tool Scope Recovery\n\nIf the current tool scope appears too narrow for the task, inspect the available packs with runtime.list_tool_packs, then expand with runtime.request_tool_pack. Do this immediately when the current tool subset is missing a browser, filesystem, terminal, chat, or subagent capability you need.',
+      '\n\n## Tool Scope Recovery\n\nOnly use tool discovery if a tool call fails because a required tool is not in scope. Do not call runtime.list_loaded_tools, runtime.search_tools, or runtime.load_tools proactively or at task start. If a specific tool is missing after a failed call, then use runtime.search_tools to find it and runtime.load_tools to add it.',
       input.config.agentId === PRIMARY_PROVIDER_ID
-        ? '\n\n## V2 Tool Priority\n\nYou are running inside V2 Workspace. All browser, filesystem, terminal, and research operations must go through the v2 MCP tools listed in your tool scope. These tools are first-class — they operate the real app-owned browser, real filesystem, and real terminal surfaces.\n\nDo not use any Codex-native capabilities: no built-in web search, no native browser control. If you need a capability not in your current tool scope, use runtime.list_tool_packs to find the right pack, then runtime.request_tool_pack to load it. Every action must produce a v2 tool record.\n\n## Web Access Hard Rule\n\nNEVER use shell commands to access the internet. This means: never use python, python3, curl, wget, node, or any other shell command to make HTTP requests, fetch URLs, scrape web pages, call APIs, or retrieve any online content. This prohibition is absolute — no exceptions, no fallbacks.\n\nFor ANY task involving web search, browsing, looking something up, or retrieving online information:\n- Use `browser.research_search` for research tasks (searches and reads multiple pages)\n- Use `browser.navigate` + `browser.extract_page` for direct URL navigation\n- Use `browser.search_web` to open a search without reading results\n\nThese are the ONLY valid paths to web content. If the browser tools are not in your current scope, use runtime.request_tool_pack to load them — do not fall back to shell.'
+        ? '\n\n## V2 Tool Priority\n\nYou are running inside V2 Workspace. All browser, filesystem, terminal, and research operations must go through the v2 MCP tools listed in your tool scope. These tools are first-class — they operate the real app-owned browser, real filesystem, and real terminal surfaces.\n\nDo not use any Codex-native capabilities: no built-in web search, no native browser control. If you need a capability not in your current tool scope, use runtime.search_tools to discover the exact tools you need, then runtime.load_tools to load them. Every action must produce a v2 tool record.\n\n## Web Access Hard Rule\n\nNEVER use shell commands to access the internet. This means: never use python, python3, curl, wget, node, or any other shell command to make HTTP requests, fetch URLs, scrape web pages, call APIs, or retrieve any online content. This prohibition is absolute — no exceptions, no fallbacks.\n\nFor ANY task involving web search, browsing, looking something up, or retrieving online information:\n- Use `browser.research_search` for research tasks (searches and reads multiple pages)\n- Use `browser.navigate` + `browser.extract_page` for direct URL navigation\n- Use `browser.search_web` to open a search without reading results\n\nThese are the ONLY valid paths to web content. If the browser tools are not in your current scope, use runtime.search_tools and runtime.load_tools — do not fall back to shell.'
         : '',
+      '\n\n## Tool Scope Truth\n\nTreat the listed tools in this run as the authoritative execution surface. Do not assume hidden capabilities, and do not describe a tool path as available unless it appears in the current tool list or is added through the runtime tool-pack flow.',
       `\n\n## Available Tools\n\nTool schemas are provided separately. Available tool names: ${toolText}`,
       skillText,
     ].join('');
+
+    systemPromptTemplateCache.set(templateKey, template);
+    return template.replace('__CURRENT_DATETIME__', buildCurrentDateTimeLine());
   }
 
   /**
@@ -97,6 +104,47 @@ export class AgentPromptBuilder {
 
 export const agentPromptBuilder = new AgentPromptBuilder();
 
+function buildSystemPromptTemplateKey(input: {
+  config: AgentRuntimeConfig;
+  skills: AgentSkill[];
+  tools: AgentToolDefinition[];
+}): string {
+  const contractVersion = readCachedContractVersion();
+  const strictValidation = shouldUseStrictSourceValidation(input.config.task) ? 'strict' : 'default';
+  const skillSignature = input.skills.length > 0
+    ? input.skills.map(skill => `${skill.name}:${skill.path}:${skill.body}`).join('|')
+    : 'no-skills';
+  const toolSignature = input.tools.length > 0
+    ? input.tools.map(tool => tool.name).join('|')
+    : 'no-tools';
+
+  return [
+    contractVersion,
+    input.config.mode,
+    input.config.role,
+    input.config.agentId,
+    input.config.cwd ?? '',
+    input.config.systemPromptAddendum?.trim() ?? '',
+    strictValidation,
+    toolSignature,
+    skillSignature,
+  ].join('::');
+}
+
+function buildSkillPromptSection(skills: AgentSkill[]): string {
+  if (skills.length === 0) {
+    return '\n\n## Skills\n\nNo task-specific skills loaded.';
+  }
+
+  return skills.map(skill => `\n\n## Skill: ${skill.name}\n\n${compactSkillBody(skill.body)}`).join('');
+}
+
+function buildToolPromptSummary(tools: AgentToolDefinition[]): string {
+  return tools.length > 0
+    ? tools.map(tool => tool.name).join(', ')
+    : 'No tools registered.';
+}
+
 function readCachedContract(): string {
   if (!fs.existsSync(AGENT_CONTRACT_PATH)) return 'V2 agent contract file is missing.';
 
@@ -112,6 +160,12 @@ function readCachedContract(): string {
     text,
   };
   return text;
+}
+
+function readCachedContractVersion(): string {
+  if (!fs.existsSync(AGENT_CONTRACT_PATH)) return `${AGENT_CONTRACT_PATH}:missing`;
+  const stat = fs.statSync(AGENT_CONTRACT_PATH);
+  return `${AGENT_CONTRACT_PATH}:${stat.mtimeMs}`;
 }
 
 function buildBaseContract(contract: string): string {
@@ -224,13 +278,24 @@ export function buildResponseStyleAddendum(task: string): string {
     ].join('\n');
   }
 
-  if (/\b(review|audit|regression|pull request|diff|requested changes|code review)\b/.test(normalized)) {
+  if (/\b(review|regression|pull request|diff|requested changes|code review)\b/.test(normalized)) {
     return [
       'For review and audit tasks, produce the final answer in this order:',
       '1. Findings first, ordered by severity.',
       '2. Each finding must include a file reference when available.',
       '3. Keep the change summary brief and only after findings.',
       '4. If no findings were found, say that explicitly.',
+      'Do not narrate the tool trace in the final answer.',
+    ].join('\n');
+  }
+
+  if (/\b(audit|architecture review|system review|workflow review|prompt review|tool review)\b/.test(normalized)) {
+    return [
+      'For audit tasks that are not code-review requests, produce the final answer in this order:',
+      '1. Current state and the main tensions or conflicts.',
+      '2. Concrete recommendations, ordered by leverage.',
+      '3. Risks, open questions, or follow-up changes.',
+      'Use findings-first severity ordering only when the user is explicitly asking for code review, regressions, or defects.',
       'Do not narrate the tool trace in the final answer.',
     ].join('\n');
   }
