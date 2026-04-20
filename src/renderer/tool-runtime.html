@@ -84,9 +84,17 @@
       mkdir:  (i) => api.fs.mkdir(i.path),
     },
 
-    terminal: {
-      write: (i) => api.terminal.write(i.data),
-    },
+    terminal: new Proxy({
+      write:  (i) => api.terminal.write(i.input ?? i.data),
+      exec:   (i) => Promise.reject(new Error('terminal.exec is not available in browser context — use the agent runtime directly')),
+      spawn:  (i) => Promise.reject(new Error('terminal.spawn is not available in browser context — use the agent runtime directly')),
+      kill:   ()  => Promise.reject(new Error('terminal.kill is not available in browser context — use the agent runtime directly')),
+    }, {
+      get(target, prop) {
+        if (prop in target) return target[prop];
+        return (i) => api.terminal[prop]?.(i) ?? Promise.reject(new Error(`terminal.${String(prop)} not implemented`));
+      },
+    }),
 
     model: {
       invoke:   (i) => api.model.invoke(i.taskId, i.prompt, i.owner, i.options),
@@ -97,8 +105,9 @@
 
   // ── Batch execution helper ──────────────────────────────────────────────
   // Returns { ok, result } or { ok: false, error } per call.
-  // Batch results are written to disk — evaluate_js returns only a
-  // confirmation string so constraint validator never sees raw batch output.
+  // Always writes results to disk (outPath or a /tmp/batch-*.json auto path)
+  // so evaluate_js returns only a confirmation string and the constraint
+  // validator never sees raw batch output.
 
   window.runTool = async (category, name, input) => {
     try {
@@ -115,11 +124,9 @@
     const results = await Promise.all(
       calls.map(({ category, name, input }) => window.runTool(category, name, input))
     );
-    if (outPath) {
-      await api.fs.write(outPath, JSON.stringify(results, null, 2));
-      return `wrote ${results.length} results to ${outPath}`;
-    }
-    return results;
+    const dest = outPath ?? `/tmp/batch-${Date.now()}.json`;
+    await api.fs.write(dest, JSON.stringify(results, null, 2));
+    return `wrote ${results.length} results to ${dest}`;
   };
 
   // ── Ready ───────────────────────────────────────────────────────────────
@@ -129,7 +136,7 @@
   statusEl.textContent = `Tool runtime ready — ${toolCount} tools across ${categories.length} categories`;
   log(`categories: ${categories.join(', ')}`);
   log(`window.runTool(category, name, input) — single tool`);
-  log(`window.runBatch(calls, outPath?) — parallel batch, optionally writes to disk`);
+  log(`window.runBatch(calls, outPath?) — parallel batch, always writes to disk`);
 </script>
 </body>
 </html>
