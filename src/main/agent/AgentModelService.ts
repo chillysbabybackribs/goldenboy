@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { LogSource } from '../../shared/types/appState';
@@ -5,6 +8,7 @@ import {
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   AgentInvocationOptions,
+  InvocationProgress,
   InvocationResult,
   ProviderId,
   ProviderRuntime,
@@ -19,9 +23,11 @@ import { AgentRuntime } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
 import { HaikuProvider } from './HaikuProvider';
 import { AppServerBackedProvider } from './AppServerBackedProvider';
+import { AppServerProcess } from './AppServerProcess';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
+import { createSessionMemoryToolDefinitions } from './tools/sessionMemoryTools';
 import { createAttachmentToolDefinitions, DOCUMENT_ATTACHMENT_TOOL_NAMES } from './tools/attachmentTools';
 import { createFilesystemToolDefinitions } from './tools/filesystemTools';
 import { createRuntimeToolDefinitions } from './tools/runtimeTools';
@@ -34,8 +40,10 @@ import { pickProviderForPrompt, taskKindRequiresV2ToolRuntime } from './provider
 import { SubAgentSpawnInput } from './subagents/SubAgentTypes';
 import { buildTaskProfile } from './taskProfile';
 import { browserService } from '../browser/BrowserService';
+import { V2ToolBridge } from './V2ToolBridge';
 import type { AgentTaskKind } from '../../shared/types/model';
 import { buildStartupStatusMessages, shouldPrimeResearchBrowserSurface } from './startupProgress';
+import { writeCatalog } from './CatalogWriter';
 import {
   backgroundResearchSynthesisProviderId,
   buildBackgroundResearchSynthesisContext,
@@ -58,6 +66,11 @@ type ActiveTaskInvocation = {
   providerId: ProviderId;
   runtime: AgentRuntime;
   dispose?: () => Promise<void>;
+};
+
+type SharedAppServerSession = {
+  process: AppServerProcess;
+  wsPort: number;
 };
 
 const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }> = [
@@ -145,6 +158,10 @@ function withDocumentAttachmentTools(
 class AgentModelService {
   private providers = new Map<ProviderId, ProviderEntry>();
   private activeTaskProviders = new Map<string, ActiveTaskInvocation>();
+  private sharedAppServerSession: SharedAppServerSession | null = null;
+  private sharedAppServerSessionPromise: Promise<SharedAppServerSession> | null = null;
+  private sharedAppServerBridge: V2ToolBridge | null = null;
+  private sharedAppServerContextPath: string | null = null;
 
   init(): void {
     agentToolExecutor.registerMany([
@@ -152,16 +169,14 @@ class AgentModelService {
       ...createRuntimeToolDefinitions(),
       ...createBrowserToolDefinitions(),
       ...createChatToolDefinitions(),
+      ...createSessionMemoryToolDefinitions(),
       ...createFilesystemToolDefinitions(),
       ...createTerminalToolDefinitions(),
       ...createSubAgentToolDefinitions((input) => this.createPreferredSubAgentProvider(input)),
     ]);
+    writeCatalog(agentToolExecutor.list());
 
-    if (process.env.CODEX_PROVIDER === 'exec') {
-      this.initializeCodexProvider(PROVIDER_CONFIGS[0]);
-    } else {
-      void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
-    }
+    void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
     this.initializeHaikuProvider(PROVIDER_CONFIGS[1]);
 
     if (this.providers.size === 0) {
@@ -194,6 +209,24 @@ class AgentModelService {
     }
   }
 
+  dispose(): void {
+    this.sharedAppServerSessionPromise = null;
+    this.sharedAppServerSession?.process.stop();
+    this.sharedAppServerSession = null;
+    if (this.sharedAppServerBridge) {
+      void this.sharedAppServerBridge.stop().catch(() => undefined);
+      this.sharedAppServerBridge = null;
+    }
+    if (this.sharedAppServerContextPath) {
+      try {
+        fs.unlinkSync(this.sharedAppServerContextPath);
+      } catch {
+        // Best-effort cleanup.
+      }
+      this.sharedAppServerContextPath = null;
+    }
+  }
+
   getTaskMemory(taskId: string) {
     return taskMemoryStore.get(taskId);
   }
@@ -203,6 +236,9 @@ class AgentModelService {
     const provider = this.providers.get(providerId);
     if (!provider) {
       throw new Error(this.buildUnavailableProviderMessage(providerId));
+    }
+    if (providerId === PRIMARY_PROVIDER_ID) {
+      await this.ensureSharedAppServerSession();
     }
     const activeTask = this.createTaskInvocation(providerId);
 
@@ -223,6 +259,10 @@ class AgentModelService {
       type: ActionType.UPDATE_TASK,
       taskId,
       updates: { status: 'running', owner: providerId, updatedAt: Date.now() },
+    });
+    appStateStore.dispatch({
+      type: ActionType.ENSURE_TASK_TOKEN_USAGE,
+      taskId,
     });
     this.setRuntime(providerId, {
       status: 'busy',
@@ -301,14 +341,7 @@ class AgentModelService {
 
       chatKnowledgeStore.recordAssistantMessage(taskId, response.output, providerId);
       taskMemoryStore.recordInvocationResult(result);
-      const usage = response.usage;
-      if (usage) {
-        appStateStore.dispatch({
-          type: ActionType.ACCUMULATE_TOKEN_USAGE,
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-        });
-      }
+      this.recordInvocationUsage(taskId, providerId, response.usage);
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
         taskId,
@@ -341,6 +374,7 @@ class AgentModelService {
       };
       chatKnowledgeStore.recordAssistantMessage(taskId, `Invocation failed: ${message}`, providerId);
       taskMemoryStore.recordInvocationResult(result);
+      this.recordInvocationUsage(taskId, providerId, result.usage);
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
         taskId,
@@ -359,36 +393,6 @@ class AgentModelService {
     }
   }
 
-  private initializeCodexProvider(config: { id: ProviderId; label: string; modelId: string }): void {
-    const probe = CodexProvider.isAvailable();
-    if (!probe.available) {
-      this.setRuntime(config.id, {
-        status: 'unavailable',
-        activeTaskId: null,
-        errorDetail: probe.error || 'Codex CLI is not installed.',
-      }, config.modelId);
-      this.log(config.id, 'warn', `${config.label} unavailable: ${probe.error || 'Codex CLI is not installed.'}`);
-      return;
-    }
-
-    const provider = new CodexProvider({
-      providerId: config.id,
-      modelId: config.modelId,
-    });
-    this.providers.set(config.id, {
-      id: config.id,
-      label: config.label,
-      modelId: provider.modelId,
-      supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
-    });
-    this.setRuntime(config.id, {
-      status: 'available',
-      activeTaskId: null,
-      errorDetail: null,
-    }, provider.modelId);
-    this.log(config.id, 'info', `${config.label} ready`);
-  }
-
   private async initializeAppServerProvider(config: { id: ProviderId; label: string; modelId: string }): Promise<void> {
     const probe = CodexProvider.isAvailable();
     if (!probe.available) {
@@ -401,14 +405,25 @@ class AgentModelService {
       return;
     }
 
-    this.providers.set(config.id, {
-      id: config.id,
-      label: config.label,
-      modelId: config.modelId,
-      supportsAppToolExecutor: true,
-    });
-    this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, config.modelId);
-    this.log(config.id, 'info', `${config.label} ready (isolated app-server mode)`);
+    try {
+      await this.ensureSharedAppServerSession();
+      this.providers.set(config.id, {
+        id: config.id,
+        label: config.label,
+        modelId: config.modelId,
+        supportsAppToolExecutor: true,
+      });
+      this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, config.modelId);
+      this.log(config.id, 'info', `${config.label} ready (prewarmed app-server mode)`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.setRuntime(config.id, {
+        status: 'unavailable',
+        activeTaskId: null,
+        errorDetail: message,
+      }, config.modelId);
+      this.log(config.id, 'warn', `${config.label} unavailable: ${message}`);
+    }
   }
 
   private initializeHaikuProvider(config: { id: ProviderId; label: string; modelId: string }): void {
@@ -493,13 +508,53 @@ class AgentModelService {
     if (providerId === HAIKU_PROVIDER_ID) {
       return new HaikuProvider();
     }
-    if (providerId === PRIMARY_PROVIDER_ID && process.env.CODEX_PROVIDER !== 'exec') {
+    if (providerId === PRIMARY_PROVIDER_ID) {
+      const session = this.sharedAppServerSession;
       return new AppServerBackedProvider({
         providerId: config.id,
         modelId: config.modelId,
+        process: session?.process,
+        wsPort: session?.wsPort,
       });
     }
-    return new CodexProvider({ providerId: config.id, modelId: config.modelId });
+    throw new Error(`Unsupported direct provider instance path for ${providerId}`);
+  }
+
+  private async ensureSharedAppServerSession(): Promise<SharedAppServerSession> {
+    if (this.sharedAppServerSession) return this.sharedAppServerSession;
+    if (this.sharedAppServerSessionPromise) return this.sharedAppServerSessionPromise;
+
+    this.sharedAppServerSessionPromise = (async () => {
+      const contextPath = path.join(
+        os.tmpdir(),
+        `v2-tool-context-shared-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+      );
+      const bridge = new V2ToolBridge(contextPath);
+      await bridge.start();
+      const shimPath = path.join(__dirname, 'v2-mcp-shim.js');
+      const processHandle = new AppServerProcess(bridge.getPort(), shimPath, contextPath);
+      try {
+        await processHandle.start();
+        const { wsPort } = await processHandle.waitUntilReady();
+        this.sharedAppServerBridge = bridge;
+        this.sharedAppServerContextPath = contextPath;
+        this.sharedAppServerSession = { process: processHandle, wsPort };
+        return this.sharedAppServerSession;
+      } catch (err) {
+        processHandle.stop();
+        await bridge.stop().catch(() => undefined);
+        try {
+          fs.unlinkSync(contextPath);
+        } catch {
+          // Best-effort cleanup.
+        }
+        throw err;
+      } finally {
+        this.sharedAppServerSessionPromise = null;
+      }
+    })();
+
+    return this.sharedAppServerSessionPromise;
   }
 
   private createTaskInvocation(providerId: ProviderId): ActiveTaskInvocation {
@@ -606,6 +661,45 @@ class AgentModelService {
     }
   }
 
+  private recordInvocationUsage(
+    taskId: string,
+    providerId: ProviderId,
+    usage?: { inputTokens: number; outputTokens: number } | null,
+  ): void {
+    const inputTokens = usage?.inputTokens ?? 0;
+    const outputTokens = usage?.outputTokens ?? 0;
+
+    appStateStore.dispatch({
+      type: ActionType.ACCUMULATE_TASK_TOKEN_USAGE,
+      taskId,
+      providerId,
+      inputTokens,
+      outputTokens,
+      apiCalls: 1,
+    });
+
+    if (usage) {
+      appStateStore.dispatch({
+        type: ActionType.ACCUMULATE_TOKEN_USAGE,
+        inputTokens,
+        outputTokens,
+      });
+    }
+
+    const progress: InvocationProgress = {
+      taskId,
+      providerId,
+      type: 'usage',
+      data: {
+        inputTokens,
+        outputTokens,
+        apiCalls: 1,
+      },
+      timestamp: Date.now(),
+    };
+    this.emitProgress(progress);
+  }
+
   private emitStartupStatuses(
     taskId: string,
     providerId: ProviderId,
@@ -644,7 +738,7 @@ class AgentModelService {
     primaryProviderId: ProviderId;
     fastAnswer: string;
   }): void {
-    const synthesisProviderId = backgroundResearchSynthesisProviderId();
+    const synthesisProviderId = backgroundResearchSynthesisProviderId(input.primaryProviderId);
     const synthesisProviderAvailable = this.providers.has(synthesisProviderId)
       && !Array.from(this.activeTaskProviders.values()).some((activeTask) => activeTask.providerId === synthesisProviderId);
 
@@ -729,6 +823,7 @@ class AgentModelService {
         usage: response.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
         codexItems: response.codexItems,
       });
+      this.recordInvocationUsage(input.taskId, input.synthesisProviderId, response.usage);
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
         taskId: input.taskId,
