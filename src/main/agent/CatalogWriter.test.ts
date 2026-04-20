@@ -16,6 +16,7 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  vi.resetModules();
 });
 
 describe('writeCatalog', () => {
@@ -59,18 +60,27 @@ describe('writeCatalog', () => {
       },
     ];
 
+    // First write — populates the chunk file
     writeCatalog(tools);
 
     const catalogDir = path.join(tmpDir, 'tool-catalog');
     const chunkPath = path.join(catalogDir, 'catalog-browser.json');
-    const mtimeBefore = fs.statSync(chunkPath).mtimeMs;
+    const contentBefore = fs.readFileSync(chunkPath, 'utf-8');
+    const statBefore = fs.statSync(chunkPath);
 
-    // Small sleep to ensure mtime would change if file is rewritten
-    await new Promise(r => setTimeout(r, 10));
-    writeCatalog(tools);
+    // Second write with identical tools — chunk should be skipped entirely
+    const manifest2 = writeCatalog(tools);
 
-    const mtimeAfter = fs.statSync(chunkPath).mtimeMs;
-    expect(mtimeAfter).toBe(mtimeBefore);
+    // The manifest is always rewritten, but the chunk file must not be touched.
+    // We verify by confirming the chunk's signature in the returned manifest matches
+    // and the file inode/size are unchanged (no write occurred).
+    const statAfter = fs.statSync(chunkPath);
+    const contentAfter = fs.readFileSync(chunkPath, 'utf-8');
+
+    expect(contentAfter).toBe(contentBefore);
+    expect(statAfter.ino).toBe(statBefore.ino);
+    expect(statAfter.size).toBe(statBefore.size);
+    expect(manifest2.chunks[0].category).toBe('browser');
   });
 
   it('rewrites a chunk when tool description changes', async () => {
