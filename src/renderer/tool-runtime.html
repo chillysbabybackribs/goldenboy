@@ -18,125 +18,45 @@
   const logEl = document.getElementById('log');
 
   function log(msg) {
-    logEl.textContent += new Date().toISOString().slice(11,23) + ' ' + msg + '\n';
+    logEl.textContent += new Date().toISOString().slice(11, 23) + ' ' + msg + '\n';
   }
 
-  if (!api) {
-    statusEl.textContent = 'ERROR: workspaceAPI not available';
+  if (!api || !api.tool) {
+    statusEl.textContent = 'ERROR: workspaceAPI.tool not available';
     statusEl.style.color = '#ee4444';
-    throw new Error('workspaceAPI not available — page must run inside the app browser');
+    throw new Error('workspaceAPI.tool not available — page must run inside the app browser');
   }
 
-  // ── Tool implementations ────────────────────────────────────────────────
+  // ── Single entry point — routes every tool call through agentToolExecutor ──
 
-  window.tools = {
-    browser: {
-      get_state:              ()      => api.browser.getState(),
-      get_tabs:               ()      => api.browser.getTabs(),
-      capture_snapshot:       (i)     => api.browser.captureTabSnapshot(i.tabId),
-      get_actionable_elements:(i)     => api.browser.getActionableElements(i.tabId),
-      get_form_model:         (i)     => api.browser.getFormModel(i.tabId),
-      get_console_events:     (i)     => api.browser.getConsoleEvents(i.tabId, i.since),
-      get_network_events:     (i)     => api.browser.getNetworkEvents(i.tabId, i.since),
-      get_downloads:          ()      => api.browser.getDownloads(),
-      get_bookmarks:          ()      => api.browser.getBookmarks(),
-      add_bookmark:           (i)     => api.browser.addBookmark(i.url, i.title),
-      remove_bookmark:        (i)     => api.browser.removeBookmark(i.bookmarkId),
-      get_settings:           ()      => api.browser.getSettings(),
-      update_settings:        (i)     => api.browser.updateSettings(i.settings),
-      get_extensions:         ()      => api.browser.getExtensions(),
-      split_tab:              (i)     => api.browser.splitTab(i.tabId),
-      clear_split_view:       ()      => api.browser.clearSplitView(),
-      zoom_in:                ()      => api.browser.zoomIn(),
-      zoom_out:               ()      => api.browser.zoomOut(),
-      zoom_reset:             ()      => api.browser.zoomReset(),
-      toggle_devtools:        ()      => api.browser.toggleDevTools(),
-      find_in_page:           (i)     => api.browser.findInPage(i.query),
-      find_next:              ()      => api.browser.findNext(),
-      find_previous:          ()      => api.browser.findPrevious(),
-      stop_find:              ()      => api.browser.stopFind(),
-      cancel_download:        (i)     => api.browser.cancelDownload(i.downloadId),
-      clear_downloads:        ()      => api.browser.clearDownloads(),
-      clear_history:          ()      => api.browser.clearHistory(),
-      clear_data:             ()      => api.browser.clearData(),
-      reimport_cookies:       ()      => api.browser.reimportCookies(),
-      // Surface actions (navigation, interaction)
-      navigate:               (i)     => api.actions.submit({ type: 'browser.navigate', url: i.url, tabId: i.tabId }),
-      navigate_to:            (i)     => api.actions.submit({ type: 'browser.navigate_to', target: i.target, tabId: i.tabId }),
-      search_web:             (i)     => api.actions.submit({ type: 'browser.search_web', query: i.query }),
-      back:                   (i)     => api.actions.submit({ type: 'browser.back', tabId: i.tabId }),
-      forward:                (i)     => api.actions.submit({ type: 'browser.forward', tabId: i.tabId }),
-      reload:                 (i)     => api.actions.submit({ type: 'browser.reload', tabId: i.tabId }),
-      create_tab:             (i)     => api.actions.submit({ type: 'browser.create_tab', url: i.url }),
-      close_tab:              (i)     => api.actions.submit({ type: 'browser.close_tab', tabId: i.tabId }),
-      activate_tab:           (i)     => api.actions.submit({ type: 'browser.activate_tab', tabId: i.tabId }),
-      click:                  (i)     => api.actions.submit({ type: 'browser.click', selector: i.selector, tabId: i.tabId }),
-      type:                   (i)     => api.actions.submit({ type: 'browser.type', selector: i.selector, text: i.text, tabId: i.tabId }),
-      wait_for:               (i)     => api.actions.submit({ type: 'browser.wait_for', selector: i.selector, tabId: i.tabId }),
-    },
-
-    filesystem: {
-      read:   (i) => api.fs.read(i.path),
-      write:  (i) => api.fs.write(i.path, i.content),
-      exists: (i) => api.fs.exists(i.path),
-      list:   (i) => api.fs.list(i.path),
-      delete: (i) => api.fs.delete(i.path),
-      mkdir:  (i) => api.fs.mkdir(i.path),
-    },
-
-    terminal: new Proxy({
-      write:  (i) => api.terminal.write(i.input ?? i.data),
-      exec:   (i) => Promise.reject(new Error('terminal.exec is not available in browser context — use the agent runtime directly')),
-      spawn:  (i) => Promise.reject(new Error('terminal.spawn is not available in browser context — use the agent runtime directly')),
-      kill:   ()  => Promise.reject(new Error('terminal.kill is not available in browser context — use the agent runtime directly')),
-    }, {
-      get(target, prop) {
-        if (prop in target) return target[prop];
-        return (i) => api.terminal[prop]?.(i) ?? Promise.reject(new Error(`terminal.${String(prop)} not implemented`));
-      },
-    }),
-
-    model: {
-      invoke:   (i) => api.model.invoke(i.taskId, i.prompt, i.owner, i.options),
-      cancel:   (i) => api.model.cancel(i.taskId),
-      resolve:  (i) => api.model.resolve(i.prompt, i.owner, i.options),
-    },
-  };
-
-  // ── Batch execution helper ──────────────────────────────────────────────
-  // Returns { ok, result } or { ok: false, error } per call.
-  // Always writes results to disk (outPath or a /tmp/batch-*.json auto path)
-  // so evaluate_js returns only a confirmation string and the constraint
-  // validator never sees raw batch output.
-
-  window.runTool = async (category, name, input) => {
+  window.runTool = async (name, input, context) => {
     try {
-      const fn = window.tools[category]?.[name];
-      if (!fn) return { ok: false, error: `Unknown tool: ${category}.${name}` };
-      const result = await fn(input ?? {});
+      const result = await api.tool.invoke(name, input ?? {}, context);
       return { ok: true, result };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   };
 
+  // ── Batch helper — always writes results to disk, returns confirmation ────
+  // Results are written to disk so evaluate_js only returns a short string.
+  // The constraint validator never sees raw batch output.
+
   window.runBatch = async (calls, outPath) => {
     const results = await Promise.all(
-      calls.map(({ category, name, input }) => window.runTool(category, name, input))
+      calls.map(({ name, input, context }) => window.runTool(name, input, context))
     );
     const dest = outPath ?? `/tmp/batch-${Date.now()}.json`;
     await api.fs.write(dest, JSON.stringify(results, null, 2));
     return `wrote ${results.length} results to ${dest}`;
   };
 
-  // ── Ready ───────────────────────────────────────────────────────────────
+  // ── Ready ─────────────────────────────────────────────────────────────────
 
-  const categories = Object.keys(window.tools);
-  const toolCount = categories.reduce((n, cat) => n + Object.keys(window.tools[cat]).length, 0);
-  statusEl.textContent = `Tool runtime ready — ${toolCount} tools across ${categories.length} categories`;
-  log(`categories: ${categories.join(', ')}`);
-  log(`window.runTool(category, name, input) — single tool`);
-  log(`window.runBatch(calls, outPath?) — parallel batch, always writes to disk`);
+  statusEl.textContent = 'Tool runtime ready';
+  log('window.runTool(name, input, context?) — invoke any registered agent tool');
+  log('window.runBatch(calls, outPath?) — parallel batch, always writes results to disk');
+  log('calls format: [{ name, input, context? }, ...]');
 </script>
 </body>
 </html>

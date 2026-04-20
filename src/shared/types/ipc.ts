@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   EVENT_BROADCAST: 'workspace:event-broadcast',
   CREATE_TASK: 'workspace:create-task',
   DELETE_TASK: 'workspace:delete-task',
+  UPDATE_TASK: 'workspace:update-task',
   UPDATE_TASK_STATUS: 'workspace:update-task-status',
   SET_ACTIVE_TASK: 'workspace:set-active-task',
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
@@ -98,6 +99,14 @@ export const IPC_CHANNELS = {
   BROWSER_NAV_UPDATE: 'browser:nav-update',
   BROWSER_FIND_UPDATE: 'browser:find-update',
 
+  // Filesystem bridge (unsandboxed, Node fs backed)
+  FS_READ: 'fs:read',
+  FS_WRITE: 'fs:write',
+  FS_EXISTS: 'fs:exists',
+  FS_LIST: 'fs:list',
+  FS_DELETE: 'fs:delete',
+  FS_MKDIR: 'fs:mkdir',
+
   // Debug: disk cache test
   DEBUG_TEST_DISK_EXTRACT: 'debug:test-disk-extract',
 
@@ -110,6 +119,9 @@ export const IPC_CHANNELS = {
   MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
+
+  // Agent tool bridge — routes any registered tool through agentToolExecutor
+  TOOL_INVOKE: 'tool:invoke',
 
   // Terminal session channels
   TERMINAL_START_SESSION: 'terminal:start-session',
@@ -128,6 +140,7 @@ export interface WorkspaceAPI {
 
   createTask(title: string): Promise<{ id: string; title: string }>;
   deleteTask(taskId: string): Promise<void>;
+  updateTask(taskId: string, updates: Partial<Pick<AppState['tasks'][number], 'title' | 'owner' | 'status' | 'updatedAt'>>): Promise<void>;
   updateTaskStatus(taskId: string, status: TaskStatus): Promise<void>;
   setActiveTask(taskId: string | null): Promise<void>;
   resetTokenUsage(): Promise<void>;
@@ -236,6 +249,21 @@ export interface WorkspaceAPI {
     onOutput(callback: (data: string) => void): void;
     onStatus(callback: (session: TerminalSessionInfo) => void): void;
     onExit(callback: (exitCode: number) => void): void;
+  };
+
+  // Filesystem bridge (unsandboxed, Node fs backed)
+  fs: {
+    read(filePath: string): Promise<string>;
+    write(filePath: string, content: string): Promise<void>;
+    exists(filePath: string): Promise<boolean>;
+    list(dirPath: string): Promise<{ name: string; isDirectory: boolean }[]>;
+    delete(filePath: string): Promise<void>;
+    mkdir(dirPath: string): Promise<void>;
+  };
+
+  // Agent tool bridge — invoke any registered agent tool by name
+  tool: {
+    invoke(name: string, input: unknown, context?: { taskId?: string; runId?: string }): Promise<{ summary: string; data: Record<string, unknown> }>;
   };
 
   removeAllListeners(): void;

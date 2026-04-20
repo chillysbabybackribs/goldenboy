@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { ipcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { AgentInvocationOptions } from '../../shared/types/model';
@@ -108,6 +109,21 @@ export function registerIpc(): void {
     appStateStore.dispatch({ type: ActionType.DELETE_TASK, taskId });
   });
 
+  safeHandle(
+    IPC_CHANNELS.UPDATE_TASK,
+    (_event, taskId: string, updates: Partial<Pick<TaskRecord, 'title' | 'owner' | 'status' | 'updatedAt'>>) => {
+      const state = appStateStore.getState();
+      const task = state.tasks.find((entry) => entry.id === taskId);
+      if (!task) return;
+      const nextTask: TaskRecord = {
+        ...task,
+        ...updates,
+        updatedAt: typeof updates.updatedAt === 'number' ? updates.updatedAt : Date.now(),
+      };
+      eventBus.emit(AppEventType.TASK_UPDATED, { task: nextTask });
+    },
+  );
+
   safeHandle(IPC_CHANNELS.UPDATE_TASK_STATUS, (_event, taskId: string, status: TaskStatus) => {
     const state = appStateStore.getState();
     const task = state.tasks.find((t) => t.id === taskId);
@@ -217,8 +233,9 @@ export function registerIpc(): void {
     return browserService.clearSiteData(origin);
   });
 
-  safeHandle(IPC_CHANNELS.BROWSER_REPORT_BOUNDS, (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-    browserService.setBounds(bounds);
+  safeHandle(IPC_CHANNELS.BROWSER_REPORT_BOUNDS, (event, bounds: { x: number; y: number; width: number; height: number }) => {
+    const role = getRoleByWebContentsId(event.sender.id);
+    browserService.setBounds(bounds, role);
   });
 
   safeHandle(IPC_CHANNELS.BROWSER_GET_TABS, () => {
@@ -343,6 +360,53 @@ export function registerIpc(): void {
       });
     },
   );
+
+  // ── Agent tool bridge ───────────────────────────────────────────────────
+
+  safeHandle(
+    IPC_CHANNELS.TOOL_INVOKE,
+    async (_event, name: string, input: unknown, opts?: { taskId?: string; runId?: string }) => {
+      return agentToolExecutor.execute(name as any, input, {
+        runId: opts?.runId ?? generateId('run'),
+        agentId: 'tool-runtime',
+        mode: 'unrestricted-dev',
+        taskId: opts?.taskId,
+      });
+    },
+  );
+
+  // ── Filesystem bridge (unsandboxed, Node fs) ────────────────────────────
+
+  safeHandle(IPC_CHANNELS.FS_READ, (_event, filePath: string) => {
+    return fs.readFileSync(filePath, 'utf-8');
+  });
+
+  safeHandle(IPC_CHANNELS.FS_WRITE, (_event, filePath: string, content: string) => {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf-8');
+  });
+
+  safeHandle(IPC_CHANNELS.FS_EXISTS, (_event, filePath: string) => {
+    return fs.existsSync(filePath);
+  });
+
+  safeHandle(IPC_CHANNELS.FS_LIST, (_event, dirPath: string) => {
+    if (!fs.existsSync(dirPath)) return [];
+    return fs.readdirSync(dirPath).map((name: string) => ({
+      name,
+      isDirectory: fs.statSync(path.join(dirPath, name)).isDirectory(),
+    }));
+  });
+
+  safeHandle(IPC_CHANNELS.FS_DELETE, (_event, filePath: string) => {
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { recursive: true, force: true });
+    }
+  });
+
+  safeHandle(IPC_CHANNELS.FS_MKDIR, (_event, dirPath: string) => {
+    fs.mkdirSync(dirPath, { recursive: true });
+  });
 
   // Debug: test disk extraction on active browser tab
   safeHandle(IPC_CHANNELS.DEBUG_TEST_DISK_EXTRACT, async () => {

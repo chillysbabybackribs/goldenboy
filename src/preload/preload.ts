@@ -11,6 +11,7 @@ const IPC_CHANNELS = {
   EVENT_BROADCAST: 'workspace:event-broadcast',
   CREATE_TASK: 'workspace:create-task',
   DELETE_TASK: 'workspace:delete-task',
+  UPDATE_TASK: 'workspace:update-task',
   UPDATE_TASK_STATUS: 'workspace:update-task-status',
   SET_ACTIVE_TASK: 'workspace:set-active-task',
   RESET_TOKEN_USAGE: 'workspace:reset-token-usage',
@@ -72,6 +73,13 @@ const IPC_CHANNELS = {
   BROWSER_STATE_UPDATE: 'browser:state-update',
   BROWSER_NAV_UPDATE: 'browser:nav-update',
   BROWSER_FIND_UPDATE: 'browser:find-update',
+  FS_READ: 'fs:read',
+  FS_WRITE: 'fs:write',
+  FS_EXISTS: 'fs:exists',
+  FS_LIST: 'fs:list',
+  FS_DELETE: 'fs:delete',
+  FS_MKDIR: 'fs:mkdir',
+
   DEBUG_TEST_DISK_EXTRACT: 'debug:test-disk-extract',
 
   MODEL_INVOKE: 'model:invoke',
@@ -91,6 +99,8 @@ const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  TOOL_INVOKE: 'tool:invoke',
 } as const;
 
 const api = {
@@ -108,6 +118,10 @@ const api = {
 
   deleteTask(taskId: string) {
     return ipcRenderer.invoke(IPC_CHANNELS.DELETE_TASK, taskId);
+  },
+
+  updateTask(taskId: string, updates: { title?: string; owner?: string; status?: string; updatedAt?: number }) {
+    return ipcRenderer.invoke(IPC_CHANNELS.UPDATE_TASK, taskId, updates);
   },
 
   updateTaskStatus(taskId: string, status: string) {
@@ -321,6 +335,37 @@ const api = {
       ipcRenderer.on(IPC_CHANNELS.TERMINAL_EXIT, (_event: any, exitCode: number) => {
         callback(exitCode);
       });
+    },
+  },
+
+  // ── Filesystem bridge ───────────────────────────────────────────────────
+
+  fs: {
+    read(filePath: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.FS_READ, filePath);
+    },
+    write(filePath: string, content: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.FS_WRITE, filePath, content);
+    },
+    exists(filePath: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.FS_EXISTS, filePath);
+    },
+    list(dirPath: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.FS_LIST, dirPath);
+    },
+    delete(filePath: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.FS_DELETE, filePath);
+    },
+    mkdir(dirPath: string) {
+      return ipcRenderer.invoke(IPC_CHANNELS.FS_MKDIR, dirPath);
+    },
+  },
+
+  // ── Agent tool bridge ───────────────────────────────────────────────────
+
+  tool: {
+    invoke(name: string, input: unknown, context?: { taskId?: string; runId?: string }) {
+      return ipcRenderer.invoke(IPC_CHANNELS.TOOL_INVOKE, name, input, context);
     },
   },
 
