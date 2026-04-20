@@ -1602,7 +1602,7 @@ function syncAgentTabs(state: any): void {
         completedExpanded = !completedExpanded;
         syncAgentTabs((window as any).__lastState);
       });
-      agentTabsList.appendChild(showMoreBtn);
+      agentTabs.appendChild(showMoreBtn);
     }
   }
 }
