@@ -67,6 +67,7 @@ function loadManifest(): CatalogManifest | null {
   }
 }
 
+/** Writes the tool catalog to disk. May throw if the catalog directory is not writable. */
 export function writeCatalog(tools: AgentToolDefinition[]): CatalogManifest {
   const dir = catalogDir();
   fs.mkdirSync(dir, { recursive: true });
@@ -98,7 +99,7 @@ export function writeCatalog(tools: AgentToolDefinition[]): CatalogManifest {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema as Record<string, unknown>,
-      jsCall: `window.tools.${category}.${tool.name.split('.')[1]}`,
+      jsCall: `window.tools.${category}.${tool.name.split('.').slice(1).join('.') || tool.name}`,
       tokenEstimate: tokenEstimate(tool),
     }));
 
