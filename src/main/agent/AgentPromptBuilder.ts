@@ -12,6 +12,7 @@ import {
   STRICT_SOURCE_VALIDATION_PROTOCOL,
   shouldUseStrictSourceValidation,
 } from './sourceValidationPolicy';
+import { getCatalogManifestPath } from './CatalogWriter';
 
 const AGENT_CONTRACT_PATH = resolveWorkspacePath('AGENTS.md');
 const ALWAYS_ON_CONTRACT_SECTIONS = new Set([
@@ -63,7 +64,7 @@ export class AgentPromptBuilder {
       shouldUseStrictSourceValidation(input.config.task)
         ? `\n\n## Strict Source Validation Protocol\n\n${STRICT_SOURCE_VALIDATION_PROTOCOL}`
         : '',
-      `\n\n## Tool Catalog\n\nThe full tool catalog is pre-written to disk at startup. Do NOT rely on runtime.search_tools or runtime.load_tools for tool discovery — use the catalog instead.\n\n1. Read the manifest at: ${path.join(app.getPath('userData'), 'tool-catalog', 'catalog-manifest.json')} via filesystem.read to see available chunks and their token costs.\n2. Read only the chunk(s) relevant to your task (e.g. catalog-browser.json for browser tasks).\n3. Execute tools via browser.evaluate_js against the tool runtime page at: file://${path.join(process.cwd(), 'dist', 'renderer', 'tool-runtime.html')} using window.runTool(category, name, input).\n4. For batched calls use window.runBatch(calls, outPath) — results are written to disk, only a confirmation string is returned.`,
+      `\n\n## Tool Catalog\n\nThe full tool catalog is pre-written to disk at startup. Do NOT rely on runtime.search_tools or runtime.load_tools for tool discovery — use the catalog instead.\n\n1. Read the manifest at: ${getCatalogManifestPath()} via filesystem.read to see available chunks and their token costs.\n2. Read only the chunk(s) relevant to your task (e.g. catalog-browser.json for browser tasks).\n3. Execute tools via browser.evaluate_js against the tool runtime page at: file://${path.join(app.getAppPath(), 'dist', 'renderer', 'tool-runtime.html')} using window.runTool(category, name, input).\n4. For batched calls use window.runBatch(calls, outPath) — results are written to disk, only a confirmation string is returned.`,
       `\n\n## Active Runtime\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\n__CURRENT_DATETIME__`,
       `\n\n## Workspace Root\n\nAbsolute workspace root: ${APP_WORKSPACE_ROOT}\nResolve relative repository paths from this root unless a tool result explicitly reports a different cwd.${input.config.cwd ? `\nCurrent working directory: ${input.config.cwd}` : ''}`,
       input.config.systemPromptAddendum?.trim()

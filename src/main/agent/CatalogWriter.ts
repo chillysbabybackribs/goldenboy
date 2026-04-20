@@ -35,6 +35,10 @@ function manifestPath(): string {
   return path.join(catalogDir(), 'catalog-manifest.json');
 }
 
+export function getCatalogManifestPath(): string {
+  return manifestPath();
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
