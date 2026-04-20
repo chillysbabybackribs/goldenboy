@@ -109,6 +109,120 @@
   display: flex;
 }
 
+.cc-browser-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 8px;
+  border-bottom: 1px solid #1a1a1a;
+  background: #090909;
+}
+
+.cc-browser-tablist {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.cc-browser-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.cc-browser-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #202020;
+  border-radius: 7px;
+  background: #111111;
+  color: #8d8d8d;
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms, color 140ms;
+}
+
+.cc-browser-tab:hover {
+  border-color: #333333;
+  color: #d0d0d0;
+}
+
+.cc-browser-tab.active {
+  border-color: #5f5739;
+  background: #171612;
+  color: #f2ebcc;
+}
+
+.cc-browser-tab.split-side {
+  border-color: #3b3b3b;
+}
+
+.cc-browser-tab.split-active-side {
+  border-color: #8b7b44;
+  box-shadow: inset 0 0 0 1px rgba(245, 226, 148, 0.12);
+}
+
+.cc-browser-tab-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.cc-browser-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+.cc-browser-tab-close {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #7e7e7e;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.cc-browser-tab-close:hover {
+  background: #1c1c1c;
+  color: #ededed;
+}
+
+.cc-browser-tab-new {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid #262626;
+  background: #121212;
+  color: #d0d0d0;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 140ms, color 140ms, background 140ms;
+  -webkit-app-region: no-drag;
+}
+
+.cc-browser-tab-new:hover {
+  border-color: #3a3a3a;
+  background: #181818;
+  color: #f2ebcc;
+}
+
 .cc-browser-header {
   height: 36px;
   display: flex;
@@ -905,8 +1019,8 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
-  padding: 16px 14px 16px 16px;
+  gap: 0;
+  padding: 0;
   flex-shrink: 0;
   width: 220px;
   overflow-y: auto;
@@ -932,6 +1046,8 @@
   flex-direction: column;
   gap: 3px;
   width: 100%;
+  padding: 0 14px 16px 16px;
+  box-sizing: border-box;
 }
 
 .cc-agent-tab {
@@ -1015,7 +1131,18 @@
   -webkit-app-region: no-drag;
   box-sizing: border-box;
   flex-shrink: 0;
-  margin-bottom: 6px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: #141414;
+  margin: 0;
+  padding: 13px 16px;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0;
+  margin-bottom: 8px;
   background-image: linear-gradient(
     105deg,
     #555 0%,
