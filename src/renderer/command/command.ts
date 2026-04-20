@@ -1539,7 +1539,7 @@ function syncAgentTabs(state: any): void {
     }
 
     const hiddenCount = completedTasks.length - COMPLETED_PREVIEW_COUNT;
-    if (hiddenCount > 0) {
+    if (hiddenCount > 0 || completedExpanded) {
       const showMoreBtn = document.createElement('button');
       showMoreBtn.type = 'button';
       showMoreBtn.className = 'cc-agent-show-more';
