@@ -1503,7 +1503,7 @@ function syncAgentTabs(state: any): void {
   agentTabs.hidden = false;
 
   // Reset expansion state when list shape changes
-  const signature = tasks.map(t => t.id + t.status).join(',');
+  const signature = tasks.map(t => t.id).join(',');
   if (signature !== lastTaskListSignature) {
     lastTaskListSignature = signature;
     completedExpanded = false;
