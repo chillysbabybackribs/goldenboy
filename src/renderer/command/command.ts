@@ -1,5 +1,12 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
-import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID, ProviderId, InvocationAttachment, ImageInvocationAttachment } from '../../shared/types/model.js';
+import {
+  HAIKU_PROVIDER_ID,
+  PRIMARY_PROVIDER_ID,
+  ProviderId,
+  InvocationAttachment,
+  ImageInvocationAttachment,
+  type TaskMemoryEntry,
+} from '../../shared/types/model.js';
 import type { DocumentImportRequest, DocumentInvocationAttachment } from '../../shared/types/attachments.js';
 import {
   appendCodexItemProgress as appendCodexItemProgressInternal,
@@ -24,6 +31,8 @@ const taskSummary = document.getElementById('taskSummary')!;
 const modelLabel = document.getElementById('modelLabel')!;
 const taskCount = document.getElementById('taskCount')!;
 const commandShell = document.querySelector('.cc-shell') as HTMLElement;
+const commandMain = document.querySelector('.cc-main') as HTMLElement;
+const commandBrowserPane = document.getElementById('commandBrowserPane') as HTMLElement | null;
 const logStream = document.getElementById('logStream')!;
 const logsCopyBtn = document.getElementById('logsCopyBtn')!;
 const logsClearBtn = document.getElementById('logsClearBtn')!;
@@ -45,6 +54,19 @@ const modelBtnHaiku = document.getElementById('modelBtnHaiku') as HTMLButtonElem
 const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
 const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
 const chatZoomInBtn = document.getElementById('chatZoomInBtn') as HTMLButtonElement;
+const commandBrowserSurfaceArea = document.getElementById('commandBrowserSurfaceArea') as HTMLDivElement;
+const commandBrowserBackBtn = document.getElementById('commandBrowserBackBtn') as HTMLButtonElement;
+const commandBrowserForwardBtn = document.getElementById('commandBrowserForwardBtn') as HTMLButtonElement;
+const commandBrowserReloadBtn = document.getElementById('commandBrowserReloadBtn') as HTMLButtonElement;
+const commandBrowserNewTabBtn = document.getElementById('commandBrowserNewTabBtn') as HTMLButtonElement;
+const commandBrowserAddressInput = document.getElementById('commandBrowserAddressInput') as HTMLInputElement;
+const commandBrowserStatus = document.getElementById('commandBrowserStatus') as HTMLDivElement;
+const commandBrowserAttachBtn = document.getElementById('commandBrowserAttachBtn') as HTMLButtonElement;
+
+// Agent tabs
+const agentTabs = document.getElementById('agentTabs') as HTMLDivElement;
+const agentTabsList = document.getElementById('agentTabsList') as HTMLDivElement;
+const agentTabNewBtn = document.getElementById('agentTabNewBtn') as HTMLButtonElement;
 
 // History
 const chatHistoryBtn = document.getElementById('chatHistoryBtn')!;
@@ -52,9 +74,11 @@ const historyOverlay = document.getElementById('historyOverlay')!;
 const historyList = document.getElementById('historyList')!;
 const historyNewBtn = document.getElementById('historyNewBtn')!;
 const historyCloseBtn = document.getElementById('historyCloseBtn')!;
+const NEW_CHAT_TITLE = 'New Chat';
 
 // Token usage — displayed in status bar
 const tokenStatusLabel = document.getElementById('tokenStatusLabel')!;
+const tokenUsageResetBtn = document.getElementById('tokenUsageResetBtn') as HTMLButtonElement;
 
 // Stop
 const chatStopBtn = document.getElementById('chatStopBtn') as HTMLButtonElement;
@@ -105,7 +129,13 @@ let chatScrollControlsIdleTimer: number | null = null;
 let lastAgentResponseText = '';
 let chatCopyFeedbackTimer: number | null = null;
 let chatZoom = 1;
-let runningTaskId: string | null = null;
+const runningTaskIds = new Set<string>();
+let completedExpanded = false;
+let lastTaskListSignature = '';
+let browserBoundsTimer: number | null = null;
+let browserBoundsObserver: ResizeObserver | null = null;
+let lastCommandBrowserState: BrowserState | null = null;
+const pendingLiveProgressByTask = new Map<string, Array<any>>();
 
 const CHAT_ZOOM_STORAGE_KEY = 'command-center-chat-zoom';
 const CHAT_ZOOM_DEFAULT = 1;
@@ -168,8 +198,13 @@ function getModelBtn(owner: ExplicitSelectableOwner): HTMLButtonElement {
   return owner === PRIMARY_PROVIDER_ID ? modelBtnPrimary : modelBtnHaiku;
 }
 
+function isActiveTabRunning(): boolean {
+  const activeId = getActiveTaskIdFromState();
+  return activeId !== null && runningTaskIds.has(activeId);
+}
+
 function syncModelToggleState(state: any = (window as any).__lastState): void {
-  const busy = Boolean(runningTaskId);
+  const busy = isActiveTabRunning();
   for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
     const btn = getModelBtn(owner);
     const runtime = getProviderRuntime(state, owner);
@@ -192,7 +227,7 @@ function initializeModelToggle(): void {
 
   for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
     getModelBtn(owner).addEventListener('click', () => {
-      if (runningTaskId) return;
+      if (isActiveTabRunning()) return;
       setSelectedOwner(owner, (window as any).__lastState);
     });
   }
@@ -250,6 +285,76 @@ function initializeChatZoom(): void {
     // Ignore storage failures in restricted renderer environments.
   }
   setChatZoom(CHAT_ZOOM_DEFAULT, false);
+}
+
+function reportCommandBrowserBounds(): void {
+  if (!commandWindowAPI) return;
+  if (lastCommandBrowserState?.hostWindowRole !== 'command') return;
+  if (browserBoundsTimer !== null) window.clearTimeout(browserBoundsTimer);
+  browserBoundsTimer = window.setTimeout(() => {
+    const rect = commandBrowserSurfaceArea.getBoundingClientRect();
+    commandWindowAPI.browser.reportBounds({
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    });
+    browserBoundsTimer = null;
+  }, 40);
+}
+
+function renderCommandBrowserState(state: BrowserState): void {
+  lastCommandBrowserState = state;
+  const attached = state.hostWindowRole === 'command';
+  commandMain.classList.toggle('browser-host-command', attached);
+  if (commandBrowserPane) {
+    commandBrowserPane.hidden = !attached;
+  }
+  commandBrowserAttachBtn.disabled = attached;
+  commandBrowserAttachBtn.textContent = attached ? 'Attached' : 'Attach Here';
+  const nav = state.navigation;
+  if (document.activeElement !== commandBrowserAddressInput) {
+    commandBrowserAddressInput.value = nav.url || '';
+  }
+  commandBrowserBackBtn.disabled = !nav.canGoBack;
+  commandBrowserForwardBtn.disabled = !nav.canGoForward;
+  commandBrowserStatus.textContent = nav.isLoading ? 'Loading...' : (nav.title || 'Ready');
+  if (attached) {
+    reportCommandBrowserBounds();
+  }
+}
+
+function initializeCommandBrowserPane(): void {
+  commandBrowserBackBtn.addEventListener('click', () => {
+    commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.back', payload: {} });
+  });
+  commandBrowserForwardBtn.addEventListener('click', () => {
+    commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.forward', payload: {} });
+  });
+  commandBrowserReloadBtn.addEventListener('click', () => {
+    commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.reload', payload: {} });
+  });
+  commandBrowserNewTabBtn.addEventListener('click', () => {
+    commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.create-tab', payload: {} });
+  });
+  commandBrowserAttachBtn.addEventListener('click', () => {
+    void commandWindowAPI?.browser.attachSurface('command');
+  });
+  commandBrowserAddressInput.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    const url = commandBrowserAddressInput.value.trim();
+    if (!url) return;
+    commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.navigate', payload: { url } });
+    commandBrowserAddressInput.blur();
+  });
+  commandBrowserAddressInput.addEventListener('focus', () => {
+    requestAnimationFrame(() => commandBrowserAddressInput.select());
+  });
+  window.addEventListener('resize', reportCommandBrowserBounds);
+  if (typeof ResizeObserver !== 'undefined') {
+    browserBoundsObserver = new ResizeObserver(() => reportCommandBrowserBounds());
+    browserBoundsObserver.observe(commandBrowserSurfaceArea);
+  }
 }
 
 // ─── Log Rendering ─────────────────────────────────────────────────────────
@@ -784,6 +889,48 @@ function createLiveRunCard(taskId: string, _provider: string, prompt?: string): 
       updateChatScrollControls();
     },
   }, prompt);
+  flushPendingLiveProgress(taskId);
+}
+
+function enqueuePendingLiveProgress(taskId: string, progress: any): void {
+  const queue = pendingLiveProgressByTask.get(taskId) ?? [];
+  queue.push(progress);
+  if (queue.length > 100) {
+    queue.splice(0, queue.length - 100);
+  }
+  pendingLiveProgressByTask.set(taskId, queue);
+}
+
+function handleLiveProgress(progress: any): void {
+  if (progress.type === 'token') {
+    appendToken(progress.taskId, String(progress.data || ''));
+    return;
+  }
+  if (progress.type === 'item') {
+    appendCodexItemProgress(progress.taskId, String(progress.data || ''), progress.codexItem as any);
+    return;
+  }
+  if (progress.type === 'status') {
+    const text = String(progress.data || '');
+    if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
+      appendToolStatusInternal(progress.taskId, text);
+    } else if (text.startsWith('Calling ')) {
+      appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
+    } else if (text.startsWith('Tool result: ')) {
+      appendToolActivity(progress.taskId, 'result', text.slice('Tool result: '.length));
+    } else if (text && !/^Turn completed/.test(text)) {
+      appendThought(progress.taskId, text);
+    }
+  }
+}
+
+function flushPendingLiveProgress(taskId: string): void {
+  const queue = pendingLiveProgressByTask.get(taskId);
+  if (!queue?.length) return;
+  pendingLiveProgressByTask.delete(taskId);
+  for (const progress of queue) {
+    handleLiveProgress(progress);
+  }
 }
 
 function appendToken(taskId: string, text: string): void {
@@ -810,12 +957,8 @@ function replaceWithError(taskId: string, error: string): void {
   replaceWithErrorInternal(taskId, error);
 }
 
-function appendMemoryEntry(entry: TaskMemoryEntry): void {
-  if (!shouldShowMemoryEntry(entry)) return;
-
-  if (entry.kind === 'user_prompt') return;
-
-  if (entry.kind !== 'model_result') return;
+function appendModelMemoryEntry(entry: TaskMemoryEntry): void {
+  if (entry.kind !== 'model_result' || !shouldShowMemoryEntry(entry)) return;
 
   if (chatEmptyState.parentNode) chatEmptyState.remove();
   updateLastAgentResponseText(entry.text);
@@ -853,20 +996,25 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
 
   const state = (window as any).__lastState;
   const activeTask = state?.tasks?.find((task: any) => task.id === taskId) || null;
-  const latestUserPrompt = [...memory.entries]
-    .reverse()
-    .find((entry) => entry.kind === 'user_prompt' && shouldShowMemoryEntry(entry));
-
-  if (activeTask?.status === 'running') {
-    createLiveRunCard(
-      taskId,
-      activeTask.owner || 'system',
-      latestUserPrompt?.text?.trim() || undefined,
-    );
-  }
 
   for (const entry of memory.entries) {
-    appendMemoryEntry(entry);
+    if (!shouldShowMemoryEntry(entry)) continue;
+    if (entry.kind === 'user_prompt') {
+      const attachments = getTaskMemoryAttachments(entry);
+      appendUserMessage(
+        entry.text,
+        getAttachmentImageDataUrls(attachments),
+        getAttachmentDocumentPreviews(attachments),
+      );
+      continue;
+    }
+    if (entry.kind === 'model_result') {
+      appendModelMemoryEntry(entry);
+    }
+  }
+
+  if (activeTask?.status === 'running') {
+    createLiveRunCard(taskId, activeTask.owner || 'system', undefined);
   }
 }
 
@@ -875,6 +1023,18 @@ async function refreshTaskConversation(taskId: string | null): Promise<void> {
 function getActiveTaskIdFromState(): string | null {
   const state = (window as any).__lastState;
   return state?.activeTaskId || null;
+}
+
+function getActiveTaskFromState(): any | null {
+  const state = (window as any).__lastState;
+  const taskId = state?.activeTaskId || null;
+  if (!taskId) return null;
+  return state?.tasks?.find((task: any) => task.id === taskId) || null;
+}
+
+function buildTaskTitleFromDraft(prompt: string, pendingDocumentPreviews: Array<{ name: string }>, imageAttachments: Array<{ name?: string }>): string {
+  const titleSource = prompt || pendingDocumentPreviews[0]?.name || imageAttachments[0]?.name || 'Attachment';
+  return titleSource.length > 48 ? `${titleSource.slice(0, 48)}...` : titleSource;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -924,24 +1084,33 @@ async function buildAttachments(): Promise<ImageInvocationAttachment[]> {
   return results;
 }
 
-function buildDocumentImportRequests(): DocumentImportRequest[] {
+async function buildDocumentImportRequests(): Promise<DocumentImportRequest[]> {
   const documentFiles = attachedFiles.filter((entry) => entry.type === 'document');
   if (documentFiles.length === 0) return [];
 
-  const missingPathNames = documentFiles
-    .filter(({ file }) => !getElectronFilePath(file))
-    .map(({ file }) => file.name);
-  if (missingPathNames.length > 0) {
-    throw new Error(`Document attachments require a local file path. Missing path for: ${missingPathNames.join(', ')}`);
+  const results: DocumentImportRequest[] = [];
+  for (const { file } of documentFiles) {
+    const localPath = getElectronFilePath(file);
+    if (localPath) {
+      results.push({
+        path: localPath,
+        name: file.name,
+        mediaType: file.type || undefined,
+        sizeBytes: file.size,
+        lastModifiedMs: file.lastModified,
+      });
+    } else {
+      const dataBase64 = await fileToBase64(file);
+      results.push({
+        dataBase64,
+        name: file.name,
+        mediaType: file.type || undefined,
+        sizeBytes: file.size,
+        lastModifiedMs: file.lastModified,
+      });
+    }
   }
-
-  return documentFiles.map(({ file }) => ({
-    path: getElectronFilePath(file)!,
-    name: file.name,
-    mediaType: file.type || undefined,
-    sizeBytes: file.size,
-    lastModifiedMs: file.lastModified,
-  }));
+  return results;
 }
 
 function buildPendingDocumentPreviews(): DocumentAttachmentPreview[] {
@@ -983,6 +1152,7 @@ async function submitChat(): Promise<void> {
 
   chatCounter++;
   let taskId = getActiveTaskIdFromState();
+  const activeTask = getActiveTaskFromState();
   const owner = selectedOwner;
 
   if (!taskId) {
@@ -994,10 +1164,13 @@ async function submitChat(): Promise<void> {
       chatInput.focus();
       return;
     }
-    const titleSource = prompt || pendingDocumentPreviews[0]?.name || imageAttachments[0]?.name || 'Attachment';
-    const title = titleSource.length > 48 ? `${titleSource.slice(0, 48)}...` : titleSource;
+    const title = buildTaskTitleFromDraft(prompt, pendingDocumentPreviews, imageAttachments);
     const createdTask = await workspaceAPI.createTask(title);
     taskId = createdTask.id;
+  } else if (activeTask?.title === NEW_CHAT_TITLE) {
+    const workspaceAPI = getWorkspaceAPI();
+    const nextTitle = buildTaskTitleFromDraft(prompt, pendingDocumentPreviews, imageAttachments);
+    await workspaceAPI?.updateTask(taskId, { title: nextTitle });
   }
 
   const resolvedOwner: string = owner;
@@ -1009,7 +1182,7 @@ async function submitChat(): Promise<void> {
       if (!attachmentApi?.importDocuments) {
         throw new Error('Document attachment import is not available in this build.');
       }
-      documentAttachments = await attachmentApi.importDocuments(taskId, buildDocumentImportRequests());
+      documentAttachments = await attachmentApi.importDocuments(taskId, await buildDocumentImportRequests());
     }
 
     const pendingAttachments: InvocationAttachment[] = [...imageAttachments, ...documentAttachments];
@@ -1024,36 +1197,64 @@ async function submitChat(): Promise<void> {
     chatInput.value = '';
     appendUserMessage(prompt, imageDataUrls, documentAttachments);
     clearAttachments();
-    chatStopBtn.hidden = false;
 
-    runningTaskId = taskId;
+    runningTaskIds.add(taskId);
+    syncStopBtn();
+    syncModelToggleState();
     createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
 
     const result = await modelApi.invoke(taskId, effectivePrompt, resolvedOwner, invokeOptions);
     replaceWithResult(taskId, result, result?.providerId || resolvedOwner);
   } catch (err: any) {
     const message = err?.message || String(err);
-    if (runningTaskId === taskId) {
+    if (runningTaskIds.has(taskId)) {
       replaceWithError(taskId, message);
     } else {
       getWorkspaceAPI()?.addLog('error', 'system', `Failed to send chat: ${message}`, taskId);
     }
   } finally {
-    runningTaskId = null;
-    chatStopBtn.hidden = true;
-    chatStopBtn.disabled = false;
-    chatStopBtn.textContent = 'STOP';
+    runningTaskIds.delete(taskId);
+    syncStopBtn();
+    syncModelToggleState();
     chatInput.focus();
   }
 }
+
+async function resetTokenUsageDisplay(): Promise<void> {
+  const workspaceAPI = getWorkspaceAPI();
+  if (!workspaceAPI?.resetTokenUsage) {
+    getWorkspaceAPI()?.addLog('warn', 'system', 'Token usage reset is not available in this build.');
+    return;
+  }
+
+  tokenUsageResetBtn.disabled = true;
+  try {
+    await workspaceAPI.resetTokenUsage();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    void workspaceAPI.addLog('error', 'system', `Failed to reset token usage: ${message}`);
+  } finally {
+    tokenUsageResetBtn.disabled = false;
+  }
+}
+function syncStopBtn(): void {
+  const activeId = getActiveTaskIdFromState();
+  const activeRunning = activeId !== null && runningTaskIds.has(activeId);
+  chatStopBtn.hidden = !activeRunning;
+  if (!activeRunning) {
+    chatStopBtn.disabled = false;
+    chatStopBtn.textContent = 'STOP';
+  }
+}
+
 chatStopBtn.addEventListener('click', () => {
   const modelApi = getModelAPI();
-  if (runningTaskId && modelApi?.cancel) {
-    // Immediately mark the card as cancelling and disable the button
-    markCancellingInternal(runningTaskId);
+  const activeId = getActiveTaskIdFromState();
+  if (activeId && runningTaskIds.has(activeId) && modelApi?.cancel) {
+    markCancellingInternal(activeId);
     chatStopBtn.textContent = 'Stopping…';
     chatStopBtn.disabled = true;
-    void modelApi.cancel(runningTaskId);
+    void modelApi.cancel(activeId);
   }
 });
 chatCopyLastBtn.addEventListener('click', () => {
@@ -1067,6 +1268,9 @@ chatZoomResetBtn.addEventListener('click', () => {
 });
 chatZoomInBtn.addEventListener('click', () => {
   adjustChatZoom(CHAT_ZOOM_STEP);
+});
+tokenUsageResetBtn.addEventListener('click', () => {
+  void resetTokenUsageDisplay();
 });
 chatInput.addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1166,7 +1370,7 @@ function openHistoryPopup(): void {
 
     const date = document.createElement('span');
     date.className = 'cc-history-item-date';
-    date.textContent = formatHistoryDate(task.updatedAt);
+    date.textContent = `${formatHistoryDate(task.updatedAt)} • ${task.id}`;
 
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'cc-history-delete';
@@ -1219,12 +1423,7 @@ async function startNewChat(): Promise<void> {
   if (!workspaceAPI) return;
 
   historyOverlay.hidden = true;
-
-  // Clear active task — will show empty state
-  await workspaceAPI.setActiveTask(null);
-  currentRenderedTaskId = null;
-  renderedTaskMemoryKey = null;
-  clearChatThread();
+  await workspaceAPI.createTask(NEW_CHAT_TITLE);
   chatInput.focus();
 }
 
@@ -1232,8 +1431,10 @@ function switchToTask(taskId: string): void {
   const workspaceAPI = getWorkspaceAPI();
   if (!workspaceAPI) return;
 
-  void workspaceAPI.setActiveTask(taskId);
-  // renderState will pick up the change and call refreshTaskConversation
+  void workspaceAPI.setActiveTask(taskId).then(() => {
+    syncStopBtn();
+    syncModelToggleState();
+  });
 }
 
 chatHistoryBtn.addEventListener('click', (e: MouseEvent) => {
@@ -1279,6 +1480,108 @@ function updateTokenUsageDisplay(state: any): void {
   tokenStatusLabel.textContent = `${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out`;
 }
 
+// ─── Agent Tab Strip ───────────────────────────────────────────────────────
+
+const COMPLETED_PREVIEW_COUNT = 3;
+
+function syncAgentTabs(state: any): void {
+  const tasks: any[] = state?.tasks ?? [];
+  const activeId: string | null = state?.activeTaskId ?? null;
+
+  // Running = status 'running' but NOT the active task (those are backgrounded)
+  const runningTasks = tasks.filter(t => t.status === 'running' && t.id !== activeId);
+  // Completed = done or failed, newest first
+  const completedTasks = [...tasks]
+    .filter(t => t.status === 'completed' || t.status === 'failed')
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  // Sidebar only appears when there are backgrounded running OR completed tasks
+  if (runningTasks.length === 0 && completedTasks.length === 0) {
+    agentTabs.hidden = true;
+    return;
+  }
+  agentTabs.hidden = false;
+
+  // Reset expansion state when list shape changes
+  const signature = tasks.map(t => t.id + t.status).join(',');
+  if (signature !== lastTaskListSignature) {
+    lastTaskListSignature = signature;
+    completedExpanded = false;
+  }
+
+  agentTabsList.innerHTML = '';
+
+  // ── Running section ──────────────────────────────────────────────────
+  if (runningTasks.length > 0) {
+    const runningLabel = document.createElement('div');
+    runningLabel.className = 'cc-agent-section-label cc-agent-section-label-running';
+    runningLabel.textContent = 'Running';
+    agentTabsList.appendChild(runningLabel);
+
+    for (const task of runningTasks) {
+      agentTabsList.appendChild(buildAgentTab(task, activeId));
+    }
+  }
+
+  // ── Completed section ────────────────────────────────────────────────
+  if (completedTasks.length > 0) {
+    const completedLabel = document.createElement('div');
+    completedLabel.className = 'cc-agent-section-label cc-agent-section-label-completed';
+    completedLabel.textContent = 'Completed';
+    agentTabsList.appendChild(completedLabel);
+
+    const visibleCompleted = completedExpanded
+      ? completedTasks
+      : completedTasks.slice(0, COMPLETED_PREVIEW_COUNT);
+
+    for (const task of visibleCompleted) {
+      agentTabsList.appendChild(buildAgentTab(task, activeId));
+    }
+
+    const hiddenCount = completedTasks.length - COMPLETED_PREVIEW_COUNT;
+    if (hiddenCount > 0) {
+      const showMoreBtn = document.createElement('button');
+      showMoreBtn.type = 'button';
+      showMoreBtn.className = 'cc-agent-show-more';
+      showMoreBtn.textContent = completedExpanded
+        ? 'Show less'
+        : `Show ${hiddenCount} more`;
+      showMoreBtn.addEventListener('click', () => {
+        completedExpanded = !completedExpanded;
+        syncAgentTabs((window as any).__lastState);
+      });
+      agentTabsList.appendChild(showMoreBtn);
+    }
+  }
+}
+
+function buildAgentTab(task: any, activeId: string | null): HTMLButtonElement {
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'cc-agent-tab' +
+    (task.id === activeId ? ' cc-agent-tab-active' : '') +
+    (task.status === 'running' ? ' cc-agent-tab-running' : '');
+
+  const dot = document.createElement('span');
+  dot.className = 'cc-agent-tab-dot';
+
+  const title = document.createElement('span');
+  title.className = 'cc-agent-tab-title';
+  const label = task.title || task.id;
+  title.textContent = label.length > 24 ? label.slice(0, 24) + '…' : label;
+  title.title = task.title || task.id;
+
+  tab.append(dot, title);
+
+  if (task.id !== activeId) {
+    tab.addEventListener('click', () => switchToTask(task.id));
+  }
+
+  return tab;
+}
+
+agentTabNewBtn.addEventListener('click', () => { void startNewChat(); });
+
 // ─── Full State Render ─────────────────────────────────────────────────────
 
 function renderState(state: any): void {
@@ -1291,11 +1594,20 @@ function renderState(state: any): void {
     selectedOwner = normalizedOwner;
   }
   syncModelToggleState(state);
+  syncAgentTabs(state);
+  syncStopBtn();
   const active = state.tasks.find((t: any) => t.id === state.activeTaskId);
   renderLogs(state.logs);
 
   taskCount.textContent = `tasks: ${state.tasks.length}`;
   updateTokenUsageDisplay(state);
+  if (active?.id) {
+    taskSummary.textContent = active.id;
+    taskSummary.hidden = false;
+  } else {
+    taskSummary.textContent = '';
+    taskSummary.hidden = true;
+  }
 
   const activeProviderId = active?.owner && active.owner !== 'user'
     ? active.owner
@@ -1324,27 +1636,12 @@ const modelApi = getModelAPI();
 if (commandWindowAPI && modelApi?.onProgress) {
   modelApi.onProgress((progress: any) => {
     const card = progress?.taskId ? getLiveRunCard(progress.taskId) : null;
-    if (!card?.root.isConnected) return;
-    if (progress.type === 'token') {
-      appendToken(progress.taskId, String(progress.data || ''));
+    if (!progress?.taskId) return;
+    if (!card?.root.isConnected) {
+      enqueuePendingLiveProgress(progress.taskId, progress);
       return;
     }
-    if (progress.type === 'item') {
-      appendCodexItemProgress(progress.taskId, String(progress.data || ''), progress.codexItem as any);
-      return;
-    }
-    if (progress.type === 'status') {
-      const text = String(progress.data || '');
-      if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
-        appendToolStatusInternal(progress.taskId, text);
-      } else if (text.startsWith('Calling ')) {
-        appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
-      } else if (text.startsWith('Tool result: ')) {
-        appendToolActivity(progress.taskId, 'result', text.slice('Tool result: '.length));
-      } else if (text && !/^Turn completed/.test(text)) {
-        appendThought(progress.taskId, text);
-      }
-    }
+    handleLiveProgress(progress);
   });
 }
 
@@ -1457,7 +1754,19 @@ initializeModelToggle();
 if (!commandWindowAPI) {
   console.error('[command] workspaceAPI is not available; command controls are disabled.');
 } else {
+  initializeCommandBrowserPane();
+  commandWindowAPI.browser.onStateUpdate((state: BrowserState) => renderCommandBrowserState(state));
+  commandWindowAPI.browser.onNavUpdate((nav: BrowserNavigationState) => {
+    if (document.activeElement !== commandBrowserAddressInput) {
+      commandBrowserAddressInput.value = nav.url || '';
+    }
+    commandBrowserBackBtn.disabled = !nav.canGoBack;
+    commandBrowserForwardBtn.disabled = !nav.canGoForward;
+    commandBrowserStatus.textContent = nav.isLoading ? 'Loading...' : (nav.title || 'Ready');
+    reportCommandBrowserBounds();
+  });
   commandWindowAPI.onStateUpdate((state: any) => renderState(state));
+  void commandWindowAPI.browser.getState().then(renderCommandBrowserState).catch(() => {});
   commandWindowAPI.getState().then((state: any) => {
     renderState(state);
     commandWindowAPI.addLog('info', 'system', 'Command Center initialized');
