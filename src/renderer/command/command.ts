@@ -58,7 +58,8 @@ const commandBrowserSurfaceArea = document.getElementById('commandBrowserSurface
 const commandBrowserBackBtn = document.getElementById('commandBrowserBackBtn') as HTMLButtonElement;
 const commandBrowserForwardBtn = document.getElementById('commandBrowserForwardBtn') as HTMLButtonElement;
 const commandBrowserReloadBtn = document.getElementById('commandBrowserReloadBtn') as HTMLButtonElement;
-const commandBrowserNewTabBtn = document.getElementById('commandBrowserNewTabBtn') as HTMLButtonElement;
+const commandBrowserTabList = document.getElementById('commandBrowserTabList') as HTMLDivElement;
+const commandBrowserTabNewBtn = document.getElementById('commandBrowserTabNewBtn') as HTMLButtonElement;
 const commandBrowserAddressInput = document.getElementById('commandBrowserAddressInput') as HTMLInputElement;
 const commandBrowserStatus = document.getElementById('commandBrowserStatus') as HTMLDivElement;
 const commandBrowserAttachBtn = document.getElementById('commandBrowserAttachBtn') as HTMLButtonElement;
@@ -310,8 +311,16 @@ function renderCommandBrowserState(state: BrowserState): void {
   if (commandBrowserPane) {
     commandBrowserPane.hidden = !attached;
   }
-  commandBrowserAttachBtn.disabled = attached;
-  commandBrowserAttachBtn.textContent = attached ? 'Attached' : 'Attach Here';
+  commandBrowserAttachBtn.disabled = state.hostWindowRole === null;
+  commandBrowserAttachBtn.textContent = attached ? 'Detach Browser' : 'Attach Browser';
+  commandBrowserAttachBtn.title = attached ? 'Move browser back to execution window' : 'Move browser to command window';
+  commandBrowserAttachBtn.setAttribute('aria-label', commandBrowserAttachBtn.title);
+  renderCommandBrowserTabs(
+    state.tabs,
+    state.activeTabId,
+    state.splitLeftTabId,
+    state.splitRightTabId,
+  );
   const nav = state.navigation;
   if (document.activeElement !== commandBrowserAddressInput) {
     commandBrowserAddressInput.value = nav.url || '';
@@ -324,6 +333,35 @@ function renderCommandBrowserState(state: BrowserState): void {
   }
 }
 
+function renderCommandBrowserTabs(
+  tabs: TabInfo[],
+  activeTabId: string,
+  splitLeftTabId: string | null,
+  splitRightTabId: string | null,
+): void {
+  commandBrowserTabList.innerHTML = tabs.map((tab) => {
+    const title = tab.navigation?.title || tab.navigation?.url || 'New Tab';
+    const isActive = tab.id === activeTabId;
+    const isSplitSide = tab.id === splitLeftTabId || tab.id === splitRightTabId;
+    const isSplitActiveSide = isActive && isSplitSide;
+    const faviconHtml = tab.navigation?.favicon
+      ? `<img class="cc-browser-tab-favicon" src="${escapeHtml(tab.navigation.favicon)}" alt="">`
+      : '';
+    const classes = [
+      'cc-browser-tab',
+      isActive ? 'active' : '',
+      isSplitSide ? 'split-side' : '',
+      isSplitActiveSide ? 'split-active-side' : '',
+    ].filter(Boolean).join(' ');
+
+    return `<div class="${classes}" data-command-browser-tab-id="${tab.id}" title="${escapeHtml(title)}">
+      ${faviconHtml}
+      <span class="cc-browser-tab-title">${escapeHtml(title)}</span>
+      <button class="cc-browser-tab-close" data-command-browser-close-tab="${tab.id}" type="button" aria-label="Close tab">×</button>
+    </div>`;
+  }).join('');
+}
+
 function initializeCommandBrowserPane(): void {
   commandBrowserBackBtn.addEventListener('click', () => {
     commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.back', payload: {} });
@@ -334,11 +372,25 @@ function initializeCommandBrowserPane(): void {
   commandBrowserReloadBtn.addEventListener('click', () => {
     commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.reload', payload: {} });
   });
-  commandBrowserNewTabBtn.addEventListener('click', () => {
+  commandBrowserTabNewBtn.addEventListener('click', () => {
     commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.create-tab', payload: {} });
   });
+  commandBrowserTabList.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const closeTabId = target.closest<HTMLElement>('[data-command-browser-close-tab]')?.dataset.commandBrowserCloseTab;
+    if (closeTabId) {
+      e.stopPropagation();
+      commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.close-tab', payload: { tabId: closeTabId } });
+      return;
+    }
+
+    const tabId = target.closest<HTMLElement>('[data-command-browser-tab-id]')?.dataset.commandBrowserTabId;
+    if (!tabId) return;
+    commandWindowAPI?.actions.submit({ target: 'browser', kind: 'browser.activate-tab', payload: { tabId } });
+  });
   commandBrowserAttachBtn.addEventListener('click', () => {
-    void commandWindowAPI?.browser.attachSurface('command');
+    const targetRole = lastCommandBrowserState?.hostWindowRole === 'command' ? 'execution' : 'command';
+    void commandWindowAPI?.browser.attachSurface(targetRole);
   });
   commandBrowserAddressInput.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key !== 'Enter') return;
@@ -1502,8 +1554,8 @@ function syncAgentTabs(state: any): void {
   }
   agentTabs.hidden = false;
 
-  // Reset expansion state when list shape changes
-  const signature = tasks.map(t => t.id).join(',');
+  // Reset expansion state only when tasks are added or removed
+  const signature = completedTasks.map(t => t.id).join(',');
   if (signature !== lastTaskListSignature) {
     lastTaskListSignature = signature;
     completedExpanded = false;
