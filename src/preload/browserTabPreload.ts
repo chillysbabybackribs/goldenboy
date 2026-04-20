@@ -84,4 +84,22 @@ function installPromptFallback(): void {
   contextBridge.exposeInMainWorld('browserPromptShim', bridge);
 }
 
+function installFsBridge(): void {
+  contextBridge.exposeInMainWorld('workspaceAPI', {
+    fs: {
+      read: (filePath: string) => ipcRenderer.invoke('fs:read', filePath),
+      write: (filePath: string, content: string) => ipcRenderer.invoke('fs:write', filePath, content),
+      exists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
+      list: (dirPath: string) => ipcRenderer.invoke('fs:list', dirPath),
+      delete: (filePath: string) => ipcRenderer.invoke('fs:delete', filePath),
+      mkdir: (dirPath: string) => ipcRenderer.invoke('fs:mkdir', dirPath),
+    },
+    tool: {
+      invoke: (name: string, input: unknown, context?: { taskId?: string; runId?: string }) =>
+        ipcRenderer.invoke('tool:invoke', name, input, context),
+    },
+  });
+}
+
 installPromptFallback();
+installFsBridge();
