@@ -43,7 +43,8 @@ function stableStringify(value: unknown): string {
 }
 
 function signatureFor(tools: AgentToolDefinition[]): string {
-  const input = tools.map(t => `${t.name}::${t.description}::${stableStringify(t.inputSchema)}`).join('||');
+  const input = [...tools].sort((a, b) => a.name.localeCompare(b.name))
+    .map(t => `${t.name}::${t.description}::${stableStringify(t.inputSchema)}`).join('||');
   return crypto.createHash('sha1').update(input).digest('hex');
 }
 
