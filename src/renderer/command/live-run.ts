@@ -27,27 +27,44 @@ interface TextSegment {
   typingTimer: number | null;
 }
 
-interface ToolSegment {
-  kind: 'tool';
+interface ToolRow {
   el: HTMLElement;
   text: string;
   active: boolean;
 }
 
-type Segment = TextSegment | ToolSegment;
+/**
+ * Consecutive tool calls are grouped into a single fixed-height, auto-
+ * scrolling card so a long-running task doesn't stack hundreds of rows
+ * down the chat. The pack becomes "closed" as soon as a new text segment
+ * arrives; subsequent tools appear in a fresh pack below that text, so
+ * the overall text-tools-text-tools interleaving is preserved but each
+ * run of tools lives in its own contained viewport.
+ */
+interface ToolPackSegment {
+  kind: 'toolPack';
+  el: HTMLElement;
+  listEl: HTMLElement;
+  countEl: HTMLElement;
+  rows: ToolRow[];
+  activeRowIndex: number | null;
+}
+
+type Segment = TextSegment | ToolPackSegment;
 
 export type LiveRunCard = {
   root: HTMLElement;
   /** "Thinking..." indicator — shown only before any segment starts. */
   status: HTMLElement;
-  /** The flat timeline of interleaved text + tool segments. */
+  /** The flat timeline of interleaved text + tool-pack segments. */
   timeline: HTMLElement;
   cancelling: boolean;
   segments: Segment[];
   /** Currently-streaming text segment, if any. Cleared when a tool starts. */
   activeTextSegment: TextSegment | null;
-  /** Currently-running tool segment, if any. */
-  activeToolSegment: ToolSegment | null;
+  /** Currently-collecting tool pack, if any. Cleared when a text segment
+   *  starts so the next tool run opens a fresh pack. */
+  activeToolPack: ToolPackSegment | null;
   pendingFinalResult: { result: any; provider?: string } | null;
   pendingErrorText: string | null;
   callbacks: LiveRunRenderCallbacks;
@@ -105,7 +122,7 @@ export function createLiveRunCard(
     cancelling: false,
     segments: [],
     activeTextSegment: null,
-    activeToolSegment: null,
+    activeToolPack: null,
     pendingFinalResult: null,
     pendingErrorText: null,
     callbacks,
@@ -121,6 +138,11 @@ function hideStatus(card: LiveRunCard): void {
 }
 
 function createTextSegment(card: LiveRunCard): TextSegment {
+  // A new text segment closes the prior tool pack so subsequent tools open
+  // a fresh pack *below* this text — preserving the "text → tools → text →
+  // tools" interleaving.
+  card.activeToolPack = null;
+
   const el = document.createElement('div');
   el.className = 'chat-live-segment chat-live-segment-text chat-msg-text chat-markdown chat-msg-streaming';
   card.timeline.appendChild(el);
@@ -204,16 +226,18 @@ export function markCancelling(taskId: string): void {
       seg.visibleLength = seg.buffer.length;
       seg.el.innerHTML = card.callbacks.renderMarkdown(seg.buffer);
       seg.el.classList.remove('chat-msg-streaming');
+    } else if (seg.kind === 'toolPack') {
+      for (const row of seg.rows) {
+        if (!row.active) continue;
+        row.active = false;
+        row.el.classList.remove('chat-live-tool-row-active');
+        row.el.classList.add('chat-live-tool-row-done');
+      }
+      seg.activeRowIndex = null;
     }
   }
   card.activeTextSegment = null;
-
-  if (card.activeToolSegment) {
-    card.activeToolSegment.el.classList.remove('chat-live-tool-row-active');
-    card.activeToolSegment.el.classList.add('chat-live-tool-row-done');
-    card.activeToolSegment.active = false;
-    card.activeToolSegment = null;
-  }
+  card.activeToolPack = null;
 
   card.status.className = 'chat-live-status chat-live-status-stopped';
   card.status.innerHTML = `<span class="chat-live-status-text">Stopped</span>`;
@@ -299,52 +323,130 @@ export function appendThought(_taskId: string, _text: string): void {
 
 // ─── Tool Activity ──────────────────────────────────────────────────────────
 
-function createToolRow(text: string): HTMLElement {
+function createToolRow(text: string, active: boolean): HTMLElement {
   const row = document.createElement('div');
-  row.className = 'chat-live-segment chat-live-segment-tool chat-live-tool-row chat-live-tool-row-active';
+  row.className = 'chat-live-tool-row ' + (active ? 'chat-live-tool-row-active' : 'chat-live-tool-row-done');
   row.innerHTML =
     `<span class="chat-live-tool-dot"></span>` +
     `<span class="chat-live-tool-text">${escapeHtml(text)}</span>`;
   return row;
 }
 
+function createToolPack(card: LiveRunCard): ToolPackSegment {
+  const el = document.createElement('div');
+  el.className = 'chat-live-segment chat-live-segment-tool-pack';
+
+  const header = document.createElement('div');
+  header.className = 'chat-live-tool-pack-header';
+  const label = document.createElement('span');
+  label.className = 'chat-live-tool-pack-label';
+  label.textContent = 'Tool calls';
+  const countEl = document.createElement('span');
+  countEl.className = 'chat-live-tool-pack-count';
+  countEl.textContent = '0';
+  header.appendChild(label);
+  header.appendChild(countEl);
+  el.appendChild(header);
+
+  const listEl = document.createElement('div');
+  listEl.className = 'chat-live-tool-pack-list';
+  el.appendChild(listEl);
+
+  card.timeline.appendChild(el);
+
+  const seg: ToolPackSegment = {
+    kind: 'toolPack',
+    el,
+    listEl,
+    countEl,
+    rows: [],
+    activeRowIndex: null,
+  };
+  card.segments.push(seg);
+  card.activeToolPack = seg;
+  return seg;
+}
+
+function getOrCreateActiveToolPack(card: LiveRunCard): ToolPackSegment {
+  if (card.activeToolPack) return card.activeToolPack;
+  return createToolPack(card);
+}
+
+function updateToolPackCount(pack: ToolPackSegment): void {
+  pack.countEl.textContent = String(pack.rows.length);
+}
+
+/** Has the user already scrolled up to inspect earlier rows? */
+function isListNearBottom(listEl: HTMLElement): boolean {
+  // 24px of slack so "near the last row" still counts as "at the bottom".
+  return (listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight) <= 24;
+}
+
+/**
+ * Scroll the pack's row list to the bottom so the latest activity is always
+ * in view. Uses `requestAnimationFrame` so the newly-appended row is
+ * guaranteed to be laid out before we read `scrollHeight`.
+ */
+function scrollToolPackToBottom(pack: ToolPackSegment): void {
+  window.requestAnimationFrame(() => {
+    pack.listEl.scrollTop = pack.listEl.scrollHeight;
+  });
+}
+
+function appendToolPackRow(card: LiveRunCard, text: string, active: boolean): { pack: ToolPackSegment; row: ToolRow } {
+  const pack = getOrCreateActiveToolPack(card);
+  // Capture whether the user is already near the bottom BEFORE we append so
+  // we only auto-follow when they haven't scrolled up to read earlier rows.
+  const wasNearBottom = isListNearBottom(pack.listEl);
+  const el = createToolRow(text, active);
+  pack.listEl.appendChild(el);
+  const row: ToolRow = { el, text, active };
+  pack.rows.push(row);
+  if (active) pack.activeRowIndex = pack.rows.length - 1;
+  updateToolPackCount(pack);
+  if (wasNearBottom) scrollToolPackToBottom(pack);
+  return { pack, row };
+}
+
 function renderToolStart(card: LiveRunCard, text: string): void {
   hideStatus(card);
-  // Close any in-flight text segment so this tool row inserts *below* the
+  // Close any in-flight text segment so this pack inserts *below* the
   // already-rendered descriptive text, not inside it.
   closeActiveTextSegment(card);
-  const row = createToolRow(text);
-  card.timeline.appendChild(row);
-  const seg: ToolSegment = { kind: 'tool', el: row, text, active: true };
-  card.segments.push(seg);
-  card.activeToolSegment = seg;
+  appendToolPackRow(card, text, true);
 }
 
 function renderToolDone(card: LiveRunCard, text: string): void {
-  const seg = card.activeToolSegment;
-  if (seg) {
-    seg.active = false;
-    seg.text = text;
-    seg.el.className = 'chat-live-segment chat-live-segment-tool chat-live-tool-row chat-live-tool-row-done';
-    const textEl = seg.el.querySelector('.chat-live-tool-text');
+  const pack = card.activeToolPack;
+  if (pack && pack.activeRowIndex !== null) {
+    const row = pack.rows[pack.activeRowIndex];
+    row.active = false;
+    row.text = text;
+    row.el.classList.remove('chat-live-tool-row-active');
+    row.el.classList.add('chat-live-tool-row-done');
+    const textEl = row.el.querySelector('.chat-live-tool-text');
     if (textEl) textEl.textContent = text;
-    card.activeToolSegment = null;
-  } else {
-    // No matching start — append a completed tool row in place.
-    closeActiveTextSegment(card);
-    const row = createToolRow(text);
-    row.className = 'chat-live-segment chat-live-segment-tool chat-live-tool-row chat-live-tool-row-done';
-    card.timeline.appendChild(row);
-    card.segments.push({ kind: 'tool', el: row, text, active: false });
+    pack.activeRowIndex = null;
+    // An in-place text change doesn't move the row, but its text may grow
+    // taller and push the bottom edge below the viewport — keep the latest
+    // row flush with the bottom if the user hadn't scrolled up.
+    if (isListNearBottom(pack.listEl)) scrollToolPackToBottom(pack);
+    return;
   }
+  // No matching active row — append a completed row into the current pack
+  // (opening one if needed).
+  closeActiveTextSegment(card);
+  appendToolPackRow(card, text, false);
 }
 
 function renderToolProgress(card: LiveRunCard, text: string): void {
-  const seg = card.activeToolSegment;
-  if (seg) {
-    seg.text = text;
-    const textEl = seg.el.querySelector('.chat-live-tool-text');
+  const pack = card.activeToolPack;
+  if (pack && pack.activeRowIndex !== null) {
+    const row = pack.rows[pack.activeRowIndex];
+    row.text = text;
+    const textEl = row.el.querySelector('.chat-live-tool-text');
     if (textEl) textEl.textContent = text;
+    if (isListNearBottom(pack.listEl)) scrollToolPackToBottom(pack);
   } else {
     renderToolStart(card, text);
   }
@@ -416,18 +518,23 @@ export function appendCodexItemProgress(taskId: string, progressData: string, it
 // ─── Final Result / Error ───────────────────────────────────────────────────
 
 function markTimelineDone(card: LiveRunCard): void {
-  // Flush any in-flight streaming segment to fully visible.
+  // Flush any in-flight streaming segment to fully visible, and mark any
+  // still-running tool row inside any pack as done.
   for (const seg of card.segments) {
     if (seg.kind === 'text') {
       finalizeTextSegment(card, seg);
-    } else if (seg.active) {
-      seg.active = false;
-      seg.el.classList.remove('chat-live-tool-row-active');
-      seg.el.classList.add('chat-live-tool-row-done');
+    } else {
+      for (const row of seg.rows) {
+        if (!row.active) continue;
+        row.active = false;
+        row.el.classList.remove('chat-live-tool-row-active');
+        row.el.classList.add('chat-live-tool-row-done');
+      }
+      seg.activeRowIndex = null;
     }
   }
   card.activeTextSegment = null;
-  card.activeToolSegment = null;
+  card.activeToolPack = null;
 }
 
 /**
@@ -440,7 +547,12 @@ function retractTimelineHistory(card: LiveRunCard, finalSeg: TextSegment | null)
   const historySegments = card.segments.filter(seg => seg !== finalSeg);
   if (historySegments.length === 0) return;
 
-  const toolCount = historySegments.filter(seg => seg.kind === 'tool').length;
+  let toolCount = 0;
+  let textCount = 0;
+  for (const seg of historySegments) {
+    if (seg.kind === 'toolPack') toolCount += seg.rows.length;
+    else textCount += 1;
+  }
 
   const details = document.createElement('details');
   details.className = 'chat-live-history';
@@ -448,8 +560,7 @@ function retractTimelineHistory(card: LiveRunCard, finalSeg: TextSegment | null)
   const summary = document.createElement('summary');
   summary.className = 'chat-live-history-summary';
   const labelBits: string[] = [];
-  if (toolCount > 0) labelBits.push(`${toolCount} tool${toolCount === 1 ? '' : 's'}`);
-  const textCount = historySegments.length - toolCount;
+  if (toolCount > 0) labelBits.push(`${toolCount} tool call${toolCount === 1 ? '' : 's'}`);
   if (textCount > 0) labelBits.push(`${textCount} thinking step${textCount === 1 ? '' : 's'}`);
   const label = labelBits.join(' · ') || 'steps';
   summary.innerHTML =
@@ -460,8 +571,8 @@ function retractTimelineHistory(card: LiveRunCard, finalSeg: TextSegment | null)
   const body = document.createElement('div');
   body.className = 'chat-live-history-body';
   // Move each history segment's DOM node into the disclosure body, preserving
-  // order. This keeps existing styling (tool pills still look like tool pills)
-  // without re-creating elements.
+  // order. Tool packs keep their own scrollable container, so even an
+  // expanded history stays bounded in height.
   for (const seg of historySegments) {
     body.appendChild(seg.el);
   }

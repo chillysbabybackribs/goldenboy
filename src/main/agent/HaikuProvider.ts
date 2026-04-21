@@ -41,6 +41,13 @@ function loadEnvValue(key: string): string | null {
   return null;
 }
 
+function loadPositiveIntEnvValue(key: string): number | null {
+  const raw = loadEnvValue(key);
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function textFromContent(content: Anthropic.Messages.ContentBlock[]): string {
   return content
     .filter((block): block is Anthropic.Messages.TextBlock => block.type === 'text')
@@ -60,6 +67,9 @@ const MODEL_STREAM_TIMEOUT_MS = 180_000;
 const FINAL_SYNTHESIS_TIMEOUT_MS = 120_000;
 const MAX_STREAM_RECOVERY_ATTEMPTS = 2;
 const MAX_CONVERSATION_TURNS = 10;
+const MAX_HAIKU_PER_CALL_TOKENS = 8_192;
+const MAX_HAIKU_CONTINUATION_CHUNKS = 2;
+const DEFAULT_HAIKU_TOTAL_OUTPUT_BUDGET = 12_288;
 const anthropicToolCache = new Map<string, Anthropic.Messages.Tool[]>();
 
 type AnthropicMessageStream = {
@@ -156,6 +166,32 @@ function mergeRecoveredContent(
   return [{ type: 'text', text: prefix, citations: null }, ...content];
 }
 
+function clampHaikuMaxTokens(value: number): number {
+  return Math.max(256, Math.min(Math.floor(value), MAX_HAIKU_PER_CALL_TOKENS));
+}
+
+function resolveRequestMaxTokens(requested: number | undefined, fallback: number): number {
+  if (typeof requested !== 'number' || !Number.isFinite(requested) || requested <= 0) {
+    return clampHaikuMaxTokens(fallback);
+  }
+  return clampHaikuMaxTokens(requested);
+}
+
+function mergeContinuationText(previous: string, next: string): string {
+  if (!previous) return next;
+  if (!next) return previous;
+  if (previous.endsWith(next)) return previous;
+  if (next.startsWith(previous)) return next;
+
+  const maxOverlap = Math.min(200, previous.length, next.length);
+  for (let size = maxOverlap; size >= 24; size--) {
+    if (previous.slice(-size) === next.slice(0, size)) {
+      return `${previous}${next.slice(size)}`;
+    }
+  }
+  return `${previous}${next}`;
+}
+
 async function finalMessageWithRecovery(
   createStream: (messages: Anthropic.Messages.MessageParam[]) => AnthropicMessageStream,
   messages: Anthropic.Messages.MessageParam[],
@@ -234,6 +270,7 @@ async function finalMessageWithRecovery(
 function buildAnthropicStream(
   client: Anthropic,
   modelId: string,
+  maxTokens: number,
   systemPrompt: string,
   messages: Anthropic.Messages.MessageParam[],
   tools: Anthropic.Messages.Tool[],
@@ -241,7 +278,7 @@ function buildAnthropicStream(
 ): AnthropicMessageStream {
   return client.messages.stream({
     model: modelId as Anthropic.Messages.MessageCreateParams['model'],
-    max_tokens: DEFAULT_HAIKU_CONFIG.maxTokens,
+    max_tokens: maxTokens,
     system: [
       {
         type: 'text',
@@ -388,6 +425,7 @@ function buildAnthropicTools(tools: AgentProviderRequest['tools']): Anthropic.Me
 export class HaikuProvider implements AgentProvider {
   readonly providerId = 'haiku';
   readonly modelId: string;
+  readonly maxTokens: number;
   readonly supportsAppToolExecutor = true;
 
   private readonly client: Anthropic;
@@ -399,7 +437,9 @@ export class HaikuProvider implements AgentProvider {
     return this.partialUsage;
   }
 
-  constructor(options: string | { apiKey?: string | null; modelId?: string | null } = loadEnvValue('ANTHROPIC_API_KEY') || '') {
+  constructor(
+    options: string | { apiKey?: string | null; modelId?: string | null; maxTokens?: number | null } = loadEnvValue('ANTHROPIC_API_KEY') || '',
+  ) {
     const apiKey = typeof options === 'string'
       ? options
       : (options.apiKey ?? loadEnvValue('ANTHROPIC_API_KEY') ?? '');
@@ -409,6 +449,10 @@ export class HaikuProvider implements AgentProvider {
 
     const requestedModelId = typeof options === 'string' ? null : options.modelId;
     this.modelId = requestedModelId?.trim() || loadEnvValue('ANTHROPIC_MODEL') || DEFAULT_HAIKU_CONFIG.modelId;
+    const requestedMaxTokens = typeof options === 'string' ? null : options.maxTokens;
+    this.maxTokens = requestedMaxTokens
+      ?? loadPositiveIntEnvValue('ANTHROPIC_MAX_TOKENS')
+      ?? DEFAULT_HAIKU_CONFIG.maxTokens;
     this.client = new Anthropic({ apiKey });
   }
 
@@ -441,6 +485,8 @@ export class HaikuProvider implements AgentProvider {
       };
     };
     const completedItems = new Map<string, CodexItem>();
+    const effectiveMaxTokens = resolveRequestMaxTokens(request.maxTokensOverride, this.maxTokens);
+    const totalOutputBudget = Math.max(effectiveMaxTokens, DEFAULT_HAIKU_TOTAL_OUTPUT_BUDGET);
     // Prior chat turns (if any) ride on real role-tagged messages so Haiku
     // sees actual multi-turn history instead of a markdown recap stuffed
     // inside the current user turn. This is the only continuity signal for
@@ -460,6 +506,8 @@ export class HaikuProvider implements AgentProvider {
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
     let finalOutput = '';
     let reachedToolTurnLimit = false;
+    let outputHitTokenLimit = false;
+    let continuationLimitReached = false;
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) {
         throw new Error('Task cancelled by user.');
@@ -477,6 +525,7 @@ export class HaikuProvider implements AgentProvider {
             const stream = buildAnthropicStream(
               this.client,
               this.modelId,
+              effectiveMaxTokens,
               request.systemPrompt,
               slidingWindowMessages(turnMessages, MAX_CONVERSATION_TURNS),
               tools,
@@ -514,14 +563,106 @@ export class HaikuProvider implements AgentProvider {
       snapshotPartial();
       const mergedContent = mergeRecoveredContent(recoveredTextPrefix, response.content);
       finalOutput = mergeRecoveredText(recoveredTextPrefix, textFromContent(response.content));
+      outputHitTokenLimit = response.stop_reason === 'max_tokens';
 
       const toolUses = mergedContent.filter(
         (block): block is Anthropic.Messages.ToolUseBlock => block.type === 'tool_use',
       );
 
       if (toolUses.length === 0) {
-        if (request.onToken && turnTextBuffer) {
-          request.onToken(turnTextBuffer);
+        if (turnTextBuffer) {
+          request.onToken?.(turnTextBuffer);
+        }
+        if (outputHitTokenLimit) {
+          messages.push({
+            role: 'assistant',
+            content: mergedContent as Anthropic.Messages.ContentBlockParam[],
+          });
+
+          let continuationChunks = 0;
+          while (
+            outputHitTokenLimit
+            && continuationChunks < MAX_HAIKU_CONTINUATION_CHUNKS
+            && outputTokens < totalOutputBudget
+          ) {
+            if (this.aborted) throw new Error('Task cancelled by user.');
+
+            const remainingBudget = totalOutputBudget - outputTokens;
+            const continuationMaxTokens = clampHaikuMaxTokens(Math.min(effectiveMaxTokens, remainingBudget));
+            if (continuationMaxTokens <= 0) break;
+
+            continuationChunks += 1;
+            messages.push({
+              role: 'user',
+              content: 'Continue exactly where you left off. Do not repeat prior text. Do not restart the answer. Finish the response directly.',
+            });
+            request.onStatus?.(
+              `response-continue:${continuationChunks} requesting more output (${continuationMaxTokens} max_tokens chunk)`,
+            );
+
+            let continuationResponse: Anthropic.Messages.Message;
+            let continuationRecoveredTextPrefix = '';
+            try {
+              const continuationResult = await finalMessageWithRecovery(
+                (turnMessages) => {
+                  const stream = buildAnthropicStream(
+                    this.client,
+                    this.modelId,
+                    continuationMaxTokens,
+                    request.systemPrompt,
+                    slidingWindowMessages(turnMessages, MAX_CONVERSATION_TURNS),
+                    [],
+                    { type: 'none' },
+                  );
+                  this.activeStream = stream;
+                  return stream;
+                },
+                messages,
+                FINAL_SYNTHESIS_TIMEOUT_MS,
+                `Continuation synthesis timed out after ${FINAL_SYNTHESIS_TIMEOUT_MS / 1000}s`,
+                (text) => {
+                  request.onToken?.(text);
+                },
+                isHaiku45Model(this.modelId),
+                (attempt, recoveredText) => {
+                  request.onStatus?.(
+                    `stream-recover:${attempt} resumed continuation (${recoveredText.length} chars)`,
+                  );
+                },
+              );
+              continuationResponse = continuationResult.response;
+              continuationRecoveredTextPrefix = continuationResult.recoveredTextPrefix;
+            } catch (err) {
+              this.activeStream = null;
+              if (this.aborted) throw new Error('Task cancelled by user.');
+              throw err;
+            }
+            this.activeStream = null;
+
+            inputTokens += continuationResponse.usage.input_tokens;
+            outputTokens += continuationResponse.usage.output_tokens;
+            cachedInputTokens += readCacheReadTokens(continuationResponse.usage);
+            cacheCreationInputTokens += readCacheCreationTokens(continuationResponse.usage);
+            snapshotPartial();
+
+            const continuationContent = mergeRecoveredContent(
+              continuationRecoveredTextPrefix,
+              continuationResponse.content,
+            );
+            const continuationText = mergeRecoveredText(
+              continuationRecoveredTextPrefix,
+              textFromContent(continuationResponse.content),
+            );
+            finalOutput = mergeContinuationText(finalOutput, continuationText);
+            outputHitTokenLimit = continuationResponse.stop_reason === 'max_tokens';
+
+            messages.push({
+              role: 'assistant',
+              content: continuationContent as Anthropic.Messages.ContentBlockParam[],
+            });
+          }
+
+          continuationLimitReached = outputHitTokenLimit;
         }
         break;
       }
@@ -602,6 +743,7 @@ export class HaikuProvider implements AgentProvider {
           const stream = buildAnthropicStream(
             this.client,
             this.modelId,
+            effectiveMaxTokens,
             request.systemPrompt,
             slidingWindowMessages(turnMessages, MAX_CONVERSATION_TURNS),
             tools,
@@ -634,6 +776,7 @@ export class HaikuProvider implements AgentProvider {
         streamResult.recoveredTextPrefix,
         textFromContent(synthesisResponse.content),
       );
+      outputHitTokenLimit = synthesisResponse.stop_reason === 'max_tokens';
     }
 
     const finalItem = publishProviderFinalOutput({
@@ -649,6 +792,11 @@ export class HaikuProvider implements AgentProvider {
     return {
       output: finalItem.text,
       codexItems: Array.from(completedItems.values()),
+      completion: continuationLimitReached
+        ? { completed: false, reason: 'budget_exhausted', canContinue: true }
+        : outputHitTokenLimit
+          ? { completed: false, reason: 'max_tokens', canContinue: true }
+          : undefined,
       usage: {
         inputTokens,
         outputTokens,

@@ -317,6 +317,7 @@ export class GeminiProvider implements AgentProvider {
 
     let finalOutput = '';
     let reachedToolTurnLimit = false;
+    let completion: AgentProviderResult['completion'] | undefined;
 
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
@@ -375,6 +376,15 @@ export class GeminiProvider implements AgentProvider {
 
       const toolCalls = functionCallsFromParts(modelContent.parts);
       assertUsableCandidate(candidate, turnText, toolCalls);
+      if (candidate?.finishReason === 'MAX_TOKENS' && toolCalls.length === 0 && turnText.trim()) {
+        completion = {
+          completed: false,
+          reason: 'max_tokens',
+          canContinue: true,
+        };
+      } else if (toolCalls.length === 0) {
+        completion = undefined;
+      }
       liveContents.push({
         role: 'model',
         parts: modelContent.parts || [],
@@ -474,6 +484,9 @@ export class GeminiProvider implements AgentProvider {
       snapshotPartial();
       assertUsableCandidate(synthesis.candidates?.[0], extractGeminiText(synthesis), []);
       finalOutput = extractGeminiText(synthesis) || finalOutput;
+      completion = synthesis.candidates?.[0]?.finishReason === 'MAX_TOKENS'
+        ? { completed: false, reason: 'max_tokens', canContinue: true }
+        : undefined;
     }
 
     // Gemini's REST API has no delta streaming, so emit the final text as a
@@ -493,6 +506,7 @@ export class GeminiProvider implements AgentProvider {
     return {
       output: finalItem.text,
       codexItems: [...completedItems.values(), finalItem],
+      completion,
       usage: {
         inputTokens,
         cachedInputTokens,

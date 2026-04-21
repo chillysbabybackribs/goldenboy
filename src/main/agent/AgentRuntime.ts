@@ -129,6 +129,7 @@ export class AgentRuntime {
         contextPrompt,
         priorTurns: config.priorTurns,
         maxToolTurns: config.maxToolTurns,
+        maxTokensOverride: config.maxTokensOverride,
         toolScope,
         tools: listActiveTools(toolScope),
         attachments: config.attachments,

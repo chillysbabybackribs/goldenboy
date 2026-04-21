@@ -19,7 +19,7 @@ import { appStateStore } from '../state/appStateStore';
 import { eventBus } from '../events/eventBus';
 import { AppEventType } from '../../shared/types/events';
 import { generateId } from '../../shared/utils/ids';
-import { AgentProvider, AgentToolName } from './AgentTypes';
+import { AgentProvider, AgentProviderResult, AgentToolName } from './AgentTypes';
 import { AgentRuntime, readPartialUsageFromError } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
 import { GeminiProvider } from './GeminiProvider';
@@ -141,6 +141,34 @@ function summarizeOrchestrationMilestone(output: string): string {
   const selected = important.length > 0 ? important : lines.slice(0, 3);
   const compact = selected.join(' | ').replace(/\s+/g, ' ').trim();
   return compact.length > 400 ? `${compact.slice(0, 400)}...` : compact;
+}
+
+function mergeContinuationText(previous: string, next: string): string {
+  if (!previous) return next;
+  if (!next) return previous;
+  if (previous.endsWith(next)) return previous;
+  if (next.startsWith(previous)) return next;
+
+  const maxOverlap = Math.min(400, previous.length, next.length);
+  for (let size = maxOverlap; size >= 24; size--) {
+    if (previous.slice(-size) === next.slice(0, size)) {
+      return `${previous}${next.slice(size)}`;
+    }
+  }
+  return `${previous}${next}`;
+}
+
+function mergeUsage(
+  left?: AgentProviderResult['usage'] | null,
+  right?: AgentProviderResult['usage'] | null,
+): AgentProviderResult['usage'] {
+  return {
+    inputTokens: (left?.inputTokens ?? 0) + (right?.inputTokens ?? 0),
+    outputTokens: (left?.outputTokens ?? 0) + (right?.outputTokens ?? 0),
+    cachedInputTokens: (left?.cachedInputTokens ?? 0) + (right?.cachedInputTokens ?? 0),
+    cacheCreationInputTokens: (left?.cacheCreationInputTokens ?? 0) + (right?.cacheCreationInputTokens ?? 0),
+    durationMs: (left?.durationMs ?? 0) + (right?.durationMs ?? 0),
+  };
 }
 
 function buildInitialPlanMetadata(prompt: string): TaskPlanMetadata {
@@ -464,6 +492,7 @@ class AgentModelService {
         priorTurns,
         systemPromptAddendum: options?.systemPrompt,
         allowedTools: withDocumentAttachmentTools(runtimeScope.allowedTools, options?.attachments),
+        maxTokensOverride: options?.maxTokensOverride,
         attachments: options?.attachments,
         onToken: (text) => {
           this.emitProgress({
@@ -495,28 +524,35 @@ class AgentModelService {
           });
         },
       });
+      this.recordInvocationUsage(taskId, providerId, response.usage);
+      const finalizedResponse = await this.finishIncompleteResponse({
+        taskId,
+        prompt,
+        primaryProviderId: providerId,
+        response,
+        maxTokensOverride: options?.maxTokensOverride,
+      });
 
       const result: InvocationResult = {
         taskId,
         providerId,
         success: true,
         status: 'completed',
-        output: response.output,
+        output: finalizedResponse.output,
         artifacts: [],
-        codexItems: response.codexItems,
-        usage: response.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
+        codexItems: finalizedResponse.codexItems,
+        usage: finalizedResponse.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
       };
 
-      chatKnowledgeStore.recordAssistantMessage(taskId, response.output, providerId);
+      chatKnowledgeStore.recordAssistantMessage(taskId, finalizedResponse.output, providerId);
       taskMemoryStore.recordInvocationResult(result);
       if (taskProfile.kind === 'orchestration') {
         taskMemoryStore.recordPlan(
           taskId,
-          `Parent completed orchestration turn | ${summarizeOrchestrationMilestone(response.output)}`,
-          buildParentTurnPlanMetadata(response.output, providerId, 'parent-turn-complete'),
+          `Parent completed orchestration turn | ${summarizeOrchestrationMilestone(finalizedResponse.output)}`,
+          buildParentTurnPlanMetadata(finalizedResponse.output, providerId, 'parent-turn-complete'),
         );
       }
-      this.recordInvocationUsage(taskId, providerId, response.usage);
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
         taskId,
@@ -533,7 +569,7 @@ class AgentModelService {
         prompt,
         taskKind: taskProfile.kind,
         primaryProviderId: providerId,
-        fastAnswer: response.output,
+        fastAnswer: finalizedResponse.output,
       });
       return result;
     } catch (err) {
@@ -1017,6 +1053,114 @@ class AgentModelService {
       const message = err instanceof Error ? err.message : String(err);
       this.log(providerId, 'warn', `Browser search prewarm skipped: ${message}`, taskId);
     }
+  }
+
+  private async finishIncompleteResponse(input: {
+    taskId: string;
+    prompt: string;
+    primaryProviderId: ProviderId;
+    response: AgentProviderResult;
+    maxTokensOverride?: number;
+  }): Promise<AgentProviderResult> {
+    let combined = input.response;
+    if (combined.completion?.completed !== false || !combined.completion.canContinue) {
+      return combined;
+    }
+
+    const providerOrder: ProviderId[] = [
+      input.primaryProviderId,
+      ...[PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID].filter(
+        (providerId) => providerId !== input.primaryProviderId && this.providers.has(providerId),
+      ),
+    ];
+
+    for (const providerId of providerOrder) {
+      if (!this.providers.has(providerId)) continue;
+
+      const continuationTask = this.createTaskInvocation(providerId);
+      try {
+        this.emitProgress({
+          taskId: input.taskId,
+          providerId,
+          type: 'status',
+          data: providerId === input.primaryProviderId
+            ? 'Finishing the response after the model hit its output limit.'
+            : `Finishing the response with ${providerId} after the previous model hit its output limit.`,
+          timestamp: Date.now(),
+        });
+
+        const continuation = await continuationTask.runtime.run({
+          mode: 'unrestricted-dev',
+          agentId: providerId,
+          role: 'secondary',
+          taskId: input.taskId,
+          task: 'Continue the assistant response exactly where it stopped. Do not restart, summarize, or repeat prior text. Finish the response directly.',
+          contextPrompt: buildContextPrompt([
+            '## Original User Request',
+            input.prompt.trim(),
+            '',
+            '## Partial Assistant Response',
+            combined.output.trim(),
+          ]),
+          priorTurns: [
+            { role: 'user', content: input.prompt.trim() },
+            { role: 'assistant', content: combined.output },
+          ],
+          allowedTools: [],
+          canSpawnSubagents: false,
+          maxToolTurns: 1,
+          maxTokensOverride: input.maxTokensOverride,
+          onToken: (text) => {
+            this.emitProgress({
+              taskId: input.taskId,
+              providerId,
+              type: 'token',
+              data: text,
+              timestamp: Date.now(),
+            });
+          },
+          onStatus: (status) => {
+            this.emitProgress({
+              taskId: input.taskId,
+              providerId,
+              type: 'status',
+              data: status,
+              timestamp: Date.now(),
+            });
+          },
+          onItem: ({ item, eventType }) => {
+            if (item.type === 'agent_message') return;
+            this.emitProgress({
+              taskId: input.taskId,
+              providerId,
+              type: 'item',
+              data: eventType,
+              codexItem: item,
+              timestamp: Date.now(),
+            });
+          },
+        });
+
+        this.recordInvocationUsage(input.taskId, providerId, continuation.usage);
+        combined = {
+          output: mergeContinuationText(combined.output, continuation.output),
+          codexItems: [...(combined.codexItems || []), ...(continuation.codexItems || [])],
+          usage: mergeUsage(combined.usage, continuation.usage),
+          completion: continuation.completion,
+        };
+
+        if (combined.completion?.completed !== false || !combined.completion?.canContinue) {
+          return combined;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log(providerId, 'warn', `Continuation attempt failed: ${message}`, input.taskId);
+      } finally {
+        await this.disposeTaskInvocation(continuationTask, providerId, input.taskId);
+      }
+    }
+
+    return combined;
   }
 
   private queueBackgroundResearchSynthesis(input: {

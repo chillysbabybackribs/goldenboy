@@ -123,6 +123,7 @@ export type AgentInvocationOptions = {
   taskProfile?: AgentTaskProfileOverride;
   attachments?: InvocationAttachment[];
   displayPrompt?: string;
+  maxTokensOverride?: number;
 };
 
 // ─── Codex CLI Event Types (from `codex exec --json`) ─────────────────────

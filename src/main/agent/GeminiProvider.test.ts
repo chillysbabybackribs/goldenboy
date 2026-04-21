@@ -218,6 +218,48 @@ describe('GeminiProvider', () => {
     expect(requestBody.generationConfig?.thinkingConfig?.thinkingBudget).toBe(-1);
   });
 
+  it('marks usable MAX_TOKENS Gemini output as incomplete so a higher layer can continue it', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    requestMock.mockImplementation((_options: unknown, callback: (response: EventEmitter & { statusCode?: number }) => void) => {
+      const response = new EventEmitter() as EventEmitter & { statusCode?: number };
+      response.statusCode = 200;
+      callback(response);
+      queueMicrotask(() => {
+        response.emit('data', Buffer.from(JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [{ text: 'Gemini partial answer.' }],
+              },
+              finishReason: 'MAX_TOKENS',
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 12,
+            candidatesTokenCount: 5,
+          },
+        })));
+        response.emit('end');
+      });
+      return {
+        on: vi.fn().mockReturnThis(),
+        write: vi.fn(),
+        end: vi.fn(),
+      };
+    });
+
+    const provider = new GeminiProvider();
+    const result = await provider.invoke(buildRequest());
+
+    expect(result.output).toBe('Gemini partial answer.');
+    expect(result.completion).toEqual({
+      completed: false,
+      reason: 'max_tokens',
+      canContinue: true,
+    });
+  });
+
   it('reuses cached Gemini prefix content for repeated generation calls', async () => {
     process.env.GEMINI_API_KEY = 'test-key';
     const writes: string[] = [];

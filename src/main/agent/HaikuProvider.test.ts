@@ -55,6 +55,35 @@ function createTextOnlyStream(text: string, usage = { input_tokens: 10, output_t
       return {
         usage,
         content: [{ type: 'text', text }],
+        stop_reason: 'end_turn',
+      };
+    },
+  };
+}
+
+function createTextOnlyStreamWithStopReason(
+  text: string,
+  stopReason: string,
+  usage = { input_tokens: 10, output_tokens: 4 },
+) {
+  const handlers = new Map<string, Array<(value: string) => void>>();
+  return {
+    on(event: string, callback: (value: string) => void) {
+      handlers.set(event, [...(handlers.get(event) || []), callback]);
+      return this;
+    },
+    abort: vi.fn(),
+    async finalMessage() {
+      for (const callback of handlers.get('streamEvent') || []) {
+        callback({ type: 'content_block_delta' }, { content: [{ type: 'text', text }] });
+      }
+      for (const callback of handlers.get('text') || []) {
+        callback(text);
+      }
+      return {
+        usage,
+        content: [{ type: 'text', text }],
+        stop_reason: stopReason,
       };
     },
   };
@@ -161,6 +190,36 @@ describe('HaikuProvider', () => {
     process.env.ANTHROPIC_API_KEY = 'test-key';
     const provider = new HaikuProvider({ modelId: 'claude-opus-4-7-20260401' });
     expect(provider.modelId).toBe('claude-opus-4-7-20260401');
+  });
+
+  it('accepts an explicit max token override', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    streamMock.mockReturnValue(createTextOnlyStream('Hello from Haiku.'));
+
+    const provider = new HaikuProvider({ maxTokens: 8192 });
+    await provider.invoke(buildRequest());
+
+    expect(streamMock.mock.calls[0]?.[0]?.max_tokens).toBe(8192);
+  });
+
+  it('passes maxTokensOverride from the provider request with a safe cap', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    streamMock.mockReturnValue(createTextOnlyStream('Hello from Haiku.'));
+
+    const provider = new HaikuProvider({ maxTokens: 4096 });
+    await provider.invoke(buildRequest({ maxTokensOverride: 6000 }));
+
+    expect(streamMock.mock.calls[0]?.[0]?.max_tokens).toBe(6000);
+  });
+
+  it('clamps per-run maxTokensOverride to the Haiku safety ceiling', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    streamMock.mockReturnValue(createTextOnlyStream('Hello from Haiku.'));
+
+    const provider = new HaikuProvider({ maxTokens: 4096 });
+    await provider.invoke(buildRequest({ maxTokensOverride: 50000 }));
+
+    expect(streamMock.mock.calls[0]?.[0]?.max_tokens).toBe(8192);
   });
 
   it('returns a final response when the model answers without tool calls', async () => {
@@ -341,6 +400,57 @@ describe('HaikuProvider', () => {
     ]);
     expect(statuses).toContain('stream-recover:1 resumed after interruption (14 chars)');
     expect(result.output).toBe('Partial answer continued.');
+  });
+
+  it('marks text responses as incomplete when Anthropic stops on max_tokens', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    streamMock.mockReturnValue(createTextOnlyStreamWithStopReason('Long answer', 'max_tokens'));
+
+    const provider = new HaikuProvider({ maxTokens: 4096 });
+    const result = await provider.invoke(buildRequest());
+
+    expect(result.output).toContain('Long answer');
+    expect(result.completion).toEqual({
+      completed: false,
+      reason: 'budget_exhausted',
+      canContinue: true,
+    });
+  });
+
+  it('auto-continues text responses that stop on max_tokens within the bounded budget', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    streamMock
+      .mockReturnValueOnce(createTextOnlyStreamWithStopReason('Long answer part 1 ', 'max_tokens', {
+        input_tokens: 10,
+        output_tokens: 4096,
+      }))
+      .mockReturnValueOnce(createTextOnlyStreamWithStopReason('part 2', 'end_turn', {
+        input_tokens: 5,
+        output_tokens: 100,
+      }));
+
+    const statuses: string[] = [];
+    const tokens: string[] = [];
+    const provider = new HaikuProvider({ maxTokens: 4096 });
+    const result = await provider.invoke(buildRequest({
+      onStatus: (status) => {
+        statuses.push(status);
+      },
+      onToken: (text) => {
+        tokens.push(text);
+      },
+    }));
+
+    expect(streamMock).toHaveBeenCalledTimes(2);
+    expect(streamMock.mock.calls[1]?.[0]?.messages.slice(0, 3)).toEqual([
+      { role: 'user', content: 'Summarize the result.' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Long answer part 1 ' }] },
+      { role: 'user', content: 'Continue exactly where you left off. Do not repeat prior text. Do not restart the answer. Finish the response directly.' },
+    ]);
+    expect(statuses).toContain('response-continue:1 requesting more output (4096 max_tokens chunk)');
+    expect(result.output).toBe('Long answer part 1 part 2');
+    expect(tokens).toEqual(['Long answer part 1 ', 'part 2']);
+    expect(result.completion).toBeUndefined();
   });
 
   it('does not retry non-text partial streams because tool/thinking blocks are not resumable', async () => {

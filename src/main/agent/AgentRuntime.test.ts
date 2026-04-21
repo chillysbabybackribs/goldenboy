@@ -246,6 +246,37 @@ describe('AgentRuntime', () => {
     }));
   });
 
+  it('forwards maxTokensOverride to the provider request', async () => {
+    const provider = {
+      requests: [] as AgentProviderRequest[],
+      async invoke(request: AgentProviderRequest) {
+        this.requests.push(request);
+        return {
+          output: 'ok',
+          usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            durationMs: 1,
+          },
+        };
+      },
+    };
+
+    const runtime = new AgentRuntime(provider);
+    await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: 'Forward the per-run output budget.',
+      taskId: 'task-runtime-max-tokens',
+      allowedTools: [],
+      maxTokensOverride: 6000,
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].maxTokensOverride).toBe(6000);
+  });
+
   it('respects explicit allowedTools without exposing the rest of the registry', async () => {
     const filesystemList: AgentToolDefinition = {
       name: 'filesystem.list',

@@ -916,33 +916,103 @@
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-/* Tool rows inside the history body visually shrink slightly so the
+/* Text rows inside the history body visually shrink slightly so the
    disclosure doesn't dominate; the final answer below stays the hero. */
-.chat-live-history-body .chat-live-segment-tool {
-  margin: 0;
-}
-
 .chat-live-history-body .chat-live-segment-text {
   color: #7a7a74;
   font-style: italic;
   font-size: calc(13px * var(--cc-chat-zoom));
 }
 
-/* Tool rows slot into the timeline as self-contained pills so they read as
-   an explicit step between text segments. */
-.chat-live-segment-tool {
+/* Tool calls live inside a fixed-height, auto-scrolling "pack" so a long-
+   running task (dozens/hundreds of tool invocations) can't push the rest
+   of the chat offscreen. Each consecutive run of tools gets its own pack;
+   a new text segment closes the current pack and opens a fresh one below
+   it so the text → tools → text → tools interleaving is preserved. */
+.chat-live-segment-tool-pack {
   align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.02);
-  margin: 2px 0;
+  overflow: hidden;
+}
+
+.chat-live-tool-pack-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--cc-chat-zoom));
+  color: #7a7a74;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  flex-shrink: 0;
+}
+
+.chat-live-tool-pack-label {
+  opacity: 0.85;
+}
+
+.chat-live-tool-pack-count {
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #c8c8c4;
+  font-size: calc(10px * var(--cc-chat-zoom));
+  letter-spacing: 0;
+}
+
+.chat-live-tool-pack-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+.chat-live-tool-pack-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-live-tool-pack-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.chat-live-tool-pack-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* When the pack is inside the history disclosure after a turn completes,
+   let it grow naturally — the disclosure itself is what controls the
+   overall height, so removing the cap avoids a double scroll. */
+.chat-live-history-body .chat-live-segment-tool-pack {
+  max-height: none;
+  border: none;
+  background: transparent;
+}
+
+.chat-live-history-body .chat-live-tool-pack-header {
+  display: none;
+}
+
+.chat-live-history-body .chat-live-tool-pack-list {
+  overflow: visible;
+  padding: 0;
 }
 
 .chat-live-tool-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
+  padding: 5px 12px;
   font-family: var(--font-mono);
   font-size: calc(12px * var(--cc-chat-zoom));
   line-height: 1.4;
