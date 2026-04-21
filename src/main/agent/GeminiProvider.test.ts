@@ -30,7 +30,6 @@ function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProvi
     task: 'Summarize the result.',
     contextPrompt: '',
     tools: [],
-    loadableTools: [],
     maxToolTurns: 2,
     ...overrides,
   };
@@ -49,6 +48,12 @@ describe('GeminiProvider', () => {
 
   it('requires a Gemini API key', () => {
     expect(() => new GeminiProvider('')).toThrow('GEMINI_API_KEY is not configured.');
+  });
+
+  it('accepts an explicit model override', () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    const provider = new GeminiProvider({ modelId: 'gemini-2.5-pro' });
+    expect(provider.modelId).toBe('gemini-2.5-pro');
   });
 
   it('returns a final response when Gemini answers without tool calls', async () => {
@@ -94,7 +99,10 @@ describe('GeminiProvider', () => {
     }));
 
     expect(requestMock).toHaveBeenCalledTimes(1);
-    expect(tokens).toEqual([]);
+    // Gemini's REST API has no delta streaming, so the final text is emitted
+    // as a single `onToken` call. The renderer's typewriter reveals it
+    // progressively, matching the streaming UX of Haiku and Codex.
+    expect(tokens).toEqual(['Hello from Gemini.']);
     expect(itemEvents).toEqual(['item.completed']);
     expect(result).toEqual({
       output: 'Hello from Gemini.',
@@ -112,6 +120,47 @@ describe('GeminiProvider', () => {
         durationMs: expect.any(Number),
       },
     });
+  });
+
+  it('includes thoughtsTokenCount in the reported output token total', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    requestMock.mockImplementation((_options: unknown, callback: (response: EventEmitter & { statusCode?: number }) => void) => {
+      const response = new EventEmitter() as EventEmitter & { statusCode?: number };
+      response.statusCode = 200;
+      callback(response);
+      queueMicrotask(() => {
+        response.emit('data', Buffer.from(JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [{ text: 'Reasoned answer.' }],
+              },
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 50,
+            cachedContentTokenCount: 0,
+            candidatesTokenCount: 8,
+            thoughtsTokenCount: 42,
+          },
+        })));
+        response.emit('end');
+      });
+      return {
+        on: vi.fn().mockReturnThis(),
+        write: vi.fn(),
+        end: vi.fn(),
+      };
+    });
+
+    const provider = new GeminiProvider();
+    const result = await provider.invoke(buildRequest());
+
+    // Gemini bills thoughts as output; they must flow into the footer's
+    // "out" column instead of being silently dropped.
+    expect(result.usage?.outputTokens).toBe(50);
+    expect(result.usage?.inputTokens).toBe(50);
   });
 
   it('passes the routed thinking budget to Gemini generation requests', async () => {
@@ -452,184 +501,6 @@ describe('GeminiProvider', () => {
     );
   });
 
-  it('can load additional tools mid-run and use them on the next turn', async () => {
-    process.env.GEMINI_API_KEY = 'test-key';
-    const writes: string[] = [];
-    let callCount = 0;
-
-    requestMock.mockImplementation((_options: unknown, callback: (response: EventEmitter & { statusCode?: number }) => void) => {
-      callCount += 1;
-      const response = new EventEmitter() as EventEmitter & { statusCode?: number };
-      response.statusCode = 200;
-      callback(response);
-
-      queueMicrotask(() => {
-        if (callCount === 1) {
-          response.emit('data', Buffer.from(JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  role: 'model',
-                  parts: [{
-                    functionCall: {
-                      name: 'runtime__load_tools',
-                      args: { tools: ['filesystem.list'] },
-                    },
-                  }],
-                },
-                finishReason: 'STOP',
-              },
-            ],
-            usageMetadata: {
-              promptTokenCount: 10,
-              candidatesTokenCount: 5,
-            },
-          })));
-        } else if (callCount === 2) {
-          response.emit('data', Buffer.from(JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  role: 'model',
-                  parts: [{
-                    functionCall: {
-                      name: 'filesystem__list',
-                      args: { path: '.' },
-                    },
-                  }],
-                },
-                finishReason: 'STOP',
-              },
-            ],
-            usageMetadata: {
-              promptTokenCount: 10,
-              candidatesTokenCount: 5,
-            },
-          })));
-        } else {
-          response.emit('data', Buffer.from(JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  role: 'model',
-                  parts: [{ text: 'Expansion worked.' }],
-                },
-                finishReason: 'STOP',
-              },
-            ],
-            usageMetadata: {
-              promptTokenCount: 10,
-              candidatesTokenCount: 3,
-            },
-          })));
-        }
-        response.emit('end');
-      });
-
-      return {
-        on: vi.fn().mockReturnThis(),
-        write: vi.fn((payload: string) => {
-          writes.push(payload);
-        }),
-        end: vi.fn(),
-      };
-    });
-
-    const provider = new GeminiProvider();
-    const existingTools = agentToolExecutor.list();
-
-    try {
-      agentToolExecutor.register({
-        name: 'runtime.load_tools',
-        description: 'Load exact tools.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            tools: { type: 'array', items: { type: 'string' } },
-          },
-          required: ['tools'],
-        },
-        execute: async () => ({
-          summary: 'Loaded 1 tool',
-          data: { tools: ['filesystem.list'] },
-        }),
-      });
-      agentToolExecutor.register({
-        name: 'filesystem.list',
-        description: 'List a directory.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            path: { type: 'string' },
-          },
-          required: ['path'],
-        },
-        execute: async () => ({
-          summary: 'Listed files',
-          data: { entries: ['a.ts', 'b.ts'] },
-        }),
-      });
-      const result = await provider.invoke(buildRequest({
-        task: 'Load filesystem listing tools if needed, then inspect the workspace.',
-        tools: [
-          {
-            name: 'runtime.load_tools',
-            description: 'Load exact tools.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                tools: { type: 'array', items: { type: 'string' } },
-              },
-              required: ['tools'],
-            },
-          },
-        ],
-        loadableTools: [
-          {
-            name: 'runtime.load_tools',
-            description: 'Load exact tools.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                tools: { type: 'array', items: { type: 'string' } },
-              },
-              required: ['tools'],
-            },
-          },
-          {
-            name: 'filesystem.list',
-            description: 'List a directory.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                path: { type: 'string' },
-              },
-              required: ['path'],
-            },
-          },
-        ],
-        onItem: () => {},
-      }));
-
-      expect(callCount).toBe(3);
-      const firstBody = JSON.parse(writes[0]) as {
-        tools?: Array<{ functionDeclarations: Array<{ name: string }> }>;
-      };
-      const secondBody = JSON.parse(writes[1]) as {
-        tools?: Array<{ functionDeclarations: Array<{ name: string }> }>;
-      };
-      expect(firstBody.tools?.[0]?.functionDeclarations.map((item) => item.name)).toEqual(['runtime__load_tools']);
-      expect(secondBody.tools?.[0]?.functionDeclarations.map((item) => item.name)).toEqual(
-        expect.arrayContaining(['runtime__load_tools', 'filesystem__list']),
-      );
-      expect(result.output).toBe('Expansion worked.');
-    } finally {
-      for (const tool of existingTools) {
-        agentToolExecutor.register(tool);
-      }
-    }
-  });
-
   it('compacts older Gemini conversation turns into a rolling summary', async () => {
     process.env.GEMINI_API_KEY = 'test-key';
     const writes: string[] = [];
@@ -804,9 +675,9 @@ describe('routeGeminiModel', () => {
       contextPrompt: '',
       canUseTools: false,
     })).toEqual({
-      modelId: 'gemini-default',
-      reason: 'cheap-standard',
-      thinkingBudget: -1,
+      modelId: 'gemini-2.5-flash-lite',
+      reason: 'cheap-lite',
+      thinkingBudget: null,
     });
   });
 

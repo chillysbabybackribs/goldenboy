@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentProviderRequest } from './AgentTypes';
+import { agentToolExecutor } from './AgentToolExecutor';
 
 const { streamMock } = vi.hoisted(() => ({
   streamMock: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: () => '/tmp',
+  },
 }));
 
 vi.mock('@anthropic-ai/sdk', () => ({
@@ -109,6 +116,36 @@ function createNonResumableFailureStream(error: Error) {
   return stream;
 }
 
+function createToolUseStream(
+  content: Array<{ id: string; name: string; input: Record<string, unknown> }>,
+  usage = { input_tokens: 10, output_tokens: 4 },
+) {
+  const handlers = new Map<string, Array<(value: unknown, snapshot?: unknown) => void>>();
+  const stream = {
+    on(event: string, callback: (value: unknown, snapshot?: unknown) => void) {
+      handlers.set(event, [...(handlers.get(event) || []), callback]);
+      return stream;
+    },
+    abort: vi.fn(),
+    async finalMessage() {
+      const toolUseBlocks = content.map((item) => ({
+        type: 'tool_use',
+        id: item.id,
+        name: item.name,
+        input: item.input,
+      }));
+      for (const callback of handlers.get('streamEvent') || []) {
+        callback({ type: 'content_block_stop' }, { content: toolUseBlocks });
+      }
+      return {
+        usage,
+        content: toolUseBlocks,
+      };
+    },
+  };
+  return stream;
+}
+
 describe('HaikuProvider', () => {
   beforeEach(() => {
     streamMock.mockReset();
@@ -118,6 +155,12 @@ describe('HaikuProvider', () => {
 
   it('requires an Anthropic API key', () => {
     expect(() => new HaikuProvider('')).toThrow('ANTHROPIC_API_KEY is not configured.');
+  });
+
+  it('accepts an explicit model override', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    const provider = new HaikuProvider({ modelId: 'claude-opus-4-7-20260401' });
+    expect(provider.modelId).toBe('claude-opus-4-7-20260401');
   });
 
   it('returns a final response when the model answers without tool calls', async () => {
@@ -153,9 +196,123 @@ describe('HaikuProvider', () => {
       usage: {
         inputTokens: 10,
         outputTokens: 4,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
         durationMs: expect.any(Number),
       },
     });
+  });
+
+  it('prepends priorTurns as real role-tagged messages before the current user turn', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    streamMock.mockReturnValue(createTextOnlyStream('Continuation ack.'));
+
+    const provider = new HaikuProvider();
+    await provider.invoke(buildRequest({
+      task: 'What was my earlier question?',
+      priorTurns: [
+        { role: 'user', content: 'Explain the memory system.' },
+        { role: 'assistant', content: 'It caches chat turns on disk.' },
+      ],
+    }));
+
+    const messages = streamMock.mock.calls[0]?.[0]?.messages;
+    expect(messages).toEqual([
+      { role: 'user', content: 'Explain the memory system.' },
+      { role: 'assistant', content: 'It caches chat turns on disk.' },
+      { role: 'user', content: 'What was my earlier question?' },
+    ]);
+  });
+
+  it('drops a leading assistant prior-turn to satisfy Anthropic role-order invariants', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    streamMock.mockReturnValue(createTextOnlyStream('Continuation ack.'));
+
+    const provider = new HaikuProvider();
+    await provider.invoke(buildRequest({
+      task: 'Follow up.',
+      priorTurns: [
+        // Leading assistant turn with no user anchor must be dropped — a
+        // bare assistant-first history violates Anthropic's message-order
+        // rules and crashes the API call.
+        { role: 'assistant', content: 'Orphan assistant content.' },
+        { role: 'user', content: 'Earlier prompt.' },
+        { role: 'assistant', content: 'Earlier reply.' },
+      ],
+    }));
+
+    const messages = streamMock.mock.calls[0]?.[0]?.messages;
+    expect(messages).toEqual([
+      { role: 'user', content: 'Earlier prompt.' },
+      { role: 'assistant', content: 'Earlier reply.' },
+      { role: 'user', content: 'Follow up.' },
+    ]);
+  });
+
+  it('coalesces adjacent same-role prior turns so alternation is preserved', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    streamMock.mockReturnValue(createTextOnlyStream('Ack.'));
+
+    const provider = new HaikuProvider();
+    await provider.invoke(buildRequest({
+      task: 'And now?',
+      priorTurns: [
+        { role: 'user', content: 'Part one of the question.' },
+        { role: 'user', content: 'Part two of the same question.' },
+        { role: 'assistant', content: 'Combined answer.' },
+      ],
+    }));
+
+    const messages = streamMock.mock.calls[0]?.[0]?.messages;
+    expect(messages).toEqual([
+      {
+        role: 'user',
+        content: 'Part one of the question.\n\nPart two of the same question.',
+      },
+      { role: 'assistant', content: 'Combined answer.' },
+      { role: 'user', content: 'And now?' },
+    ]);
+  });
+
+  it('behaves exactly like today when priorTurns is omitted (no regression)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    streamMock.mockReturnValue(createTextOnlyStream('Ok.'));
+
+    const provider = new HaikuProvider();
+    await provider.invoke(buildRequest({ task: 'First turn.' }));
+
+    const messages = streamMock.mock.calls[0]?.[0]?.messages;
+    expect(messages).toEqual([{ role: 'user', content: 'First turn.' }]);
+  });
+
+  it('surfaces Anthropic prompt-cache read and creation token counts in the provider usage payload', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    streamMock.mockReturnValue(
+      createTextOnlyStream('cached-ok', {
+        input_tokens: 100,
+        output_tokens: 10,
+        cache_read_input_tokens: 80,
+        cache_creation_input_tokens: 15,
+      } as unknown as { input_tokens: number; output_tokens: number }),
+    );
+
+    const provider = new HaikuProvider();
+    const result = await provider.invoke(buildRequest());
+
+    expect(result.usage?.inputTokens).toBe(100);
+    expect(result.usage?.outputTokens).toBe(10);
+    expect(result.usage?.cachedInputTokens).toBe(80);
+    expect(result.usage?.cacheCreationInputTokens).toBe(15);
   });
 
   it('recovers interrupted text-only Haiku streams by prefilling the partial assistant text', async () => {
@@ -199,4 +356,5 @@ describe('HaikuProvider', () => {
     await expect(provider.invoke(buildRequest())).rejects.toThrow('connection lost');
     expect(streamMock).toHaveBeenCalledTimes(1);
   });
+
 });

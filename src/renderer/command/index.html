@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="../vendor/xterm.css">
   <link rel="stylesheet" href="command.css">
 </head>
 <body>
@@ -16,28 +17,15 @@
 
     <!-- Header — full width -->
     <header class="cc-header">
-      <span class="cc-header-title">Goldenboy</span>
-      <div class="cc-zoom-controls cc-header-zoom" aria-label="Chat zoom controls">
-        <button class="cc-zoom-btn" id="chatZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">−</button>
-        <button class="cc-zoom-btn cc-zoom-btn-reset" id="chatZoomResetBtn" type="button" title="Reset zoom" aria-label="Reset zoom">100%</button>
-        <button class="cc-zoom-btn" id="chatZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
-        <button class="cc-zoom-btn cc-browser-host-btn" id="commandBrowserAttachBtn" type="button" title="Move browser to command window" aria-label="Move browser to command window">Attach Browser</button>
-      </div>
-      <span class="cc-header-task" id="taskSummary" hidden></span>
-    </header>
-
-    <!-- Main area: agent sidebar + chat + browser -->
-    <div class="cc-main">
-
-      <!-- Agent tab sidebar — left edge, no background -->
-      <div class="cc-agent-sidebar-shell" id="agentTabsShell" hidden>
+      <div class="cc-header-left">
         <button
-          class="cc-agent-sidebar-toggle"
-          id="agentSidebarToggleBtn"
+          class="cc-header-agents-btn"
+          id="agentSidebarHeaderToggleBtn"
           type="button"
-          title="Expand agent sidebar"
-          aria-label="Expand agent sidebar"
+          title="Show agents"
+          aria-label="Show agents"
           aria-expanded="false"
+          hidden
         >
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2.5" y="2.5" width="11" height="11" rx="2"/>
@@ -45,9 +33,48 @@
             <path d="M9.5 6.25 7.25 8l2.25 1.75"/>
           </svg>
         </button>
+        <span class="cc-header-title">Goldenboy</span>
+      </div>
+      <div class="cc-zoom-controls cc-header-zoom" aria-label="Chat zoom controls">
+        <button class="cc-zoom-btn" id="chatZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+        <button class="cc-zoom-btn cc-zoom-btn-reset" id="chatZoomResetBtn" type="button" title="Reset zoom" aria-label="Reset zoom">100%</button>
+        <button class="cc-zoom-btn" id="chatZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+      </div>
+      <span class="cc-header-task" id="taskSummary" hidden></span>
+    </header>
+
+    <!-- Main area: agent sidebar + chat + browser -->
+    <div class="cc-main">
+
+      <!-- Agent tab sidebar — left edge, no background. Toggle lives in the window header. -->
+      <div class="cc-agent-sidebar-shell" id="agentTabsShell" hidden>
         <div class="cc-agent-sidebar" id="agentTabs">
-          <button class="cc-agent-tab-new" id="agentTabNewBtn" type="button" title="Launch new agent" aria-label="Launch new agent">+ New Agent</button>
+          <div class="cc-agent-sidebar-header">
+            <span class="cc-agent-sidebar-heading">Agents</span>
+          </div>
+          <button class="cc-agent-tab-new" id="agentTabNewBtn" type="button" title="Launch new agent" aria-label="Launch new agent">
+            <svg class="cc-agent-tab-new-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <path d="M8 3.5v9M3.5 8h9"/>
+            </svg>
+            <span>New agent</span>
+          </button>
           <div class="cc-agent-tabs-list" id="agentTabsList"></div>
+          <!-- Sticky footer — only rendered when the history list is expanded -->
+          <div class="cc-agent-sidebar-footer" id="agentSidebarFooter" hidden>
+            <button
+              class="cc-agent-sidebar-footer-btn"
+              id="agentSidebarCollapseMoreBtn"
+              type="button"
+              title="Collapse history"
+              aria-label="Collapse history"
+            >
+              <svg class="cc-agent-sidebar-footer-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 10l4-4 4 4"/>
+              </svg>
+              <span class="cc-agent-sidebar-footer-label">Collapse history</span>
+              <span class="cc-agent-sidebar-footer-count" id="agentSidebarFooterCount"></span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -85,6 +112,18 @@
           </div>
 
           <div class="cc-compose-shell">
+
+            <!-- Terminal popup — anchored above input box -->
+            <div class="cc-terminal-overlay" id="terminalOverlay" hidden>
+              <div class="cc-terminal-overlay-header">
+                <span class="cc-terminal-overlay-title">TERMINAL</span>
+                <span class="cc-terminal-overlay-meta" id="commandTerminalMeta"></span>
+                <span class="cc-terminal-overlay-status" id="commandTerminalStatus">Idle</span>
+                <button class="cc-terminal-overlay-action" id="commandTerminalRestartBtn" type="button" title="Restart terminal">Restart</button>
+                <button class="cc-terminal-overlay-action" id="commandTerminalCloseBtn" type="button">✕</button>
+              </div>
+              <div class="cc-terminal-overlay-surface" id="commandTerminalSurface"></div>
+            </div>
 
             <!-- Logs popup — anchored above input box -->
             <div class="cc-logs-overlay" id="logsOverlay" hidden>
@@ -145,8 +184,10 @@
                 <div class="cc-compose-actions">
                   <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
                   <div class="cc-compose-utility-actions">
-                    <button class="cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
-                    <button class="cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new chat" aria-label="Start a new chat" hidden>
+                    <button class="cc-compose-utility-btn cc-browser-host-btn" id="commandBrowserAttachBtn" type="button" title="Move browser to command window" aria-label="Move browser to command window">Attach</button>
+                    <button class="cc-compose-utility-btn cc-terminal-toggle-btn" id="commandTerminalBtn" type="button" title="Show terminal" aria-label="Show terminal" aria-expanded="false">Terminal</button>
+                    <button class="cc-compose-utility-btn cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
+                    <button class="cc-compose-utility-btn cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new chat" aria-label="Start a new chat" hidden>
                       New chat
                     </button>
                   </div>
@@ -188,11 +229,13 @@
       <span id="modelLabel">Codex</span>
       <span id="taskCount">tasks: 0</span>
       <span class="cc-status-token-group">
-        <span id="tokenStatusLabel">0 in / 0 out</span>
+        <span id="tokenStatusLabel"><span class="cc-token-total">0 total</span></span>
         <button class="cc-status-reset-btn" id="tokenUsageResetBtn" type="button" title="Reset token usage" aria-label="Reset token usage">Reset</button>
       </span>
     </div>
   </div>
+  <script src="../vendor/xterm.js"></script>
+  <script src="../vendor/addon-fit.js"></script>
   <script type="module" src="command.js"></script>
 </body>
 </html>

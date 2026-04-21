@@ -9,6 +9,12 @@ export type CachedPageChunk = {
   ordinal: number;
   tokenEstimate: number;
   createdAt: number;
+  /**
+   * Task id the cached chunk belongs to. Missing on pre-v2 entries loaded from
+   * disk, in which case the chunk is only returned by untyped/legacy searches
+   * (task-scoped search filters it out to avoid cross-task leakage).
+   */
+  taskId?: string;
 };
 
 export type CachedPageRecord = {
@@ -22,6 +28,8 @@ export type CachedPageRecord = {
   headings: string[];
   createdAt: number;
   updatedAt: number;
+  /** See {@link CachedPageChunk.taskId}. */
+  taskId?: string;
 };
 
 export type PageSearchResult = {

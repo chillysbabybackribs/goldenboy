@@ -209,11 +209,15 @@ function directoryPathFor(relativePath: string): string {
 export class FileKnowledgeStore {
   private files = new Map<string, CachedFileRecord>();
   private chunks = new Map<string, CachedFileChunk>();
+  private filePathIndex = new Map<string, string>();
+  private chunkOrdinalsByFileId = new Map<string, Map<number, string>>();
+  private chunkRangesByFileId = new Map<string, Array<{ startLine: number; endLine: number; chunkId: string }>>();
   private indexedAt: number | null = null;
   private searchCount = 0;
   private searchHitCount = 0;
   private searchMissCount = 0;
   private chunkReadCount = 0;
+  private saveUsageTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.load();
@@ -271,6 +275,7 @@ export class FileKnowledgeStore {
     this.files = nextFiles;
     this.chunks = nextChunks;
     this.indexedAt = indexedAt;
+    this.rebuildIndexes();
     this.save();
     return {
       indexedFiles: this.files.size,
@@ -501,6 +506,7 @@ export class FileKnowledgeStore {
     for (const record of matches) {
       this.deleteRecord(record);
     }
+    this.rebuildIndexes();
     this.save();
     return matches.length;
   }
@@ -551,14 +557,20 @@ export class FileKnowledgeStore {
         });
       }
       for (const chunk of parsed.chunks || []) this.chunks.set(chunk.id, chunk);
+      this.rebuildIndexes();
     } catch {
       this.files.clear();
       this.chunks.clear();
+      this.rebuildIndexes();
       this.indexedAt = null;
     }
   }
 
   private save(): void {
+    if (this.saveUsageTimer) {
+      clearTimeout(this.saveUsageTimer);
+      this.saveUsageTimer = null;
+    }
     const filePath = cachePath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const payload: CacheFile = {
@@ -581,7 +593,7 @@ export class FileKnowledgeStore {
     for (const filePath of uniquePaths) {
       this.touchRecordUsage(filePath, { searchHitCount: 1 }, false);
     }
-    if (uniquePaths.length > 0) this.save();
+    if (uniquePaths.length > 0) this.scheduleUsageSave();
   }
 
   private touchRecordUsage(
@@ -592,7 +604,15 @@ export class FileKnowledgeStore {
     const record = this.findRecordByPath(filePath);
     if (!record) return;
     record.usage = updateUsageStats(record.usage, { ...updates, timestamp: Date.now() });
-    if (persist) this.save();
+    if (persist) this.scheduleUsageSave();
+  }
+
+  private scheduleUsageSave(): void {
+    if (this.saveUsageTimer) return;
+    this.saveUsageTimer = setTimeout(() => {
+      this.saveUsageTimer = null;
+      this.save();
+    }, 250);
   }
 
   private computeDirectoryHeat(): DirectoryHeatRecord[] {
@@ -695,6 +715,7 @@ export class FileKnowledgeStore {
     if (existing) this.deleteRecord(existing);
     this.files.set(record.id, record);
     for (const chunk of chunks) this.chunks.set(chunk.id, chunk);
+    this.indexRecord(record, chunks);
     this.indexedAt = Date.now();
     this.save();
   }
@@ -702,14 +723,14 @@ export class FileKnowledgeStore {
   private deleteRecord(record: CachedFileRecord): void {
     this.files.delete(record.id);
     for (const chunkId of record.chunkIds) this.chunks.delete(chunkId);
+    this.filePathIndex.delete(normalizePathKey(record.path));
+    this.chunkOrdinalsByFileId.delete(record.id);
+    this.chunkRangesByFileId.delete(record.id);
   }
 
   private findRecordByPath(filePath: string): CachedFileRecord | null {
-    const normalizedPath = normalizePathKey(filePath);
-    for (const record of this.files.values()) {
-      if (normalizePathKey(record.path) === normalizedPath) return record;
-    }
-    return null;
+    const recordId = this.filePathIndex.get(normalizePathKey(filePath));
+    return recordId ? this.files.get(recordId) || null : null;
   }
 
   private findFreshRecordByPath(filePath: string): CachedFileRecord | null {
@@ -736,21 +757,19 @@ export class FileKnowledgeStore {
   }
 
   private findChunkForLine(record: CachedFileRecord, lineNumber: number): CachedFileChunk | null {
-    for (const chunkId of record.chunkIds) {
-      const chunk = this.chunks.get(chunkId);
-      if (chunk && lineNumber >= chunk.startLine && lineNumber <= chunk.endLine) {
-        return chunk;
+    const ranges = this.chunkRangesByFileId.get(record.id);
+    if (!ranges) return null;
+    for (const range of ranges) {
+      if (lineNumber >= range.startLine && lineNumber <= range.endLine) {
+        return this.chunks.get(range.chunkId) || null;
       }
     }
     return null;
   }
 
   private findChunkByOrdinal(record: CachedFileRecord, ordinal: number): CachedFileChunk | null {
-    for (const chunkId of record.chunkIds) {
-      const chunk = this.chunks.get(chunkId);
-      if (chunk && chunk.ordinal === ordinal) return chunk;
-    }
-    return null;
+    const chunkId = this.chunkOrdinalsByFileId.get(record.id)?.get(ordinal);
+    return chunkId ? this.chunks.get(chunkId) || null : null;
   }
 
   private selectChunksForWindow(
@@ -778,7 +797,7 @@ export class FileKnowledgeStore {
     const usage = normalizeUsageStats(record.usage);
     let score = 0;
     for (const term of terms) {
-      const matches = haystack.split(term).length - 1;
+      const matches = countOccurrences(haystack, term);
       score += matches;
       if (record.relativePath.toLowerCase().includes(term)) score += 4;
       if (summary.includes(term)) score += 3;
@@ -877,6 +896,35 @@ export class FileKnowledgeStore {
     }
     return matches;
   }
+
+  private rebuildIndexes(): void {
+    this.filePathIndex.clear();
+    this.chunkOrdinalsByFileId.clear();
+    this.chunkRangesByFileId.clear();
+    for (const record of this.files.values()) {
+      const chunks = record.chunkIds
+        .map(chunkId => this.chunks.get(chunkId))
+        .filter((chunk): chunk is CachedFileChunk => Boolean(chunk));
+      this.indexRecord(record, chunks);
+    }
+  }
+
+  private indexRecord(record: CachedFileRecord, chunks: CachedFileChunk[]): void {
+    this.filePathIndex.set(normalizePathKey(record.path), record.id);
+    const byOrdinal = new Map<number, string>();
+    const ranges: Array<{ startLine: number; endLine: number; chunkId: string }> = [];
+    for (const chunk of chunks) {
+      byOrdinal.set(chunk.ordinal, chunk.id);
+      ranges.push({
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+        chunkId: chunk.id,
+      });
+    }
+    ranges.sort((a, b) => a.startLine - b.startLine);
+    this.chunkOrdinalsByFileId.set(record.id, byOrdinal);
+    this.chunkRangesByFileId.set(record.id, ranges);
+  }
 }
 
 function walkIndexableFiles(root: string, limit: number): string[] {
@@ -931,6 +979,19 @@ function toSearchArg(filePath: string): string {
     return relative;
   }
   return filePath;
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let index = 0;
+  while (index < haystack.length) {
+    const matchIndex = haystack.indexOf(needle, index);
+    if (matchIndex === -1) break;
+    count += 1;
+    index = matchIndex + needle.length;
+  }
+  return count;
 }
 
 export const fileKnowledgeStore = new FileKnowledgeStore();

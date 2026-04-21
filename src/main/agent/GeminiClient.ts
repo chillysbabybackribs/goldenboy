@@ -32,6 +32,7 @@ export type GeminiGenerateResponse = {
     promptTokenCount?: number;
     cachedContentTokenCount?: number;
     candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
     totalTokenCount?: number;
   };
   error?: {

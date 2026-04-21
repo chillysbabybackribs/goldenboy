@@ -8,14 +8,40 @@ vi.mock('../browser/BrowserService', () => ({
   browserService: {
     executeInPage: vi.fn(),
     isCreated: vi.fn(() => true),
-    getTabs: vi.fn(() => []),
-    getState: vi.fn(() => ({ activeTabId: '', navigation: { url: '', title: '' } })),
+    getTabs: vi.fn(() => [
+      {
+        id: 'tab_1',
+        navigation: {
+          url: 'https://example.com',
+          title: 'Example',
+          canGoBack: false,
+          canGoForward: false,
+          isLoading: false,
+          loadingProgress: null,
+          favicon: '',
+          lastNavigationAt: null,
+        },
+        status: 'ready',
+        zoomLevel: 0,
+        muted: false,
+        isAudible: false,
+        createdAt: 1,
+      },
+    ]),
+    getState: vi.fn(() => ({ activeTabId: 'tab_1', navigation: { url: 'https://example.com', title: 'Example' } })),
   },
 }));
 
+const EXPECTED_TAB_ECHO = {
+  activeTabId: 'tab_1',
+  tabs: [
+    { id: 'tab_1', url: 'https://example.com', title: 'Example', isLoading: false },
+  ],
+};
+
 vi.mock('../browser/browserOperations', () => ({ executeBrowserOperation }));
 
-import { buildWaitForTextExpression, createBrowserToolDefinitions } from './tools/browserTools';
+import { buildWaitForTextExpression, createBrowserToolDefinitions } from './tools/browser';
 
 describe('buildWaitForTextExpression', () => {
   it('includes form control values in the page text probe', () => {
@@ -53,7 +79,7 @@ describe('createBrowserToolDefinitions', () => {
     });
     expect(result).toEqual({
       summary: 'Navigated to https://example.com',
-      data: { url: 'https://example.com' },
+      data: { url: 'https://example.com', ...EXPECTED_TAB_ECHO },
     });
   });
 
@@ -77,7 +103,7 @@ describe('createBrowserToolDefinitions', () => {
     });
     expect(result).toEqual({
       summary: 'Clicked: button.submit',
-      data: { selector: 'button.submit', result: { clicked: true } },
+      data: { selector: 'button.submit', result: { clicked: true }, ...EXPECTED_TAB_ECHO },
     });
   });
 
@@ -139,21 +165,22 @@ describe('createBrowserToolDefinitions', () => {
         selector: 'select.country',
         requested: { value: 'us', label: null, index: null },
         result: { selected: true, selectedValue: 'us', selectedLabel: 'United States', selectedIndex: 1 },
+        ...EXPECTED_TAB_ECHO,
       },
     });
   });
 
-  it('normalizes bare domains for browser.navigate_to', async () => {
+  it('normalizes bare domains when browser.navigate is called with normalize=true', async () => {
     executeBrowserOperation.mockResolvedValue({
       summary: 'Navigated to https://example.com',
       data: { url: 'https://example.com' },
     });
 
-    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.navigate_to');
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.navigate');
     expect(tool).toBeTruthy();
 
     const result = await tool!.execute(
-      { url: 'example' },
+      { url: 'example', normalize: true },
       { runId: 'run_3', agentId: 'agent_3', mode: 'unrestricted-dev' },
     );
 
@@ -167,48 +194,33 @@ describe('createBrowserToolDefinitions', () => {
         url: 'https://example.com',
         inputUrl: 'example',
         normalizedUrl: 'https://example.com',
+        ...EXPECTED_TAB_ECHO,
       },
     });
   });
 
-  it('reduces all tabs to one Google homepage tab for browser.close_all_tabs', async () => {
-    const { browserService } = await import('../browser/BrowserService');
-    vi.mocked(browserService.getTabs)
-      .mockReturnValueOnce([{ id: 'tab_1' }, { id: 'tab_2' }] as any)
-      .mockReturnValueOnce([{ id: 'tab_1' }, { id: 'tab_2' }] as any)
-      .mockReturnValueOnce([{ id: 'tab_1' }] as any);
-    vi.mocked(browserService.getState).mockReturnValue({
-      activeTabId: 'tab_1',
-      navigation: { url: 'https://www.google.com/', title: 'Google', isLoading: false },
-    } as any);
-    executeBrowserOperation
-      .mockResolvedValueOnce({ summary: 'Closed tab tab_2', data: {} })
-      .mockResolvedValueOnce({ summary: 'Activated tab tab_1', data: {} })
-      .mockResolvedValueOnce({ summary: 'Navigated to https://www.google.com/', data: { url: 'https://www.google.com/', title: 'Google' } });
+  it('echoes {activeTabId, tabs} on action tools so the model keeps a fresh cross-tab inventory without re-calling browser.tabs', async () => {
+    executeBrowserOperation.mockResolvedValue({
+      summary: 'Typed into input.search',
+      data: { selector: 'input.search', result: { typed: true } },
+    });
 
-    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.close_all_tabs');
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.type');
     expect(tool).toBeTruthy();
 
     const result = await tool!.execute(
-      {},
-      { runId: 'run_4', agentId: 'agent_4', mode: 'unrestricted-dev' },
+      { selector: 'input.search', text: 'hello' },
+      { runId: 'run_echo', agentId: 'agent_echo', mode: 'unrestricted-dev' },
     );
 
-    expect(executeBrowserOperation.mock.calls).toEqual([
-      [{ kind: 'browser.close-tab', payload: { tabId: 'tab_2' } }],
-      [{ kind: 'browser.activate-tab', payload: { tabId: 'tab_1' } }],
-      [{ kind: 'browser.navigate', payload: { url: 'https://www.google.com/' } }],
-    ]);
-    expect(result).toEqual({
-      summary: 'Closed 1 tab and reset the browser to Google',
-      data: {
-        tabIds: ['tab_2'],
-        activeTabId: 'tab_1',
-        tabs: [{ id: 'tab_1' }],
-        url: 'https://www.google.com/',
-        title: 'Google',
-        homepageUrl: 'https://www.google.com/',
-      },
+    expect(result.data).toMatchObject({
+      selector: 'input.search',
+      result: { typed: true },
+      activeTabId: 'tab_1',
     });
+    expect(Array.isArray(result.data.tabs)).toBe(true);
+    expect(result.data.tabs).toEqual([
+      { id: 'tab_1', url: 'https://example.com', title: 'Example', isLoading: false },
+    ]);
   });
 });

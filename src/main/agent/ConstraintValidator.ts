@@ -314,73 +314,6 @@ function checkBrowserActivatedTab(result: AgentToolResult, input: unknown): Cons
   };
 }
 
-function checkBrowserCloseAllTabs(result: AgentToolResult): ConstraintVerdict[] {
-  const tabs = Array.isArray(result.data.tabs) ? result.data.tabs : null;
-  const activeTabId = typeof result.data.activeTabId === 'string' ? result.data.activeTabId : '';
-  const actualUrl = typeof result.data.url === 'string' ? result.data.url : '';
-  const expectedUrl = typeof result.data.homepageUrl === 'string' ? result.data.homepageUrl : '';
-
-  if (!tabs || !activeTabId) {
-    return [{
-      name: 'single_homepage_tab',
-      status: 'UNKNOWN',
-      observed: 'missing post-action tab state or active tab id',
-      expected: 'exactly one active Google homepage tab',
-    }];
-  }
-
-  const activeTab = tabs.find((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).id === activeTabId) as Record<string, unknown> | undefined;
-  const observedUrl = actualUrl || (activeTab && typeof activeTab.navigation === 'object' && activeTab.navigation !== null
-    ? (activeTab.navigation as Record<string, unknown>).url as string | undefined
-    : undefined) || '';
-
-  const verdicts: ConstraintVerdict[] = [{
-    name: 'single_tab_remaining',
-    status: tabs.length === 1 ? 'PASS' : 'FAIL',
-    observed: `${tabs.length} tabs remain`,
-    expected: '1 tab remains',
-  }];
-
-  verdicts.push({
-    name: 'active_tab_consistent',
-    status: tabs.length === 1 && !!activeTab ? 'PASS' : 'FAIL',
-    observed: activeTab ? `active tab ${activeTabId} is present` : `active tab ${activeTabId || '<missing>'} not present in remaining tabs`,
-    expected: 'remaining tab is the active tab',
-  });
-
-  if (!observedUrl || !expectedUrl) {
-    verdicts.push({
-      name: 'homepage_target',
-      status: 'UNKNOWN',
-      observed: `observed=${observedUrl || '<missing>'}, expected=${expectedUrl || '<missing>'}`,
-      expected: 'Google homepage URL',
-    });
-    return verdicts;
-  }
-
-  try {
-    const observed = new URL(observedUrl);
-    const expected = new URL(expectedUrl);
-    const observedHost = observed.hostname.replace(/^www\./, '');
-    const expectedHost = expected.hostname.replace(/^www\./, '');
-    verdicts.push({
-      name: 'homepage_target',
-      status: observedHost === expectedHost ? 'PASS' : 'FAIL',
-      observed: observedUrl,
-      expected: expectedUrl,
-    });
-  } catch {
-    verdicts.push({
-      name: 'homepage_target',
-      status: 'UNKNOWN',
-      observed: `unparseable URL observed=${observedUrl}`,
-      expected: expectedUrl,
-    });
-  }
-
-  return verdicts;
-}
-
 function checkBrowserNavigateTo(result: AgentToolResult): ConstraintVerdict | null {
   const actualUrl = typeof result.data.url === 'string' ? result.data.url : '';
   const normalizedUrl = typeof result.data.normalizedUrl === 'string' ? result.data.normalizedUrl : '';
@@ -581,16 +514,13 @@ const TERMINAL_EXEC_CONSTRAINTS: ConstraintExtractor = (result, input) => {
 
 const BROWSER_NAVIGATE_CONSTRAINTS: ConstraintExtractor = (result, input) => {
   const verdicts: ConstraintVerdict[] = [];
-
+  const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+  if (obj.normalize === true) {
+    const normalizedCheck = checkBrowserNavigateTo(result);
+    if (normalizedCheck) verdicts.push(normalizedCheck);
+    return verdicts;
+  }
   const navCheck = checkBrowserNavigationTarget(result, input);
-  if (navCheck) verdicts.push(navCheck);
-
-  return verdicts;
-};
-
-const BROWSER_NAVIGATE_TO_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
-  const verdicts: ConstraintVerdict[] = [];
-  const navCheck = checkBrowserNavigateTo(result);
   if (navCheck) verdicts.push(navCheck);
   return verdicts;
 };
@@ -625,10 +555,6 @@ const BROWSER_ACTIVATE_TAB_CONSTRAINTS: ConstraintExtractor = (result, input) =>
   return verdicts;
 };
 
-const BROWSER_CLOSE_ALL_TABS_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
-  return checkBrowserCloseAllTabs(result);
-};
-
 const BROWSER_GET_ELEMENT_STATE_CONSTRAINTS: ConstraintExtractor = (result, input) => {
   const verdicts: ConstraintVerdict[] = [];
   const stateCheck = checkBrowserElementState(result, input);
@@ -644,11 +570,9 @@ const BROWSER_SELECT_OPTION_CONSTRAINTS: ConstraintExtractor = (result, input) =
 const TOOL_CONSTRAINTS = new Map<AgentToolName, ConstraintExtractor>([
   ['terminal.exec', TERMINAL_EXEC_CONSTRAINTS],
   ['browser.navigate', BROWSER_NAVIGATE_CONSTRAINTS],
-  ['browser.navigate_to', BROWSER_NAVIGATE_TO_CONSTRAINTS],
   ['browser.research_search', RESEARCH_SEARCH_CONSTRAINTS],
   ['browser.create_tab', BROWSER_CREATE_TAB_CONSTRAINTS],
   ['browser.close_tab', BROWSER_CLOSE_TAB_CONSTRAINTS],
-  ['browser.close_all_tabs', BROWSER_CLOSE_ALL_TABS_CONSTRAINTS],
   ['browser.activate_tab', BROWSER_ACTIVATE_TAB_CONSTRAINTS],
   ['browser.get_element_state', BROWSER_GET_ELEMENT_STATE_CONSTRAINTS],
   ['browser.select_option', BROWSER_SELECT_OPTION_CONSTRAINTS],

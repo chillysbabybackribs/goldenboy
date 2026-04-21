@@ -6,12 +6,14 @@ import { GEMINI_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/mode
 describe('AgentPromptBuilder', () => {
   const promptBuilder = new AgentPromptBuilder();
   const tools: AgentToolDefinition[] = [{
-    name: 'runtime.list_loaded_tools',
-    description: 'List loaded tools',
+    name: 'terminal.exec',
+    description: 'Run a terminal command',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: {},
+      properties: {
+        command: { type: 'string' },
+      },
     },
     async execute() {
       return {
@@ -23,8 +25,8 @@ describe('AgentPromptBuilder', () => {
   const browserTools: AgentToolDefinition[] = [
     ...tools,
     {
-      name: 'browser.close_all_tabs',
-      description: 'Close all tabs',
+      name: 'browser.tabs',
+      description: 'Return browser tab state.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -32,7 +34,29 @@ describe('AgentPromptBuilder', () => {
       },
       async execute() {
         return {
-          summary: 'closed tabs',
+          summary: 'listed tabs',
+          data: {},
+        };
+      },
+    },
+  ];
+  const subagentTools: AgentToolDefinition[] = [
+    ...tools,
+    {
+      name: 'subagent.spawn',
+      description: 'Spawn a runtime-managed child agent',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task: { type: 'string' },
+          providerId: { type: 'string' },
+          modelId: { type: 'string' },
+        },
+        required: ['task'],
+      },
+      async execute() {
+        return {
+          summary: 'spawned',
           data: {},
         };
       },
@@ -72,7 +96,7 @@ describe('AgentPromptBuilder', () => {
     expect(implementationPrompt).not.toContain('## When To Use');
   });
 
-  it('applies the v2 tool priority rules to gemini prompts', () => {
+  it('advertises tool categories via the map and forbids shell-based web access', () => {
     const prompt = promptBuilder.buildSystemPrompt({
       config: {
         mode: 'unrestricted-dev',
@@ -85,14 +109,14 @@ describe('AgentPromptBuilder', () => {
       tools,
     });
 
-    expect(prompt).toContain('## V2 Tool Priority');
-    expect(prompt).toContain('## Web Access Hard Rule');
-    expect(prompt).toContain('browser.research_search');
-    expect(prompt).toContain('## Gemini Execution Rules');
-    expect(prompt).toContain('single minimal next tool call');
+    expect(prompt).toContain('## Tool Map');
+    expect(prompt).toContain('`browser`');
+    expect(prompt).toContain('`filesystem`');
+    expect(prompt).toContain('Every tool listed in your tool schema is already active');
+    expect(prompt).toContain('Never use shell/terminal commands to reach the internet');
   });
 
-  it('describes browser tab invariants without requiring them in user-facing answers', () => {
+  it('marks active and inactive categories in the tool map based on the scoped tool list', () => {
     const prompt = promptBuilder.buildSystemPrompt({
       config: {
         mode: 'unrestricted-dev',
@@ -105,13 +129,13 @@ describe('AgentPromptBuilder', () => {
       tools: browserTools,
     });
 
-    expect(prompt).toContain('## Browser Surface Model');
-    expect(prompt).toContain('`browser.close_all_tabs` is a standard reset operation.');
-    expect(prompt).toContain('Do not mention it in the final answer unless the user asks');
+    expect(prompt).toContain('## Tool Map');
+    expect(prompt).toContain('`browser` [active]');
+    expect(prompt).toContain('`filesystem` [inactive]');
   });
 
-  it('avoids injecting a volatile current timestamp into gemini prompts', () => {
-    const prompt = promptBuilder.buildSystemPrompt({
+  it('keeps the system prompt byte-stable by excluding the volatile current timestamp for every agent', () => {
+    const geminiPrompt = promptBuilder.buildSystemPrompt({
       config: {
         mode: 'unrestricted-dev',
         agentId: GEMINI_PROVIDER_ID,
@@ -122,8 +146,70 @@ describe('AgentPromptBuilder', () => {
       skills: [],
       tools,
     });
+    const primaryPrompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'Summarize the task state',
+        taskId: 'task-primary-stable-prefix',
+      },
+      skills: [],
+      tools,
+    });
 
-    expect(prompt).toContain('Do not rely on a volatile timestamp string');
-    expect(prompt).not.toContain('Use this as the authoritative current date/time context');
+    for (const prompt of [geminiPrompt, primaryPrompt]) {
+      expect(prompt).not.toMatch(/Current date\/time: [A-Z][a-z]+day,/);
+      expect(prompt).not.toContain('Do not rely on a volatile timestamp string');
+      expect(prompt).toContain('Current date/time is provided in the user-turn runtime context below');
+    }
+  });
+
+  it('exposes a per-section breakdown that matches the final system prompt length', () => {
+    const input = {
+      config: {
+        mode: 'unrestricted-dev' as const,
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'Implement a small helper',
+        taskId: 'task-breakdown',
+      },
+      skills: [],
+      tools: browserTools,
+    };
+
+    const breakdown = promptBuilder.describeSystemPromptSections(input);
+    const prompt = promptBuilder.buildSystemPrompt(input);
+
+    expect(breakdown.total).toBeGreaterThan(0);
+    expect(breakdown.total).toBe(breakdown.sections.reduce((acc, section) => acc + section.chars, 0));
+    expect(prompt.length).toBeGreaterThanOrEqual(breakdown.total - 200);
+    expect(prompt.length).toBeLessThanOrEqual(breakdown.total + 200);
+
+    const sectionNames = breakdown.sections.map((section) => section.name);
+    expect(sectionNames).toContain('baseContract');
+    expect(sectionNames).toContain('activeRuntime');
+    expect(sectionNames).toContain('toolCategoryMap');
+
+    const toolMap = breakdown.sections.find((section) => section.name === 'toolCategoryMap');
+    expect(toolMap?.chars).toBeGreaterThan(0);
+  });
+
+  it('advertises the subagent category in the tool map', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: GEMINI_PROVIDER_ID,
+        role: 'primary',
+        task: 'Delegate a review sub-agent',
+        taskId: 'task-subagent-hint',
+      },
+      skills: [],
+      tools: subagentTools,
+    });
+
+    expect(prompt).toContain('## Tool Map');
+    expect(prompt).toContain('`subagent`');
+    expect(prompt).toContain('Every tool listed in your tool schema is already active');
   });
 });

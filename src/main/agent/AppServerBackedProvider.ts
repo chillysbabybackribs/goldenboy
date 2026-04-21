@@ -18,6 +18,7 @@ type AppServerBackedProviderOptions = {
 };
 
 export class AppServerBackedProvider implements AgentProvider {
+  readonly providerId: ProviderId;
   readonly supportsAppToolExecutor = true;
 
   private delegate: AppServerProvider | null;
@@ -29,6 +30,7 @@ export class AppServerBackedProvider implements AgentProvider {
   private ownedContextPath: string | null = null;
 
   constructor(private readonly options: AppServerBackedProviderOptions) {
+    this.providerId = options.providerId;
     this.delegate = options.provider ?? null;
     this.sharedDelegate = options.provider !== undefined;
   }

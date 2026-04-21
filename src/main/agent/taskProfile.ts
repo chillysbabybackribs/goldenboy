@@ -1,11 +1,6 @@
 import type { AgentToolName } from './AgentTypes';
 import type { AgentTaskKind, AgentTaskProfileOverride } from '../../shared/types/model';
 import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
-import {
-  RUNTIME_LOAD_TOOLS_TOOL_NAME,
-  RUNTIME_SEARCH_TOOLS_TOOL_NAME,
-} from './toolPacks';
-import { DEFAULT_TOOL_SCOPE_PRESET, resolveAllowedToolsForTaskKind } from './toolScope';
 
 export type AgentTaskProfile = {
   kind: AgentTaskKind;
@@ -35,16 +30,10 @@ function maxTurnsForPrompt(prompt: string): number {
 
 export function buildTaskProfile(prompt: string, overrides?: AgentTaskProfileOverride): AgentTaskProfile {
   const kind = resolveTaskKind(prompt, overrides);
-  const toolScopePreset = overrides?.toolScopePreset ?? DEFAULT_TOOL_SCOPE_PRESET;
-  const base = defaultTaskProfileForKind(kind, prompt, toolScopePreset);
-  const allowedTools = overrides?.disableToolDiscovery && base.allowedTools !== 'all'
-    ? base.allowedTools.filter((tool) => (
-      tool !== RUNTIME_SEARCH_TOOLS_TOOL_NAME && tool !== RUNTIME_LOAD_TOOLS_TOOL_NAME
-    ))
-    : base.allowedTools;
+  const base = defaultTaskProfileForKind(kind, prompt);
   return {
     ...base,
-    allowedTools,
+    allowedTools: base.allowedTools,
     skillNames: overrides?.skillNames ? [...overrides.skillNames] : base.skillNames,
     canSpawnSubagents: overrides?.canSpawnSubagents ?? base.canSpawnSubagents,
     maxToolTurns: overrides?.maxToolTurns ?? base.maxToolTurns,
@@ -79,7 +68,6 @@ function normalizeTaskKind(kind: AgentTaskKind): AgentTaskKind {
 function resolveTaskKind(prompt: string, overrides?: AgentTaskProfileOverride): AgentTaskKind {
   if (overrides?.kind) return normalizeTaskKind(overrides.kind);
   if (looksLikeOrchestrationTask(prompt)) return 'orchestration';
-  if (looksLikeResearchTask(prompt)) return 'research';
   if (looksLikeReviewTask(prompt)) return 'review';
   if (looksLikeDebugTask(prompt)) return 'debug';
   if (looksLikeBrowserAutomationTask(prompt)) return 'browser-automation';
@@ -90,14 +78,13 @@ function resolveTaskKind(prompt: string, overrides?: AgentTaskProfileOverride): 
 function defaultTaskProfileForKind(
   kind: AgentTaskKind,
   prompt: string,
-  toolScopePreset = DEFAULT_TOOL_SCOPE_PRESET,
 ): AgentTaskProfile {
   switch (normalizeTaskKind(kind)) {
     case 'orchestration':
       return {
         kind: 'orchestration',
         skillNames: ['subagent-coordination'],
-        allowedTools: resolveAllowedToolsForTaskKind('orchestration', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: true,
         maxToolTurns: DELEGATION_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -106,7 +93,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'research',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('research', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: true,
@@ -115,7 +102,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'browser-automation',
         skillNames: ['browser-operation'],
-        allowedTools: resolveAllowedToolsForTaskKind('browser-automation', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -124,7 +111,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'implementation',
         skillNames: ['code-edit', 'typescript-typecheck'],
-        allowedTools: resolveAllowedToolsForTaskKind('implementation', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -133,7 +120,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'debug',
         skillNames: ['code-edit', 'typescript-typecheck', 'test-driven-fix'],
-        allowedTools: resolveAllowedToolsForTaskKind('debug', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: DEBUG_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -142,7 +129,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'review',
         skillNames: ['code-edit', 'test-driven-fix'],
-        allowedTools: resolveAllowedToolsForTaskKind('review', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: REVIEW_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -152,7 +139,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'general',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('general', toolScopePreset),
+        allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: false,

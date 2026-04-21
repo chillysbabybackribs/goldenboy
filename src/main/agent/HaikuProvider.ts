@@ -6,13 +6,11 @@ import { DEFAULT_HAIKU_CONFIG } from '../../shared/types/model';
 import { AgentProvider, AgentProviderRequest, AgentProviderResult } from './AgentTypes';
 import {
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
-  describeLoadedToolNames,
   executeProviderToolCallWithEvents,
-  mergeLoadedTools,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
-  resolveLoadedToolExpansion,
 } from './providerToolRuntime';
+import { createToolScopeState, hasActiveTool, listActiveTools } from './toolScopeState';
 
 function loadEnvValue(key: string): string | null {
   if (process.env[key]) return process.env[key] || null;
@@ -276,6 +274,50 @@ function slidingWindowMessages(
   return [messages[0], ...tail.slice(dropCount)];
 }
 
+/**
+ * Converts prior user/assistant turns from the chat store into Anthropic
+ * message-param shape. Enforces Anthropic's invariants:
+ *  - messages must alternate user/assistant (adjacent same-role entries are
+ *    coalesced with a blank line),
+ *  - the first message must be role='user' (a leading assistant turn is
+ *    dropped because there's no prompt to anchor it).
+ * Empty content is skipped. If no valid prior turns remain, returns [].
+ */
+function buildPriorTurnMessages(
+  priorTurns?: AgentProviderRequest['priorTurns'],
+): Anthropic.Messages.MessageParam[] {
+  if (!priorTurns?.length) return [];
+  const cleaned = priorTurns
+    .map((turn) => ({ role: turn.role, content: turn.content?.trim() ?? '' }))
+    .filter((turn) => turn.content.length > 0);
+  if (cleaned.length === 0) return [];
+
+  // Drop any leading assistant turn — Anthropic requires messages to start
+  // with role='user'. A lone leading assistant message with no preceding
+  // user message is ambiguous and the API rejects it outright.
+  while (cleaned.length > 0 && cleaned[0].role !== 'user') {
+    cleaned.shift();
+  }
+  if (cleaned.length === 0) return [];
+
+  const merged: Anthropic.Messages.MessageParam[] = [];
+  for (const turn of cleaned) {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.role === turn.role && typeof previous.content === 'string') {
+      // Coalesce same-role runs so alternation is preserved without losing
+      // content. This can happen in multi-step assistant turns or when the
+      // caller hasn't filtered tool messages out yet.
+      merged[merged.length - 1] = {
+        role: previous.role,
+        content: `${previous.content}\n\n${turn.content}`,
+      };
+      continue;
+    }
+    merged.push({ role: turn.role, content: turn.content });
+  }
+  return merged;
+}
+
 function buildInitialUserContent(request: AgentProviderRequest): string | Anthropic.Messages.ContentBlockParam[] {
   const textParts: string[] = [];
   if (request.contextPrompt?.trim()) {
@@ -344,19 +386,29 @@ function buildAnthropicTools(tools: AgentProviderRequest['tools']): Anthropic.Me
 }
 
 export class HaikuProvider implements AgentProvider {
+  readonly providerId = 'haiku';
   readonly modelId: string;
   readonly supportsAppToolExecutor = true;
 
   private readonly client: Anthropic;
   private aborted = false;
   private activeStream: { abort: () => void } | null = null;
+  private partialUsage: AgentProviderResult['usage'] | null = null;
 
-  constructor(apiKey = loadEnvValue('ANTHROPIC_API_KEY')) {
+  getPartialUsage(): AgentProviderResult['usage'] | null {
+    return this.partialUsage;
+  }
+
+  constructor(options: string | { apiKey?: string | null; modelId?: string | null } = loadEnvValue('ANTHROPIC_API_KEY') || '') {
+    const apiKey = typeof options === 'string'
+      ? options
+      : (options.apiKey ?? loadEnvValue('ANTHROPIC_API_KEY') ?? '');
     if (!apiKey) {
       throw new Error('ANTHROPIC_API_KEY is not configured.');
     }
 
-    this.modelId = loadEnvValue('ANTHROPIC_MODEL') || DEFAULT_HAIKU_CONFIG.modelId;
+    const requestedModelId = typeof options === 'string' ? null : options.modelId;
+    this.modelId = requestedModelId?.trim() || loadEnvValue('ANTHROPIC_MODEL') || DEFAULT_HAIKU_CONFIG.modelId;
     this.client = new Anthropic({ apiKey });
   }
 
@@ -369,21 +421,41 @@ export class HaikuProvider implements AgentProvider {
   }
 
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
+    const toolScope = request.toolScope ?? createToolScopeState(request.tools);
+    const runtimeRequest = request.toolScope ? request : { ...request, toolScope };
     this.aborted = false;
     this.activeStream = null;
+    this.partialUsage = null;
     const startedAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
+    let cachedInputTokens = 0;
+    let cacheCreationInputTokens = 0;
+    const snapshotPartial = (): void => {
+      this.partialUsage = {
+        inputTokens,
+        outputTokens,
+        cachedInputTokens,
+        cacheCreationInputTokens,
+        durationMs: Date.now() - startedAt,
+      };
+    };
     const completedItems = new Map<string, CodexItem>();
+    // Prior chat turns (if any) ride on real role-tagged messages so Haiku
+    // sees actual multi-turn history instead of a markdown recap stuffed
+    // inside the current user turn. This is the only continuity signal for
+    // stateless providers — without it, every follow-up looks like a fresh
+    // session to the model.
+    const priorTurnMessages = buildPriorTurnMessages(request.priorTurns);
     const messages: Anthropic.Messages.MessageParam[] = [
+      ...priorTurnMessages,
       {
         role: 'user',
         content: buildInitialUserContent(request),
       },
     ];
 
-    let currentTools = [...request.tools];
-    const loadableTools = request.loadableTools;
+    let currentTools = listActiveTools(toolScope);
 
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
     let finalOutput = '';
@@ -393,9 +465,9 @@ export class HaikuProvider implements AgentProvider {
         throw new Error('Task cancelled by user.');
       }
 
+      currentTools = listActiveTools(toolScope);
       let turnTextBuffer = '';
       const tools = buildAnthropicTools(currentTools);
-      const allowedToolNames = new Set(currentTools.map(tool => tool.name));
 
       let response: Anthropic.Messages.Message;
       let recoveredTextPrefix = '';
@@ -437,6 +509,9 @@ export class HaikuProvider implements AgentProvider {
 
       inputTokens += response.usage.input_tokens;
       outputTokens += response.usage.output_tokens;
+      cachedInputTokens += readCacheReadTokens(response.usage);
+      cacheCreationInputTokens += readCacheCreationTokens(response.usage);
+      snapshotPartial();
       const mergedContent = mergeRecoveredContent(recoveredTextPrefix, response.content);
       finalOutput = mergeRecoveredText(recoveredTextPrefix, textFromContent(response.content));
 
@@ -464,8 +539,7 @@ export class HaikuProvider implements AgentProvider {
       for (let index = 0; index < toolUses.length; index++) {
         const toolUse = toolUses[index];
         const v2ToolName = fromAnthropicToolName(toolUse.name);
-
-        if (!allowedToolNames.has(v2ToolName as any)) {
+        if (!hasActiveTool(toolScope, v2ToolName as any)) {
           const message = `Tool is not available in this runtime scope: ${v2ToolName}`;
           toolResults.push({
             type: 'tool_result',
@@ -479,26 +553,14 @@ export class HaikuProvider implements AgentProvider {
 
         const execution = await executeProviderToolCallWithEvents({
           providerId: 'haiku',
-          request,
+          request: runtimeRequest,
           toolName: v2ToolName as any,
           toolInput: toolUse.input,
-          currentToolNames: currentTools.map((tool) => tool.name),
           itemId: `haiku-tool-${turn + 1}-${index + 1}-${Date.now()}`,
         });
         completedItems.set(execution.completedItem.id, execution.completedItem);
 
         if (execution.ok) {
-          const expansion = resolveLoadedToolExpansion(request, v2ToolName as any, execution.result);
-          if (expansion) {
-            currentTools = mergeLoadedTools(currentTools, loadableTools, expansion);
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: toolUse.id,
-              content: `Loaded tools: ${describeLoadedToolNames(execution.result)}`,
-            });
-            continue;
-          }
-
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
@@ -565,6 +627,9 @@ export class HaikuProvider implements AgentProvider {
       this.activeStream = null;
       inputTokens += synthesisResponse.usage.input_tokens;
       outputTokens += synthesisResponse.usage.output_tokens;
+      cachedInputTokens += readCacheReadTokens(synthesisResponse.usage);
+      cacheCreationInputTokens += readCacheCreationTokens(synthesisResponse.usage);
+      snapshotPartial();
       finalOutput = mergeRecoveredText(
         streamResult.recoveredTextPrefix,
         textFromContent(synthesisResponse.content),
@@ -587,8 +652,27 @@ export class HaikuProvider implements AgentProvider {
       usage: {
         inputTokens,
         outputTokens,
+        cachedInputTokens,
+        cacheCreationInputTokens,
         durationMs: Date.now() - startedAt,
       },
     };
   }
+}
+
+/**
+ * Anthropic's prompt-cache metrics are optional on the usage object and not
+ * strictly typed in older SDK versions. These readers tolerate missing or
+ * undefined values so we don't crash when the API omits them.
+ */
+function readCacheReadTokens(usage: Anthropic.Messages.Usage): number {
+  const record = usage as unknown as Record<string, unknown>;
+  const value = record['cache_read_input_tokens'];
+  return typeof value === 'number' && value > 0 ? value : 0;
+}
+
+function readCacheCreationTokens(usage: Anthropic.Messages.Usage): number {
+  const record = usage as unknown as Record<string, unknown>;
+  const value = record['cache_creation_input_tokens'];
+  return typeof value === 'number' && value > 0 ? value : 0;
 }

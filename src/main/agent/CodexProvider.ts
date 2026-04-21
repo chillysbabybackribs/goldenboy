@@ -11,15 +11,13 @@ import {
 import { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolName } from './AgentTypes';
 import {
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
-  describeLoadedToolNames,
   describeProviderToolCall,
   executeProviderToolCallWithEvents,
-  mergeLoadedTools,
   normalizeProviderMaxToolTurns,
   normalizeProviderFinalOutput,
   publishProviderFinalOutput,
-  resolveLoadedToolExpansion,
 } from './providerToolRuntime';
+import { createToolScopeState, hasActiveTool, listActiveTools } from './toolScopeState';
 
 const CODEX_INACTIVITY_TIMEOUT_MS = 180_000;
 const CODEX_WEB_SEARCH_DISABLED_CONFIG = 'web_search="disabled"';
@@ -49,6 +47,7 @@ type CodexTurnResult = {
   usage: {
     inputTokens: number;
     outputTokens: number;
+    cachedInputTokens: number;
   };
 };
 
@@ -68,6 +67,38 @@ function compactJsonForPrompt(value: unknown, maxChars: number, suffix: string):
   } catch {
     return truncateForPrompt(String(value), maxChars, suffix);
   }
+}
+
+function describePropertyType(prop: unknown): string {
+  if (!prop || typeof prop !== 'object') return 'any';
+  const rec = prop as Record<string, unknown>;
+  if (Array.isArray(rec.enum)) {
+    return `enum(${rec.enum.map((v) => String(v)).join('|')})`;
+  }
+  if (Array.isArray(rec.oneOf) || Array.isArray(rec.anyOf)) {
+    const branches = (rec.oneOf ?? rec.anyOf) as unknown[];
+    return branches.map(describePropertyType).join('|');
+  }
+  const type = typeof rec.type === 'string' ? rec.type : 'any';
+  if (type === 'array') {
+    const items = rec.items;
+    return `array<${describePropertyType(items)}>`;
+  }
+  return type;
+}
+
+export function describeInputSchemaCompact(schema: unknown): string {
+  if (!schema || typeof schema !== 'object') return '';
+  const rec = schema as Record<string, unknown>;
+  const props = (rec.properties && typeof rec.properties === 'object')
+    ? rec.properties as Record<string, unknown>
+    : {};
+  const required = new Set(Array.isArray(rec.required) ? rec.required as string[] : []);
+  const entries = Object.keys(props);
+  if (entries.length === 0) return '';
+  return entries
+    .map((key) => `${key}${required.has(key) ? '' : '?'}:${describePropertyType(props[key])}`)
+    .join(', ');
 }
 
 function appendTranscriptEntry(
@@ -118,17 +149,10 @@ function buildToolPlanningSection(tools: AgentProviderRequest['tools']): string 
   const built = tools.length === 0
     ? 'No tools are available in this runtime.'
     : tools.map((tool) => {
-      const schema = compactJsonForPrompt(
-        tool.inputSchema,
-        MAX_PROMPT_TOOL_SCHEMA_CHARS,
-        '...[schema truncated]',
-      );
-      return [
-        `- ${tool.name}`,
-        `  Description: ${tool.description}`,
-        `  Input schema: ${schema}`,
-      ].join('\n');
-    }).join('\n\n');
+      const sig = describeInputSchemaCompact(tool.inputSchema);
+      const head = sig ? `- ${tool.name}(${sig})` : `- ${tool.name}()`;
+      return `${head}\n  ${tool.description}`;
+    }).join('\n');
 
   toolPlanningSectionCache.set(signature, built);
   return built;
@@ -291,10 +315,15 @@ export class CodexProvider implements AgentProvider {
 
   private aborted = false;
   private activeProcess: ReturnType<typeof spawn> | null = null;
+  private partialUsage: AgentProviderResult['usage'] | null = null;
 
   constructor(options: CodexProviderOptions = {}) {
     this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;
     this.modelId = options.modelId ?? this.providerId;
+  }
+
+  getPartialUsage(): AgentProviderResult['usage'] | null {
+    return this.partialUsage;
   }
 
   static isAvailable(): { available: boolean; error?: string } {
@@ -318,14 +347,25 @@ export class CodexProvider implements AgentProvider {
   }
 
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
+    const toolScope = request.toolScope ?? createToolScopeState(request.tools);
+    const runtimeRequest = request.toolScope ? request : { ...request, toolScope };
     this.aborted = false;
+    this.partialUsage = null;
     const startedAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
+    let cachedInputTokens = 0;
+    const snapshotPartial = (): void => {
+      this.partialUsage = {
+        inputTokens,
+        outputTokens,
+        cachedInputTokens,
+        durationMs: Date.now() - startedAt,
+      };
+    };
     const completedItems = new Map<string, CodexItem>();
     const transcript: TranscriptEntry[] = [];
-    let currentTools = [...request.tools];
-    const loadableTools = request.loadableTools;
+    let currentTools = listActiveTools(toolScope);
 
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
 
@@ -336,6 +376,8 @@ export class CodexProvider implements AgentProvider {
       );
       inputTokens += finalResult.usage.inputTokens;
       outputTokens += finalResult.usage.outputTokens;
+      cachedInputTokens += finalResult.usage.cachedInputTokens;
+      snapshotPartial();
       const finalText = normalizeProviderFinalOutput(finalResult.response.message);
       request.onToken?.(finalText);
 
@@ -353,6 +395,7 @@ export class CodexProvider implements AgentProvider {
         usage: {
           inputTokens,
           outputTokens,
+          cachedInputTokens,
           durationMs: Date.now() - startedAt,
         },
       };
@@ -361,12 +404,15 @@ export class CodexProvider implements AgentProvider {
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
 
+      currentTools = listActiveTools(toolScope);
       const turnResult = await this.invokeCodexTurn(
         buildToolPlanningPrompt(request, currentTools, transcript, false),
         buildToolLoopOutputSchema(currentTools.map(tool => tool.name as AgentToolName)),
       );
       inputTokens += turnResult.usage.inputTokens;
       outputTokens += turnResult.usage.outputTokens;
+      cachedInputTokens += turnResult.usage.cachedInputTokens;
+      snapshotPartial();
 
       const response = turnResult.response;
       if (response.kind === 'final') {
@@ -385,6 +431,7 @@ export class CodexProvider implements AgentProvider {
           usage: {
             inputTokens,
             outputTokens,
+            cachedInputTokens,
             durationMs: Date.now() - startedAt,
           },
         };
@@ -404,8 +451,7 @@ export class CodexProvider implements AgentProvider {
 
       for (let index = 0; index < response.tool_calls.length; index++) {
         const toolCall = response.tool_calls[index];
-        const allowedToolNames = new Set(currentTools.map(tool => tool.name));
-        if (!allowedToolNames.has(toolCall.name)) {
+        if (!hasActiveTool(toolScope, toolCall.name)) {
           throw new Error(`Tool is not available in this runtime scope: ${toolCall.name}`);
         }
 
@@ -428,29 +474,14 @@ export class CodexProvider implements AgentProvider {
         const itemId = `${this.itemPrefix('tool')}-${turn + 1}-${index + 1}-${Date.now()}`;
         const execution = await executeProviderToolCallWithEvents({
           providerId: this.providerId,
-          request,
+          request: runtimeRequest,
           toolName: toolCall.name,
           toolInput,
-          currentToolNames: currentTools.map((tool) => tool.name as AgentToolName),
           itemId,
         });
         completedItems.set(itemId, execution.completedItem);
 
         if (execution.ok) {
-          const expansion = resolveLoadedToolExpansion(request, toolCall.name, execution.result);
-          if (expansion) {
-            currentTools = mergeLoadedTools(currentTools, loadableTools, expansion);
-            appendTranscriptEntry(transcript, {
-              type: 'tool',
-              content: [
-                `Tool: ${toolCall.name}`,
-                `Input: ${compactJsonForPrompt(toolInput, MAX_PROMPT_TOOL_INPUT_CHARS, '...[input truncated]')}`,
-                `Result: loaded tools "${describeLoadedToolNames(execution.result)}"`,
-              ].join('\n'),
-            });
-            continue;
-          }
-
           appendTranscriptEntry(transcript, {
             type: 'tool',
             content: [
@@ -481,6 +512,8 @@ export class CodexProvider implements AgentProvider {
     );
     inputTokens += finalResult.usage.inputTokens;
     outputTokens += finalResult.usage.outputTokens;
+    cachedInputTokens += finalResult.usage.cachedInputTokens;
+    snapshotPartial();
     const finalText = normalizeProviderFinalOutput(finalResult.response.message);
     request.onToken?.(finalText);
 
@@ -498,6 +531,7 @@ export class CodexProvider implements AgentProvider {
       usage: {
         inputTokens,
         outputTokens,
+        cachedInputTokens,
         durationMs: Date.now() - startedAt,
       },
     };
@@ -548,6 +582,7 @@ export class CodexProvider implements AgentProvider {
       let stdoutRemainder = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let cachedInputTokens = 0;
       let finalFailureMessage: string | null = null;
       let finalMessageText = '';
 
@@ -587,7 +622,9 @@ export class CodexProvider implements AgentProvider {
         switch (event.type) {
           case 'turn.completed':
             inputTokens = event.usage.input_tokens || 0;
-            outputTokens = event.usage.output_tokens || 0;
+            outputTokens = (event.usage.output_tokens || 0)
+              + (event.usage.reasoning_output_tokens || 0);
+            cachedInputTokens = event.usage.cached_input_tokens || 0;
             return;
           case 'turn.failed':
             finalFailureMessage = event.error?.message || 'Codex turn failed.';
@@ -685,6 +722,7 @@ export class CodexProvider implements AgentProvider {
             usage: {
               inputTokens,
               outputTokens,
+              cachedInputTokens,
             },
           });
         });

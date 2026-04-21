@@ -52,6 +52,7 @@ describe('V2ToolBridge', () => {
     fs.writeFileSync(contextPath, JSON.stringify({
       runId: 'run-1', agentId: 'gpt-5.4', taskId: 'task-1', mode: 'unrestricted-dev',
       toolNames: ['filesystem.list'],
+      loadableToolNames: ['filesystem.list'],
     }));
     bridge = new V2ToolBridge(contextPath);
     await bridge.start();
@@ -100,6 +101,16 @@ describe('V2ToolBridge', () => {
 
     expect(agentToolExecutor.execute).not.toHaveBeenCalled();
     expect(result.content[0].text).toContain('Tool execution error: Tool is not available in this runtime scope: filesystem.read');
+  });
+
+  it('tools/list filters to authorized loadable tools when provided', async () => {
+    (agentToolExecutor.list as ReturnType<typeof vi.fn>).mockReturnValue([
+      { name: 'context.load', description: 'Legacy tool scope shim', inputSchema: { type: 'object', properties: {} } },
+      { name: 'filesystem.list', description: 'List files', inputSchema: { type: 'object', properties: {} } },
+      { name: 'subagent.spawn', description: 'Spawn subagent', inputSchema: { type: 'object', properties: {} } },
+    ]);
+    const result = await httpPost(bridge.getPort(), '/tools/list', {}) as { tools: Array<{ name: string }> };
+    expect(result.tools.map((tool) => tool.name)).toEqual(['filesystem__list']);
   });
 
   it('getPort() returns a non-zero port after start()', () => {

@@ -5,29 +5,21 @@ import { validateToolResult } from './ConstraintValidator';
 import { runWithBrowserOperationContext } from '../browser/browserOperationContext';
 
 const CACHEABLE_TOOLS = new Set<AgentToolName>([
-  'browser.get_state',
-  'browser.get_tabs',
+  'browser.tabs',
   'browser.extract_page',
   'browser.inspect_page',
   'browser.find_element',
   'browser.summarize_page',
-  'browser.answer_from_cache',
   'browser.search_page_cache',
   'browser.read_cached_chunk',
-  'browser.list_cached_pages',
-  'browser.list_cached_sections',
-  'browser.cache_stats',
-  'browser.get_actionable_elements',
-  'browser.capture_snapshot',
+  'browser.cache_inventory',
   'filesystem.list',
+  'filesystem.glob',
   'filesystem.search',
-  'filesystem.answer_from_cache',
   'filesystem.search_file_cache',
   'filesystem.read_file_chunk',
-  'filesystem.list_cached_files',
-  'filesystem.file_cache_stats',
+  'filesystem.cache_inventory',
   'filesystem.read',
-  'subagent.list',
 ]);
 
 const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
@@ -39,7 +31,6 @@ function cacheTtlForTool(name: AgentToolName): number {
 }
 
 function timeoutForTool(name: AgentToolName): number {
-  if (name === 'subagent.wait') return 180_000;
   if (name.startsWith('browser.')) return 180_000;
   return DEFAULT_TOOL_TIMEOUT_MS;
 }

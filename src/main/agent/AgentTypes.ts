@@ -12,94 +12,67 @@ export type AgentToolName =
   | 'attachments.read_chunk'
   | 'attachments.read_document'
   | 'attachments.stats'
-  | 'runtime.search_tools'
-  | 'runtime.load_tools'
-  | 'runtime.list_loaded_tools'
-  | 'browser.get_state'
-  | 'browser.get_tabs'
+  | 'browser.tabs'
   | 'browser.navigate'
-  | 'browser.navigate_to'
-  | 'browser.search_web'
   | 'browser.research_search'
   | 'browser.back'
   | 'browser.forward'
   | 'browser.reload'
   | 'browser.create_tab'
   | 'browser.close_tab'
-  | 'browser.close_all_tabs'
   | 'browser.activate_tab'
   | 'browser.click'
   | 'browser.type'
   | 'browser.get_element_state'
   | 'browser.select_option'
   | 'browser.upload_file'
-  | 'browser.download_link'
-  | 'browser.download_url'
+  | 'browser.download'
   | 'browser.get_downloads'
   | 'browser.wait_for_download'
   | 'browser.drag'
   | 'browser.hover'
-  | 'browser.hit_test'
   | 'browser.extract_page'
   | 'browser.inspect_page'
   | 'browser.find_element'
-  | 'browser.click_text'
   | 'browser.wait_for'
   | 'browser.summarize_page'
   | 'browser.evaluate_js'
   | 'browser.run_intent_program'
   | 'browser.get_console_events'
   | 'browser.get_network_events'
-  | 'browser.get_dialogs'
-  | 'browser.accept_dialog'
-  | 'browser.dismiss_dialog'
   | 'browser.cache_current_page'
-  | 'browser.answer_from_cache'
   | 'browser.search_page_cache'
   | 'browser.read_cached_chunk'
-  | 'browser.list_cached_pages'
-  | 'browser.list_cached_sections'
-  | 'browser.cache_stats'
-  | 'browser.get_actionable_elements'
-  | 'browser.capture_snapshot'
+  | 'browser.cache_inventory'
   | 'filesystem.list'
+  | 'filesystem.glob'
   | 'filesystem.search'
   | 'filesystem.index_workspace'
-  | 'filesystem.answer_from_cache'
   | 'filesystem.search_file_cache'
   | 'filesystem.read_file_chunk'
-  | 'filesystem.list_cached_files'
-  | 'filesystem.file_cache_stats'
+  | 'filesystem.cache_inventory'
   | 'filesystem.read'
   | 'filesystem.write'
   | 'filesystem.patch'
   | 'filesystem.delete'
-  | 'filesystem.mkdir'
   | 'filesystem.move'
   | 'terminal.exec'
   | 'terminal.spawn'
   | 'terminal.write'
   | 'terminal.kill'
-  | 'chat.thread_summary'
-  | 'chat.read_last'
-  | 'chat.search'
-  | 'chat.read_message'
-  | 'chat.read_window'
-  | 'chat.recall'
-  | 'chat.cache_stats'
-  | 'session.start'
-  | 'session.end'
-  | 'session.record_message'
-  | 'session.get_previous_context'
-  | 'session.get_context_string'
-  | 'session.get_all_sessions'
-  | 'session.clear_all'
-  | 'session.stats'
+  | 'terminal.status'
+  | 'session.resume_previous'
   | 'subagent.spawn'
-  | 'subagent.message'
-  | 'subagent.wait'
-  | 'subagent.cancel'
-  | 'subagent.list';
+  | 'context.load'
+  | 'repomap.overview'
+  | 'repomap.find_symbol'
+  | 'repomap.describe_file'
+  | 'repomap.neighbors'
+  | 'repomap.refresh'
+  | 'workspace.locate'
+  | 'workspace.tree'
+  | 'workspace.overview'
+  | 'workspace.refresh';
 
 export type AgentRunRecord = {
   id: string;
@@ -142,6 +115,7 @@ export type AgentToolContext = {
   contextId?: string;
   toolNames?: string[];
   onProgress?: (status: string) => void;
+  toolScope?: AgentToolScopeState;
 };
 
 export type ConstraintStatus = 'PASS' | 'FAIL' | 'UNKNOWN' | 'ESTIMATED' | 'CONDITIONAL';
@@ -167,11 +141,35 @@ export type AgentToolResult = {
   validation?: ResultValidation;
 };
 
+export type AgentToolSchemaSummary = {
+  name: AgentToolName;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
+
+export type AgentToolScopeState = {
+  activeTools: AgentToolSchemaSummary[];
+};
+
 export type AgentToolDefinition<TInput = unknown> = {
   name: AgentToolName;
   description: string;
   inputSchema: Record<string, unknown>;
   execute: (input: TInput, context: AgentToolContext) => Promise<AgentToolResult>;
+};
+
+/**
+ * Prior user/assistant turns for in-chat continuity.
+ *
+ * Providers that support real multi-turn chat (Haiku/Anthropic, Gemini) should
+ * prepend these as real role-tagged messages before the current user turn so
+ * the model sees actual chat history instead of an in-context Markdown recap.
+ * Providers with server-side thread state (Codex app-server) can ignore this
+ * field — their `thread/resume` path already carries history.
+ */
+export type AgentPriorTurn = {
+  role: 'user' | 'assistant';
+  content: string;
 };
 
 export type AgentRuntimeConfig = {
@@ -182,12 +180,12 @@ export type AgentRuntimeConfig = {
   taskId?: string;
   cwd?: string | null;
   contextPrompt?: string | null;
+  priorTurns?: AgentPriorTurn[];
   systemPromptAddendum?: string | null;
   parentRunId?: string | null;
   depth?: number;
   skillNames?: string[];
   allowedTools?: 'all' | AgentToolName[];
-  restrictLoadableToolsToAllowedTools?: boolean;
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
   attachments?: InvocationAttachment[];
@@ -204,9 +202,10 @@ export type AgentProviderRequest = {
   systemPrompt: string;
   task: string;
   contextPrompt?: string | null;
+  priorTurns?: AgentPriorTurn[];
   maxToolTurns?: number;
-  tools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
-  loadableTools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  toolScope: AgentToolScopeState;
+  tools: AgentToolSchemaSummary[];
   attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
   onStatus?: (status: string) => void;
@@ -219,14 +218,34 @@ export type AgentProviderResult = {
   codexItems?: CodexItem[];
   usage?: {
     inputTokens: number;
+    /** Provider-reported cache-read tokens (billed at discounted rate). */
     cachedInputTokens?: number;
+    /** Anthropic-only: tokens written into the ephemeral cache on this call. */
+    cacheCreationInputTokens?: number;
     outputTokens: number;
     durationMs: number;
   };
 };
 
 export interface AgentProvider {
+  /**
+   * Stable identifier for the underlying provider runtime. Optional on the
+   * interface for backwards compatibility with older provider adapters, but
+   * modern providers (`codex`, `haiku`, `gemini`, `app-server-backed`) all
+   * expose it so consumers like sub-agent token accounting can attribute
+   * usage correctly.
+   */
+  readonly providerId?: string;
   supportsAppToolExecutor?: boolean;
   invoke(request: AgentProviderRequest): Promise<AgentProviderResult>;
   abort?(): void;
+  /**
+   * Returns whatever usage has been accumulated during the current (or most
+   * recent) `invoke()` call. Used on the failure/cancellation path so burned
+   * tokens are still reported in the footer and per-task counters instead of
+   * silently dropped. Return `null` when nothing was accumulated yet.
+   */
+  getPartialUsage?(): AgentProviderResult['usage'] | null;
 }
+
+export const PARTIAL_USAGE_ERROR_KEY = '__agentPartialUsage';

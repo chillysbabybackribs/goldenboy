@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron';
+import { BrowserWindow, Menu, MenuItem, clipboard, screen } from 'electron';
 import * as path from 'path';
 import { PhysicalWindowRole, PHYSICAL_WINDOW_ROLES } from '../../shared/types/windowRoles';
 import { WindowBounds } from '../../shared/types/appState';
@@ -45,6 +45,50 @@ function validateBounds(bounds: WindowBounds): WindowBounds {
   };
 }
 
+function attachRendererContextMenu(win: BrowserWindow): void {
+  const wc = win.webContents;
+  wc.on('context-menu', (_e, params) => {
+    const menu = new Menu();
+    const hasSelection = !!params.selectionText;
+
+    if (params.isEditable) {
+      menu.append(new MenuItem({ label: 'Undo', role: 'undo', enabled: params.editFlags.canUndo }));
+      menu.append(new MenuItem({ label: 'Redo', role: 'redo', enabled: params.editFlags.canRedo }));
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({ label: 'Cut', role: 'cut', enabled: params.editFlags.canCut }));
+      menu.append(new MenuItem({ label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy }));
+      menu.append(new MenuItem({ label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste }));
+      menu.append(new MenuItem({ label: 'Delete', role: 'delete', enabled: params.editFlags.canDelete }));
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({ label: 'Select All', role: 'selectAll', enabled: params.editFlags.canSelectAll }));
+    } else {
+      if (hasSelection) {
+        menu.append(new MenuItem({ label: 'Copy', role: 'copy' }));
+        menu.append(new MenuItem({ type: 'separator' }));
+      }
+      menu.append(new MenuItem({ label: 'Select All', role: 'selectAll' }));
+    }
+
+    if (params.linkURL) {
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({
+        label: 'Copy Link Address',
+        click: () => clipboard.writeText(params.linkURL),
+      }));
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({
+        label: 'Inspect Element',
+        click: () => wc.inspectElement(params.x, params.y),
+      }));
+    }
+
+    menu.popup({ window: win });
+  });
+}
+
 function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
   const state = appStateStore.getState();
   const winState = state.windows[role];
@@ -79,6 +123,8 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
 
   windows.set(role, win);
   roleByWebContentsId.set(win.webContents.id, role);
+
+  attachRendererContextMenu(win);
 
   win.loadFile(getRendererPath(role));
 

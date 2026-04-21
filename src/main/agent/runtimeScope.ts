@@ -59,14 +59,9 @@ export function applyAdaptiveTaskProfileOverride(
   overrides?: AgentTaskProfileOverride,
   orchestrationSnapshot?: OrchestrationPlanSnapshot | null,
 ): AgentTaskProfileOverride | undefined {
-  if (overrides?.toolScopePreset) return overrides;
-  if (buildTaskProfile(prompt, overrides).kind !== 'orchestration') return overrides;
-  if (!isOrchestrationExecutionReady(orchestrationSnapshot)) return overrides;
-  return {
-    ...overrides,
-    toolScopePreset: 'mode-4',
-    disableToolDiscovery: true,
-  };
+  void prompt;
+  void orchestrationSnapshot;
+  return overrides;
 }
 
 export {

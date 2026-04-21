@@ -96,14 +96,10 @@ export type AgentTaskKind =
   | 'local-code'
   | 'general';
 
-export const AGENT_TOOL_SCOPE_PRESETS = ['all', 'mode-6', 'mode-4'] as const;
-export type AgentToolScopePreset = typeof AGENT_TOOL_SCOPE_PRESETS[number];
-
 export type AgentTaskProfileOverride = {
   kind?: AgentTaskKind;
   skillNames?: string[];
-  toolScopePreset?: AgentToolScopePreset;
-  disableToolDiscovery?: boolean;
+  allowedTools?: 'all' | string[];
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
   requiresBrowserSearchDirective?: boolean;
@@ -150,6 +146,13 @@ export type CodexUsage = {
   input_tokens: number;
   cached_input_tokens: number;
   output_tokens: number;
+  /**
+   * Reasoning output tokens emitted by reasoning-class models (e.g. GPT-5).
+   * Optional because older Codex protocol versions may omit it; when present
+   * it is billed as output and should be added to `output_tokens` for usage
+   * accounting.
+   */
+  reasoning_output_tokens?: number;
 };
 
 export type CodexEvent =
@@ -189,7 +192,13 @@ export type InvocationProgress =
       taskId: string;
       providerId: ProviderId;
       type: 'usage';
-      data: { inputTokens: number; outputTokens: number; apiCalls: number };
+      data: {
+        inputTokens: number;
+        outputTokens: number;
+        apiCalls: number;
+        cachedInputTokens?: number;
+        cacheCreationInputTokens?: number;
+      };
       timestamp: number;
     };
 
@@ -197,6 +206,7 @@ export type InvocationResult = {
   taskId: string;
   providerId: ProviderId;
   success: boolean;
+  status?: 'completed' | 'failed' | 'cancelled';
   output: string;
   artifacts: HandoffArtifact[];
   error?: string;
@@ -250,6 +260,7 @@ export type TaskPlanMetadata = {
     | 'scaffold'
     | 'parent-turn-complete'
     | 'parent-turn-failed'
+    | 'parent-turn-cancelled'
     | 'subagent-spawn'
     | 'subagent-complete'
     | 'subagent-failed'

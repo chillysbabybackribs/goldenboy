@@ -47,7 +47,22 @@ export type Action =
   | { type: ActionType.UPDATE_SURFACE_ACTION; id: string; updates: Partial<Pick<SurfaceActionRecord, 'status' | 'resultSummary' | 'resultData' | 'error' | 'updatedAt'>> }
   | { type: ActionType.SET_PROVIDER_RUNTIME; providerId: ProviderId; runtime: ProviderRuntime }
   | { type: ActionType.ENSURE_TASK_TOKEN_USAGE; taskId: string }
-  | { type: ActionType.ACCUMULATE_TASK_TOKEN_USAGE; taskId: string; providerId: ProviderId; inputTokens: number; outputTokens: number; apiCalls: number }
-  | { type: ActionType.ACCUMULATE_TOKEN_USAGE; inputTokens: number; outputTokens: number }
+  | {
+      type: ActionType.ACCUMULATE_TASK_TOKEN_USAGE;
+      taskId: string;
+      providerId: ProviderId;
+      inputTokens: number;
+      outputTokens: number;
+      apiCalls: number;
+      cachedInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
+  | {
+      type: ActionType.ACCUMULATE_TOKEN_USAGE;
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
   | { type: ActionType.RESET_TOKEN_USAGE }
   | { type: ActionType.REPLACE_STATE; state: AppState };

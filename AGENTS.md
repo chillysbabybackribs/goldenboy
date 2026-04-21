@@ -1,25 +1,15 @@
 # V2 Agent Contract
 
-V2 Workspace is a local Electron application with two primary windows:
+V2 Workspace is a local Electron app with two windows:
 
-- `command`: task control, logs, model conversation, and run status.
-- `execution`: browser and terminal surfaces used to complete work.
+- `command`: control plane — conversation, task creation, run status, provider status, logs.
+- `execution`: work surface — owned browser tabs and terminal sessions V2 inspects and operates via tools.
 
-The application workspace root is `/home/dp/Documents/goldenboy`. Resolve relative repository paths from that root unless a tool result explicitly reports a different cwd.
-
-The model is not the application. The model is a planner and operator that asks V2 to run typed tools. V2 owns execution, logging, cancellation, state, file access, browser state, terminal state, and sub-agent lifecycle.
+The model is a planner and operator — it asks V2 to run typed tools. V2 owns execution, logging, cancellation, state, file/browser/terminal access, and sub-agent lifecycle. Workspace root: `/home/dp/Documents/goldenboy` — resolve relative paths from there unless a tool result reports otherwise.
 
 ## Application Mental Model
 
-Users interact with V2 as a local workbench, not as a standalone chatbot.
-
-The `command` window is the control plane: conversation, task creation, run status, provider status, and logs.
-
-The `execution` window is the work surface: owned browser tabs and terminal sessions that V2 can inspect and operate through tools.
-
-The model plans, decides what evidence is needed, asks for typed tool calls, and explains results. It should treat V2 as the source of truth for observed browser state, filesystem state, terminal output, logs, cancellation, and persisted task memory.
-
-Prefer app-owned caches before broad reads when they are in scope. Browser, file, and chat caches reduce repeated context loading and keep model input focused.
+Users interact with V2 as a local workbench, not a standalone chatbot. The model plans, decides what evidence is needed, asks for typed tool calls, and explains results. Treat V2 as the source of truth for observed browser/filesystem/terminal state, logs, cancellation, and persisted task memory. Prefer app-owned caches (browser, file, chat) before broad reads.
 
 ## Current Integration State
 
@@ -77,23 +67,14 @@ Use these files first when locating task context:
 
 ## Operating Rules
 
-Use app services through typed tools only. Do not invent hidden execution paths.
-
-Prefer existing app state and IPC contracts before adding new contracts.
-
-When a task requires browser work, inspect browser state first, then act through browser tools.
-
-When the user says "search", "look up", "find online", "research", or asks for current web information, use the owned browser. Start with `browser.research_search` unless the user only asked to navigate to a search page. It opens result pages sequentially and stops when cached evidence is sufficient. Do not answer from model memory or any provider-native search behavior.
-
-When a task requires browser research or page understanding, use page-cache tools first when available. Prefer `browser.search_page_cache`, `browser.list_cached_sections`, and `browser.read_cached_chunk` over broad page extraction. Use `browser.extract_page` when cache tools are unavailable or insufficient.
-
-When a task requires file understanding, use file-cache tools first when available. Prefer `filesystem.index_workspace`, `filesystem.answer_from_cache`, `filesystem.search_file_cache`, and `filesystem.read_file_chunk` over broad file reads. Use `filesystem.read` when cache tools are unavailable or insufficient, and read before editing.
-
-When a task requires terminal work, report the command, capture output, and return the meaningful result.
-
-When spawning sub-agents, give each child a concrete task, clear role, and enough context to work without rereading everything.
-
-In unrestricted development mode, the runtime may grant broad tools. Even then, every tool call must be recorded.
+- Use app services through typed tools only; do not invent hidden execution paths.
+- Prefer existing app state and IPC contracts before adding new ones.
+- Browser work: inspect browser state first, then act through browser tools. Prefer cache tools (`browser.search_page_cache`, `browser.list_cached_sections`, `browser.read_cached_chunk`) over broad extraction; fall back to `browser.extract_page` when cache tools are insufficient.
+- Web research: when the user says "search", "look up", "find online", "research", or asks for current web info, use the owned browser. Start with `browser.research_search` unless the user only asked to navigate to a search page. Never answer from model memory or provider-native search.
+- File work: prefer cache tools (`filesystem.index_workspace`, `filesystem.answer_from_cache`, `filesystem.search_file_cache`, `filesystem.read_file_chunk`) over broad reads; fall back to `filesystem.read` when cache tools are insufficient. Read before editing.
+- Terminal work: report the command, capture output, return the meaningful result.
+- Sub-agents: give each child a concrete task, clear role, and enough context to work without rereading everything.
+- Unrestricted mode may grant broad tools; every tool call must still be recorded.
 
 ## Result Validation Discipline
 
@@ -176,21 +157,7 @@ Do not inject every skill, cached page, file, or chat message into a run. Add br
 
 ## Sub-Agent Rules
 
-Sub-agents are runtime-managed child agent runs.
-
-Parent agents may request child agents. V2 decides how to create, track, cancel, and summarize them.
-
-Every sub-agent must have:
-
-- a parent run id
-- a role
-- a task
-- a mode
-- a tool scope
-- a run record
-- a final result or failure
-
-Recursive sub-agent spawning is allowed only when the active runtime mode permits it.
+Parent agents may request child agents via `subagent.spawn`; V2 handles creation, tracking, cancellation, and summarization. Give each child a concrete task, clear role, tool scope, and enough context to work without rereading everything. Recursive sub-agent spawning is allowed only when the active runtime mode permits it.
 
 ## Skill Loading
 

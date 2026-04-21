@@ -3,6 +3,7 @@ import type { AnyProviderId, CodexItem } from '../../shared/types/model';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import type { AgentProviderRequest, AgentToolName, AgentToolResult } from './AgentTypes';
+import { activeToolNames, createToolScopeState } from './toolScopeState';
 
 export const DEFAULT_PROVIDER_MAX_TOOL_TURNS = 20;
 export const MAX_PROVIDER_TOOL_TURNS = 40;
@@ -15,10 +16,10 @@ type ProviderToolCallItem = Extract<CodexItem, { type: 'mcp_tool_call' }>;
 
 type ExecuteProviderToolCallInput = {
   providerId: AnyProviderId;
-  request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus'>;
+  request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus' | 'toolScope'>
+    & Partial<Pick<AgentProviderRequest, 'tools'>>;
   toolName: AgentToolName;
   toolInput: unknown;
-  currentToolNames?: AgentToolName[];
 };
 
 type ProviderToolCallSuccess = {
@@ -57,12 +58,16 @@ export function normalizeProviderMaxToolTurns(requestedTurns?: number): number {
   );
 }
 
+function resolveToolScope(
+  request: Pick<AgentProviderRequest, 'toolScope'> & Partial<Pick<AgentProviderRequest, 'tools'>>,
+) {
+  return request.toolScope ?? createToolScopeState(request.tools);
+}
+
 export function describeProviderToolCall(toolName: string, input: unknown): string {
   const args = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
   switch (toolName) {
     case 'browser.navigate': return `Browser: navigate ${args.url || 'page'}`;
-    case 'browser.navigate_to': return `Browser: navigate to ${args.url || 'site'}`;
-    case 'browser.search_web': return `Browser: search "${args.query || ''}"`;
     case 'browser.research_search': return `Browser: research "${args.query || ''}"`;
     case 'browser.click': return `Browser: click ${args.selector || args.text || 'element'}`;
     case 'browser.type': return `Browser: type ${args.selector || 'field'}`;
@@ -72,122 +77,52 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'browser.forward': return 'Browser: forward';
     case 'browser.reload': return 'Browser: reload';
     case 'browser.extract_page': return 'Browser: extract page';
-    case 'browser.get_state': return 'Browser: get state';
-    case 'browser.get_tabs': return 'Browser: list tabs';
+    case 'browser.tabs': return args.scope === 'all' ? 'Browser: list tabs' : 'Browser: get state';
     case 'browser.create_tab': return `Browser: create tab ${args.url ? `(${args.url})` : ''}`.trim();
     case 'browser.close_tab': return 'Browser: close tab';
-    case 'browser.close_all_tabs': return 'Browser: close all tabs';
     case 'browser.activate_tab': return 'Browser: activate tab';
     case 'browser.hover': return `Browser: hover ${args.selector || 'element'}`;
     case 'browser.drag': return 'Browser: drag';
-    case 'browser.hit_test': return `Browser: hit test ${args.selector || 'target'}`;
     case 'browser.evaluate_js': return 'Browser: evaluate js';
     case 'browser.run_intent_program': return 'Browser: run intent program';
     case 'browser.find_element': return `Browser: find ${args.selector || args.text || 'element'}`;
-    case 'browser.click_text': return `Browser: click text "${args.text || ''}"`;
     case 'browser.wait_for': return `Browser: wait for ${args.selector || 'condition'}`;
     case 'browser.summarize_page': return 'Browser: summarize page';
     case 'browser.inspect_page': return 'Browser: inspect page';
     case 'browser.upload_file': return `Browser: upload ${args.path || 'file'}`;
-    case 'browser.download_link': return `Browser: download link ${args.url || ''}`.trim();
-    case 'browser.download_url': return `Browser: download ${args.url || 'file'}`;
+    case 'browser.download': return `Browser: download ${args.url || args.selector || 'target'}`;
     case 'browser.get_downloads': return 'Browser: get downloads';
     case 'browser.wait_for_download': return 'Browser: wait for download';
     case 'browser.get_console_events': return 'Browser: read console';
     case 'browser.get_network_events': return 'Browser: read network';
-    case 'browser.get_dialogs': return 'Browser: get dialogs';
-    case 'browser.accept_dialog': return 'Browser: accept dialog';
-    case 'browser.dismiss_dialog': return 'Browser: dismiss dialog';
     case 'browser.cache_current_page': return 'Browser: cache page';
-    case 'browser.answer_from_cache': return `Browser cache: answer "${args.question || args.query || ''}"`;
-    case 'browser.search_page_cache': return `Browser cache: search "${args.query || ''}"`;
+    case 'browser.search_page_cache': return `Browser cache: ${args.mode === 'answer' ? 'answer' : 'search'} "${args.query || ''}"`;
     case 'browser.read_cached_chunk': return `Browser cache: read chunk ${args.chunkId || args.id || ''}`.trim();
-    case 'browser.list_cached_pages': return 'Browser cache: list pages';
-    case 'browser.list_cached_sections': return 'Browser cache: list sections';
-    case 'browser.cache_stats': return 'Browser cache: stats';
-    case 'browser.get_actionable_elements': return 'Browser: actionable elements';
-    case 'browser.capture_snapshot': return 'Browser: snapshot';
+    case 'browser.cache_inventory': return `Browser cache: ${args.scope || 'stats'}`;
     case 'filesystem.list': return `Files: list ${args.path || 'directory'}`;
+    case 'filesystem.glob': return `Files: glob ${args.pattern || '*'}`;
     case 'filesystem.search': return `Files: search "${args.query || args.pattern || ''}"`;
     case 'filesystem.read': return `Files: read ${args.path || 'file'}`;
     case 'filesystem.write': return `Files: write ${args.path || 'file'}`;
     case 'filesystem.patch': return `Files: patch ${args.path || 'file'}`;
     case 'filesystem.delete': return `Files: delete ${args.path || 'file'}`;
-    case 'filesystem.mkdir': return `Files: mkdir ${args.path || ''}`.trim();
     case 'filesystem.move': return `Files: move ${args.from || 'file'} -> ${args.to || 'destination'}`;
     case 'filesystem.index_workspace': return 'Files: index workspace';
-    case 'filesystem.answer_from_cache': return `File cache: answer "${args.question || args.query || ''}"`;
-    case 'filesystem.search_file_cache': return `File cache: search "${args.query || ''}"`;
+    case 'filesystem.search_file_cache': return `File cache: ${args.mode === 'answer' ? 'answer' : 'search'} "${args.query || ''}"`;
     case 'filesystem.read_file_chunk': return `File cache: read chunk ${args.chunkId || args.id || ''}`.trim();
-    case 'filesystem.list_cached_files': return 'File cache: list files';
-    case 'filesystem.file_cache_stats': return 'File cache: stats';
+    case 'filesystem.cache_inventory': return `File cache: ${args.scope || 'stats'}`;
     case 'terminal.exec': return `Terminal: run ${args.command || 'command'}`;
     case 'terminal.spawn': return `Terminal: spawn ${args.command || 'process'}`;
     case 'terminal.write': return 'Terminal: write';
     case 'terminal.kill': return 'Terminal: kill';
+    case 'terminal.status': return 'Terminal: status';
+    case 'session.resume_previous': return `Session: resume previous (${args.count || 10})`;
     case 'subagent.spawn': return `Subagent: spawn ${args.role || args.task || 'worker'}`;
-    case 'subagent.message': return 'Subagent: message';
-    case 'subagent.wait': return 'Subagent: wait';
-    case 'subagent.cancel': return 'Subagent: cancel';
-    case 'subagent.list': return 'Subagent: list';
-    case 'runtime.search_tools': return `Runtime: search tools "${args.query || ''}"`;
-    case 'runtime.load_tools': {
-      const tools = Array.isArray(args.tools) ? args.tools.join(', ') : '';
-      return `Runtime: load tools ${tools}`.trim();
-    }
-    case 'runtime.list_loaded_tools': return 'Runtime: list loaded tools';
     default: {
-      const short = toolName.replace(/^(browser|filesystem|terminal|subagent|chat)\./, '');
+      const short = toolName.replace(/^(browser|filesystem|terminal|subagent|session|attachments)\./, '');
       return short.replace(/_/g, ' ');
     }
   }
-}
-
-export function resolveLoadedToolExpansion(
-  request: Pick<AgentProviderRequest, 'loadableTools'>,
-  toolName: AgentToolName,
-  result: AgentToolResult,
-) : { tools: AgentToolName[] } | null {
-  if (toolName !== 'runtime.load_tools') return null;
-  const requested = Array.isArray(result.data.tools)
-    ? result.data.tools.filter((value): value is AgentToolName => typeof value === 'string')
-    : [];
-  if (requested.length === 0 || !request.loadableTools?.length) return null;
-  const available = new Set(request.loadableTools.map((tool) => tool.name));
-  const tools = requested.filter((name) => available.has(name));
-  if (tools.length === 0) return null;
-  return { tools };
-}
-
-function currentToolNames(input: ExecuteProviderToolCallInput): AgentToolName[] | undefined {
-  if (!input.currentToolNames?.length) return undefined;
-  return [...input.currentToolNames];
-}
-
-export function mergeLoadedTools(
-  currentTools: Array<Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'>>,
-  loadableTools: Array<Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'>>,
-  expansion: { tools: AgentToolName[] },
-): Array<Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'>> {
-  const currentNames = new Set(currentTools.map((tool) => tool.name));
-  const loadableByName = new Map(loadableTools.map((tool) => [tool.name, tool]));
-  const added = expansion.tools
-    .map((name) => loadableByName.get(name))
-    .filter((tool): tool is Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'> => Boolean(tool))
-    .filter((tool) => !currentNames.has(tool.name));
-
-  return [...currentTools, ...added];
-}
-
-export function loadedToolNamesFromResult(result: AgentToolResult): AgentToolName[] {
-  return Array.isArray(result.data.tools)
-    ? result.data.tools.filter((value): value is AgentToolName => typeof value === 'string')
-    : [];
-}
-
-export function describeLoadedToolNames(result: AgentToolResult): string {
-  const tools = loadedToolNamesFromResult(result);
-  return tools.length > 0 ? tools.join(', ') : 'none';
 }
 
 export function encodeToolInput(value: unknown): string {
@@ -223,13 +158,15 @@ export async function executeProviderToolCall(
   input: ExecuteProviderToolCallInput,
 ): Promise<ProviderToolCallExecution> {
   try {
+    const toolScope = resolveToolScope(input.request);
     const result = await agentToolExecutor.execute(input.toolName, input.toolInput, {
       runId: input.request.runId,
       agentId: input.request.agentId,
       mode: input.request.mode,
       taskId: input.request.taskId,
-      toolNames: currentToolNames(input),
+      toolNames: activeToolNames(toolScope),
       onProgress: input.request.onStatus,
+      toolScope,
     });
 
     recordToolMemory(input, { result });
@@ -296,7 +233,7 @@ function recordToolMemory(
   input: ExecuteProviderToolCallInput,
   outcome: { result?: unknown; error?: string },
 ): void {
-  if (!input.request.taskId || input.toolName.startsWith('chat.')) return;
+  if (!input.request.taskId) return;
   chatKnowledgeStore.recordToolMessage(
     input.request.taskId,
     serializeToolMemory({

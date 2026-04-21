@@ -233,11 +233,14 @@ export class TaskMemoryStore {
       id: generateId('mem'),
       taskId: result.taskId,
       kind: 'model_result',
-      text: result.success ? result.output : (result.error || 'Invocation failed'),
+      text: result.status === 'cancelled'
+        ? (result.error || 'Task cancelled by user.')
+        : (result.success ? result.output : (result.error || 'Invocation failed')),
       providerId: result.providerId,
       createdAt: Date.now(),
       metadata: {
         success: result.success,
+        status: result.status,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         durationMs: result.usage.durationMs,

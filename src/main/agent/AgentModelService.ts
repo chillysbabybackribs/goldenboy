@@ -20,7 +20,7 @@ import { eventBus } from '../events/eventBus';
 import { AppEventType } from '../../shared/types/events';
 import { generateId } from '../../shared/utils/ids';
 import { AgentProvider, AgentToolName } from './AgentTypes';
-import { AgentRuntime } from './AgentRuntime';
+import { AgentRuntime, readPartialUsageFromError } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
 import { GeminiProvider } from './GeminiProvider';
 import { HaikuProvider } from './HaikuProvider';
@@ -28,14 +28,17 @@ import { AppServerBackedProvider } from './AppServerBackedProvider';
 import { AppServerProcess } from './AppServerProcess';
 import { AppServerProvider } from './AppServerProvider';
 import { agentToolExecutor } from './AgentToolExecutor';
-import { createBrowserToolDefinitions } from './tools/browserTools';
-import { createChatToolDefinitions } from './tools/chatTools';
-import { createSessionMemoryToolDefinitions } from './tools/sessionMemoryTools';
-import { createAttachmentToolDefinitions, DOCUMENT_ATTACHMENT_TOOL_NAMES } from './tools/attachmentTools';
-import { createFilesystemToolDefinitions } from './tools/filesystemTools';
-import { createRuntimeToolDefinitions } from './tools/runtimeTools';
-import { createTerminalToolDefinitions } from './tools/terminalTools';
-import { createSubAgentToolDefinitions } from './tools/subagentTools';
+import { createBrowserToolDefinitions } from './tools/browser';
+import { createContextToolDefinitions } from './tools/context';
+import { createSessionMemoryToolDefinitions } from './tools/session';
+import { createAttachmentToolDefinitions, DOCUMENT_ATTACHMENT_TOOL_NAMES } from './tools/attachments';
+import { createFilesystemToolDefinitions } from './tools/filesystem';
+import { createTerminalToolDefinitions } from './tools/terminal';
+import { createSubAgentToolDefinitions } from './tools/subagent';
+import { createRepoMapToolDefinitions } from './tools/repomap';
+import { createWorkspaceToolDefinitions } from './tools/workspace';
+import { workspaceManifestService } from './workspaceManifest';
+import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
 import { applyAdaptiveTaskProfileOverride, scopeForPrompt, withBrowserSearchDirective } from './runtimeScope';
@@ -57,6 +60,7 @@ import {
 import type { InvocationAttachment } from '../../shared/types/model';
 import type { TaskPlanMetadata } from '../../shared/types/model';
 import type { DocumentInvocationAttachment } from '../../shared/types/attachments';
+import { getAgentCancellationMessage, isAgentCancellationError } from './cancellation';
 
 type ProviderEntry = {
   id: ProviderId;
@@ -159,7 +163,7 @@ function buildInitialPlanMetadata(prompt: string): TaskPlanMetadata {
 function buildParentTurnPlanMetadata(
   output: string,
   providerId: ProviderId,
-  stage: 'parent-turn-complete' | 'parent-turn-failed',
+  stage: 'parent-turn-complete' | 'parent-turn-failed' | 'parent-turn-cancelled',
 ): TaskPlanMetadata {
   const compact = summarizeOrchestrationMilestone(output);
   return {
@@ -172,24 +176,29 @@ function buildParentTurnPlanMetadata(
   };
 }
 
-function buildOrchestrationContinuationContext(taskId: string, taskKind: AgentTaskKind): string | null {
-  if (taskKind !== 'orchestration') return null;
+function buildSubagentContinuationContext(taskId: string, taskKind: AgentTaskKind): string | null {
   const planContext = taskMemoryStore.buildPlanContext(taskId);
   const snapshot = taskMemoryStore.getPlanSnapshot(taskId);
   if (!planContext && !snapshot) return null;
 
   const sections: string[] = [];
   if (snapshot) {
-    sections.push('## Orchestration Guidance');
+    sections.push(taskKind === 'orchestration' ? '## Orchestration Guidance' : '## Sub-Agent Status');
     if (snapshot.latestStage) sections.push(`Latest stage: ${snapshot.latestStage}`);
     if (snapshot.runningSubagents.length > 0) {
       sections.push(`Running sub-agents: ${snapshot.runningSubagents.map(item => `${item.role} (${item.subagentId})`).join(', ')}`);
-      sections.push('Do not spawn duplicate sub-agents for work that is already running unless the task has materially changed.');
-      sections.push('Prefer continuing local critical-path work or waiting if the next step depends on a running child.');
+      sections.push(taskKind === 'orchestration'
+        ? 'Do not spawn duplicate sub-agents for work that is already running unless the task has materially changed.'
+        : 'Do not lose track of already-running child work. Prefer checking the existing child before spawning a duplicate.');
+      sections.push(taskKind === 'orchestration'
+        ? 'Prefer continuing local critical-path work or waiting if the next step depends on a running child.'
+        : 'If the user asks for progress or completion, use the current child status as the first continuity checkpoint.');
     }
     if (snapshot.blockedSubagents.length > 0) {
       sections.push(`Blocked sub-agents: ${snapshot.blockedSubagents.map(item => `${item.role}`).join(', ')}`);
-      sections.push('Resolve the known blocker or explicitly change the plan before spawning replacement sub-agents.');
+      sections.push(taskKind === 'orchestration'
+        ? 'Resolve the known blocker or explicitly change the plan before spawning replacement sub-agents.'
+        : 'Resolve the known blocker or state it clearly before starting replacement child work.');
     }
     if (snapshot.nextAction) {
       sections.push(`Priority next action: ${snapshot.nextAction}`);
@@ -209,22 +218,7 @@ function logAdaptiveOrchestrationScopeDecision(input: {
   originalTaskProfile?: AgentInvocationOptions['taskProfile'];
   adaptiveTaskProfile?: AgentInvocationOptions['taskProfile'];
 }): void {
-  const originalPreset = input.originalTaskProfile?.toolScopePreset || 'default';
-  const adaptivePreset = input.adaptiveTaskProfile?.toolScopePreset || originalPreset;
-  const discovery = input.adaptiveTaskProfile?.disableToolDiscovery ? 'disabled' : 'default';
-  if (adaptivePreset === originalPreset && discovery === 'default') return;
-
-  appStateStore.dispatch({
-    type: ActionType.ADD_LOG,
-    log: {
-      id: generateId('log'),
-      timestamp: Date.now(),
-      level: 'info',
-      source: 'system',
-      taskId: input.taskId,
-      message: `Adaptive orchestration scope preset=${adaptivePreset} discovery=${discovery} prompt=${input.prompt.slice(0, 120)}`,
-    },
-  });
+  void input;
 }
 
 function buildDocumentAttachmentContext(attachments?: InvocationAttachment[]): string | null {
@@ -274,15 +268,38 @@ class AgentModelService {
 
   init(): void {
     agentToolExecutor.registerMany([
+      ...createContextToolDefinitions(),
       ...createAttachmentToolDefinitions(),
-      ...createRuntimeToolDefinitions(),
       ...createBrowserToolDefinitions(),
-      ...createChatToolDefinitions(),
       ...createSessionMemoryToolDefinitions(),
       ...createFilesystemToolDefinitions(),
       ...createTerminalToolDefinitions(),
-      ...createSubAgentToolDefinitions((input) => this.createPreferredSubAgentProvider(input)),
+      ...createRepoMapToolDefinitions(),
+      ...createWorkspaceToolDefinitions(),
+      ...createSubAgentToolDefinitions(
+        (input) => this.createPreferredSubAgentProvider(input),
+        ({ taskId, providerId, usage }) => this.recordInvocationUsage(taskId, providerId, usage),
+      ),
     ]);
+
+    // Pre-warm the workspace manifest so the compact directory overview is
+    // available at the first prompt build without paying the initial walk
+    // cost inline. Runs in the background; if it hasn't finished by the time
+    // the first prompt is built, the overview section is simply omitted.
+    void workspaceManifestService
+      .getManifest(APP_WORKSPACE_ROOT)
+      .catch((err) => {
+        appStateStore.dispatch({
+          type: ActionType.ADD_LOG,
+          log: {
+            id: generateId('log'),
+            timestamp: Date.now(),
+            level: 'warn',
+            source: 'system' as LogSource,
+            message: `Workspace manifest pre-warm failed: ${String((err as Error)?.message ?? err)}`,
+          },
+        });
+      });
 
     void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
     this.initializeHaikuProvider(PROVIDER_CONFIGS[1]);
@@ -413,14 +430,25 @@ class AgentModelService {
 
       const runtimePrompt = withBrowserSearchDirective(prompt, adaptiveTaskProfile);
       const runtimeScope = scopeForPrompt(prompt, adaptiveTaskProfile);
-      const useContinuationContext = shouldUseAutomaticContinuationContext(taskId, prompt);
+      // Real prior-turn continuity travels as structured messages so stateless
+      // providers (Haiku, Gemini) see actual chat history instead of a
+      // markdown recap buried inside a single user turn. The Markdown recap is
+      // still emitted via `buildInvocationContext` below as a belt-and-braces
+      // hint for providers that ignore `priorTurns`.
+      const priorTurns = chatKnowledgeStore.listPriorTurns(taskId, {
+        count: 6,
+        maxChars: 6000,
+        excludeMessageIds: [chatUserMessage.id],
+      });
       const contextPrompt = buildContextPrompt([
-        buildOrchestrationContinuationContext(taskId, taskProfile.kind),
-        useContinuationContext ? buildAutomaticTaskContinuationContext(taskId, prompt) : null,
+        // Direct chat continuity comes FIRST so under budget contention the
+        // prior-message block always wins over recall/summary-based blocks.
         chatKnowledgeStore.buildInvocationContext(taskId, chatUserMessage.id, {
           includeCurrentMessage: false,
-          recentCount: useContinuationContext ? 1 : 2,
+          recentCount: 3,
         }),
+        buildSubagentContinuationContext(taskId, taskProfile.kind),
+        buildAutomaticTaskContinuationContext(taskId, prompt),
         taskMemoryContext,
         buildDocumentAttachmentContext(options?.attachments),
       ]);
@@ -433,6 +461,7 @@ class AgentModelService {
         taskId,
         cwd: options?.cwd,
         contextPrompt,
+        priorTurns,
         systemPromptAddendum: options?.systemPrompt,
         allowedTools: withDocumentAttachmentTools(runtimeScope.allowedTools, options?.attachments),
         attachments: options?.attachments,
@@ -471,6 +500,7 @@ class AgentModelService {
         taskId,
         providerId,
         success: true,
+        status: 'completed',
         output: response.output,
         artifacts: [],
         codexItems: response.codexItems,
@@ -508,36 +538,62 @@ class AgentModelService {
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const cancelled = isAgentCancellationError(err);
+      const partialUsage = readPartialUsageFromError(err);
+      const failureUsage = partialUsage ?? { inputTokens: 0, outputTokens: 0, durationMs: 0 };
       const result: InvocationResult = {
         taskId,
         providerId,
         success: false,
         output: '',
         artifacts: [],
-        error: message,
-        usage: { inputTokens: 0, outputTokens: 0, durationMs: 0 },
+        error: cancelled ? getAgentCancellationMessage() : message,
+        status: cancelled ? 'cancelled' : 'failed',
+        usage: failureUsage,
       };
-      chatKnowledgeStore.recordAssistantMessage(taskId, `Invocation failed: ${message}`, providerId);
+      chatKnowledgeStore.recordAssistantMessage(
+        taskId,
+        cancelled ? getAgentCancellationMessage() : `Invocation failed: ${message}`,
+        providerId,
+      );
       taskMemoryStore.recordInvocationResult(result);
       if (taskProfile.kind === 'orchestration') {
         taskMemoryStore.recordPlan(
           taskId,
-          `Parent orchestration turn failed | ${message}`,
-          buildParentTurnPlanMetadata(message, providerId, 'parent-turn-failed'),
+          cancelled
+            ? 'Parent orchestration turn cancelled by user'
+            : `Parent orchestration turn failed | ${message}`,
+          buildParentTurnPlanMetadata(
+            cancelled ? getAgentCancellationMessage() : message,
+            providerId,
+            cancelled ? 'parent-turn-cancelled' : 'parent-turn-failed',
+          ),
         );
       }
-      this.recordInvocationUsage(taskId, providerId, result.usage);
+      // Only record if we actually have non-zero usage to avoid a noisy log
+      // entry and an extra ACCUMULATE_TASK_TOKEN_USAGE dispatch when nothing
+      // was spent (typical for early-cancelled runs).
+      if (partialUsage) {
+        this.recordInvocationUsage(taskId, providerId, partialUsage);
+      }
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
         taskId,
-        updates: { status: 'failed', owner: providerId, updatedAt: Date.now() },
+        updates: { status: cancelled ? 'cancelled' : 'failed', owner: providerId, updatedAt: Date.now() },
       });
       this.setRuntime(providerId, {
-        status: 'error',
+        status: cancelled ? 'available' : 'error',
         activeTaskId: null,
-        errorDetail: message,
+        errorDetail: cancelled ? null : message,
       });
-      this.log(providerId, 'error', `${provider.label} invocation failed: ${message}`, taskId);
+      this.log(
+        providerId,
+        cancelled ? 'info' : 'error',
+        cancelled
+          ? `${provider.label} invocation cancelled by user`
+          : `${provider.label} invocation failed: ${message}`,
+        taskId,
+      );
       return result;
     } finally {
       this.activeTaskProviders.delete(taskId);
@@ -663,40 +719,54 @@ class AgentModelService {
     );
   }
 
-  private createPreferredSubAgentProvider(input?: Pick<SubAgentSpawnInput, 'task' | 'role' | 'providerId'>): AgentProvider {
+  private createPreferredSubAgentProvider(input?: Pick<SubAgentSpawnInput, 'task' | 'role' | 'providerId' | 'modelId'>): AgentProvider {
     const taskPrompt = [input?.role, input?.task].filter(Boolean).join('\n');
-    if (input?.providerId && input.providerId !== 'auto') {
-      if (!this.providers.has(input.providerId)) {
-        throw new Error(this.buildUnavailableProviderMessage(input.providerId));
+    const inferredProviderId = inferProviderIdFromModelId(input?.modelId);
+    const explicitProviderId = input?.providerId && input.providerId !== 'auto'
+      ? input.providerId
+      : null;
+    const requestedProviderId = explicitProviderId ?? inferredProviderId;
+    if (requestedProviderId) {
+      if (!this.providers.has(requestedProviderId)) {
+        if (explicitProviderId) {
+          throw new Error(this.buildUnavailableProviderMessage(requestedProviderId));
+        }
+      } else {
+        this.assertProviderSupportsPrompt(requestedProviderId, taskPrompt);
+        return this.createProviderInstance(requestedProviderId, input?.modelId);
       }
-      this.assertProviderSupportsPrompt(input.providerId, taskPrompt);
-      return this.createProviderInstance(input.providerId);
     }
 
     const preferred = this.pickAutoProvider(taskPrompt);
-    if (preferred) return this.createProviderInstance(preferred);
+    if (preferred) return this.createProviderInstance(preferred, input?.modelId);
     throw new Error('No compatible provider is available for the requested sub-agent task.');
   }
 
-  private createProviderInstance(providerId: ProviderId): AgentProvider {
+  private createProviderInstance(providerId: ProviderId, modelIdOverride?: string): AgentProvider {
     const config = PROVIDER_CONFIGS.find((entry) => entry.id === providerId);
     if (!config) {
       throw new Error(`Unknown provider configuration: ${providerId}`);
     }
+    if (modelIdOverride && !modelIdMatchesProvider(modelIdOverride, providerId)) {
+      throw new Error(`modelId ${modelIdOverride} does not match provider ${providerId}`);
+    }
     if (providerId === HAIKU_PROVIDER_ID) {
-      return new HaikuProvider();
+      return new HaikuProvider({ modelId: modelIdOverride });
     }
     if (providerId === GEMINI_PROVIDER_ID) {
-      return new GeminiProvider();
+      return new GeminiProvider({ modelId: modelIdOverride });
     }
     if (providerId === PRIMARY_PROVIDER_ID) {
+      if (modelIdOverride && modelIdOverride !== config.modelId) {
+        throw new Error(`Custom modelId is not supported for ${config.label} sub-agents yet. Requested: ${modelIdOverride}`);
+      }
       const session = this.sharedAppServerSession;
       return new AppServerBackedProvider({
         providerId: config.id,
         modelId: config.modelId,
         process: session?.process,
         wsPort: session?.wsPort,
-        provider: session?.provider,
+        provider: !modelIdOverride || modelIdOverride === config.modelId ? session?.provider : undefined,
       });
     }
     throw new Error(`Unsupported direct provider instance path for ${providerId}`);
@@ -853,10 +923,17 @@ class AgentModelService {
   private recordInvocationUsage(
     taskId: string,
     providerId: ProviderId,
-    usage?: { inputTokens: number; outputTokens: number } | null,
+    usage?: {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    } | null,
   ): void {
     const inputTokens = usage?.inputTokens ?? 0;
     const outputTokens = usage?.outputTokens ?? 0;
+    const cachedInputTokens = usage?.cachedInputTokens ?? 0;
+    const cacheCreationInputTokens = usage?.cacheCreationInputTokens ?? 0;
 
     appStateStore.dispatch({
       type: ActionType.ACCUMULATE_TASK_TOKEN_USAGE,
@@ -865,6 +942,8 @@ class AgentModelService {
       inputTokens,
       outputTokens,
       apiCalls: 1,
+      cachedInputTokens,
+      cacheCreationInputTokens,
     });
 
     if (usage) {
@@ -872,6 +951,24 @@ class AgentModelService {
         type: ActionType.ACCUMULATE_TOKEN_USAGE,
         inputTokens,
         outputTokens,
+        cachedInputTokens,
+        cacheCreationInputTokens,
+      });
+    }
+
+    if (usage) {
+      const fullPriced = Math.max(0, inputTokens - cachedInputTokens);
+      const cacheHitRatio = inputTokens > 0 ? cachedInputTokens / inputTokens : 0;
+      appStateStore.dispatch({
+        type: ActionType.ADD_LOG,
+        log: {
+          id: `invocation-usage-${taskId}-${Date.now()}`,
+          timestamp: Date.now(),
+          level: 'info',
+          source: 'system',
+          taskId,
+          message: `Usage ${providerId} [task=${taskId.slice(0, 8)}] input=${inputTokens} cached_read=${cachedInputTokens} cached_write=${cacheCreationInputTokens} full_priced=${fullPriced} output=${outputTokens} cache_hit=${(cacheHitRatio * 100).toFixed(1)}%`,
+        },
       });
     }
 
@@ -883,6 +980,8 @@ class AgentModelService {
         inputTokens,
         outputTokens,
         apiCalls: 1,
+        cachedInputTokens,
+        cacheCreationInputTokens,
       },
       timestamp: Date.now(),
     };
@@ -1007,6 +1106,7 @@ class AgentModelService {
         taskId: input.taskId,
         providerId: input.synthesisProviderId,
         success: true,
+        status: 'completed',
         output: formatted,
         artifacts: [],
         usage: response.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
@@ -1039,6 +1139,21 @@ function isSupportedProvider(value: string): value is ProviderId {
   return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
 }
 
+function inferProviderIdFromModelId(modelId?: string): ProviderId | null {
+  const normalized = modelId?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.startsWith('gemini')) return GEMINI_PROVIDER_ID;
+  if (normalized.startsWith('claude') || /\b(opus|sonnet|haiku)\b/.test(normalized)) return HAIKU_PROVIDER_ID;
+  if (normalized === PRIMARY_PROVIDER_ID) return PRIMARY_PROVIDER_ID;
+  return null;
+}
+
+function modelIdMatchesProvider(modelId: string, providerId: ProviderId): boolean {
+  const inferred = inferProviderIdFromModelId(modelId);
+  if (!inferred) return true;
+  return inferred === providerId;
+}
+
 function hasDisposableProvider(provider: AgentProvider): provider is AgentProvider & { dispose(): Promise<void> | void } {
   return typeof (provider as { dispose?: unknown }).dispose === 'function';
 }
@@ -1052,19 +1167,22 @@ function shouldUseAutomaticContinuationContext(taskId: string, prompt: string): 
 }
 
 function buildAutomaticTaskContinuationContext(taskId: string, prompt: string): string | null {
-  if (!shouldUseAutomaticContinuationContext(taskId, prompt)) {
+  const isContinuation = shouldUseAutomaticContinuationContext(taskId, prompt);
+  const recall = chatKnowledgeStore.recall(taskId, {
+    query: prompt,
+    intent: isContinuation ? 'follow_up' : undefined,
+    maxChars: isContinuation ? 2500 : 1800,
+  });
+  const lastFailure = getLastFailureText(taskId);
+  if (!lastFailure && !recall.summary && !recall.text.trim()) {
     return null;
   }
 
-  const recall = chatKnowledgeStore.recall(taskId, {
-    query: prompt,
-    intent: 'follow_up',
-    maxChars: 2500,
-  });
-  const lastFailure = getLastFailureText(taskId);
   const sections = [
-    '## Continuation Context',
-    'This task is being resumed. Continue from prior evidence and prior tool work instead of restarting broad exploration unless the prior state is clearly insufficient.',
+    '## Conversation Continuity',
+    isContinuation
+      ? 'This task is being resumed. Continue from prior evidence and prior tool work instead of restarting broad exploration unless the prior state is clearly insufficient.'
+      : 'This task has prior conversation state. Use the existing thread summary and relevant recent context as the default continuity baseline unless the user clearly changes direction.',
   ];
 
   if (lastFailure) {

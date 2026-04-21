@@ -1,16 +1,15 @@
 import * as path from 'path';
-import type { AgentTaskKind, CodexItem, TaskPlanMetadata } from '../../../shared/types/model';
-import type { AgentToolCallRecord, AgentToolResult, ValidationStatus } from '../AgentTypes';
+import type { AgentTaskKind, CodexItem, ProviderId, TaskPlanMetadata } from '../../../shared/types/model';
+import type { AgentProviderResult, AgentToolCallRecord, AgentToolResult, ValidationStatus } from '../AgentTypes';
 import { AgentProvider } from '../AgentTypes';
 import { isOrchestrationExecutionReady } from '../runtimeScope';
 import { SubAgentRecord, SubAgentResult, SubAgentScopeResolution, SubAgentSpawnInput } from './SubAgentTypes';
 import { SubAgentRuntime } from './SubAgentRuntime';
 import { agentRunStore } from '../AgentRunStore';
+import { agentToolExecutor } from '../AgentToolExecutor';
 import { chatKnowledgeStore } from '../../chatKnowledge/ChatKnowledgeStore';
 import { taskMemoryStore } from '../../models/taskMemoryStore';
-import { resolveAllowedToolsForTaskKind } from '../toolPacks';
 import { APP_WORKSPACE_ROOT } from '../../workspaceRoot';
-
 function makeSubAgentId(): string {
   return `sub_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -32,10 +31,6 @@ function unique(items: string[]): string[] {
 
 function limitList(items: string[], limit = 6): string[] {
   return unique(items).slice(0, limit);
-}
-
-function normalizeComparableText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function taskKindForSubagentRole(role: string, task: string): AgentTaskKind {
@@ -111,7 +106,6 @@ function extractChangedFiles(toolCalls: AgentToolCallRecord[], codexItems?: Code
       case 'filesystem.write':
       case 'filesystem.patch':
       case 'filesystem.delete':
-      case 'filesystem.mkdir':
         if (typeof data.path === 'string') files.push(toRelativeWorkspacePath(data.path));
         break;
       case 'filesystem.move':
@@ -193,8 +187,20 @@ function extractBlockers(status: SubAgentResult['status'], summary: string, tool
   return limitList(blockers, 8);
 }
 
-function emptyValidation(): SubAgentResult['validation'] {
-  return { total: 0, valid: 0, invalid: 0, incomplete: 0 };
+async function withTimeout<T>(promise: Promise<T>, timeoutMs?: number, label = 'sub-agent'): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) return promise;
+
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function summarizePlanMilestone(input: {
@@ -239,12 +245,19 @@ function buildSubagentPlanMetadata(input: {
   };
 }
 
+export type SubAgentUsageRecorder = (params: {
+  taskId: string;
+  providerId: ProviderId;
+  usage: AgentProviderResult['usage'];
+}) => void;
+
 export class SubAgentManager {
   private records = new Map<string, SubAgentRecord>();
-  private results = new Map<string, SubAgentResult>();
-  private runPromises = new Map<string, Promise<SubAgentResult>>();
 
-  constructor(private readonly providerFactory: (input: SubAgentSpawnInput) => AgentProvider) {}
+  constructor(
+    private readonly providerFactory: (input: SubAgentSpawnInput) => AgentProvider,
+    private readonly recordUsage: SubAgentUsageRecorder | null = null,
+  ) {}
 
   resolveScope(input: SubAgentSpawnInput): SubAgentScopeResolution {
     if (input.allowedTools === 'all') {
@@ -253,30 +266,17 @@ export class SubAgentManager {
     if (Array.isArray(input.allowedTools)) {
       return { allowedTools: input.allowedTools, source: 'explicit-list' };
     }
+    const selectedTools = agentToolExecutor.list()
+      .filter((tool) => input.canSpawnSubagents !== false || !tool.name.startsWith('subagent.'))
+      .map((tool) => tool.name);
     const snapshot = input.taskId ? taskMemoryStore.getPlanSnapshot(input.taskId) : null;
-    const preset = isOrchestrationExecutionReady(snapshot) && !requiresVerificationHeavyScope(input.task)
-      ? 'mode-4'
-      : 'mode-6';
+    const adaptiveSource = isOrchestrationExecutionReady(snapshot) && !requiresVerificationHeavyScope(input.task)
+      ? 'derived-runtime-selected-adaptive'
+      : 'derived-runtime-selected';
     return {
-      allowedTools: resolveAllowedToolsForTaskKind(
-        taskKindForSubagentRole(input.role || 'subagent', input.task),
-        preset,
-      ),
-      source: preset === 'mode-4' ? 'derived-mode4' : 'derived-mode6',
+      allowedTools: selectedTools,
+      source: adaptiveSource,
     };
-  }
-
-  private findDuplicateRunning(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord | null {
-    const targetRole = normalizeComparableText(input.role || 'subagent');
-    const targetTask = normalizeComparableText(input.task);
-    for (const record of this.records.values()) {
-      if (record.parentRunId !== parentRunId) continue;
-      if (record.status !== 'running') continue;
-      if (normalizeComparableText(record.role) !== targetRole) continue;
-      if (normalizeComparableText(record.task) !== targetTask) continue;
-      return { ...record };
-    }
-    return null;
   }
 
   spawn(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord {
@@ -287,6 +287,8 @@ export class SubAgentManager {
       role: input.role || 'subagent',
       task: input.task,
       mode: input.mode || 'unrestricted-dev',
+      providerId: input.providerId || null,
+      modelId: input.modelId?.trim() || null,
       status: 'running',
       createdAt: Date.now(),
       completedAt: null,
@@ -315,35 +317,17 @@ export class SubAgentManager {
     return { ...record };
   }
 
-  run(parentRunId: string, input: SubAgentSpawnInput): Promise<SubAgentResult> {
-    const duplicate = this.findDuplicateRunning(parentRunId, input);
-    if (duplicate) {
-      const existing = this.runPromises.get(duplicate.id);
-      if (existing) return existing;
-    }
-
+  async run(
+    parentRunId: string,
+    input: SubAgentSpawnInput,
+  ): Promise<{ record: SubAgentRecord; result: SubAgentResult }> {
     const record = this.spawn(parentRunId, input);
-    const runtime = new SubAgentRuntime(this.providerFactory(input));
-
-    const promise = (async (): Promise<SubAgentResult> => {
-      if (this.records.get(record.id)?.status === 'cancelled') {
-        const cancelled: SubAgentResult = {
-          id: record.id,
-          status: 'cancelled',
-          summary: 'Cancelled before start',
-          findings: [],
-          changedFiles: [],
-          commands: [],
-          blockers: ['Cancelled before start'],
-          toolCalls: [],
-          validation: emptyValidation(),
-        };
-        this.results.set(record.id, cancelled);
-        return cancelled;
-      }
-
+    const provider = this.providerFactory(input);
+    const runtime = new SubAgentRuntime(provider);
+    const resolvedProviderId = (provider.providerId ?? record.providerId ?? null) as ProviderId | null;
+    try {
       const scope = this.resolveScope(input);
-      const result = await runtime.run({
+      const result = await withTimeout(runtime.run({
         mode: record.mode,
         agentId: record.id,
         role: record.role,
@@ -355,7 +339,20 @@ export class SubAgentManager {
         skillNames: this.skillNamesForRole(record.role, input.canSpawnSubagents !== false),
         allowedTools: scope.allowedTools,
         canSpawnSubagents: input.canSpawnSubagents,
-      });
+        onStatus: (status) => input.onStatus?.(`subagent ${record.id}: ${status}`),
+      }), input.timeoutMs, `sub-agent ${record.id}`);
+      if (this.recordUsage && input.taskId && resolvedProviderId && result.usage) {
+        try {
+          this.recordUsage({
+            taskId: input.taskId,
+            providerId: resolvedProviderId,
+            usage: result.usage,
+          });
+        } catch {
+          // Usage accounting is advisory; never fail a sub-agent run because
+          // bookkeeping throws.
+        }
+      }
       const summary = result.output.slice(0, 1000);
       const completed: SubAgentRecord = {
         ...record,
@@ -377,7 +374,6 @@ export class SubAgentManager {
         toolCalls: summarizeToolCalls(toolCalls),
         validation: summarizeValidation(toolCalls),
       };
-      this.results.set(record.id, subResult);
       if (input.taskId) {
         taskMemoryStore.recordPlan(
           input.taskId,
@@ -401,11 +397,10 @@ export class SubAgentManager {
         );
       }
       this.prune();
-      return subResult;
-    })().catch((err): SubAgentResult => {
+      return { record: { ...completed }, result: subResult };
+    } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const current = this.records.get(record.id) || record;
-      const status = current.status === 'cancelled' ? 'cancelled' : 'failed';
+      const status = 'failed';
       this.records.set(record.id, {
         ...record,
         status,
@@ -424,7 +419,6 @@ export class SubAgentManager {
         toolCalls: summarizeToolCalls(toolCalls),
         validation: summarizeValidation(toolCalls),
       };
-      this.results.set(record.id, subResult);
       if (input.taskId) {
         taskMemoryStore.recordPlan(
           input.taskId,
@@ -435,7 +429,7 @@ export class SubAgentManager {
             blockers: subResult.blockers,
           }),
           buildSubagentPlanMetadata({
-            stage: status === 'cancelled' ? 'subagent-cancelled' : 'subagent-failed',
+            stage: 'subagent-failed',
             role: record.role,
             task: record.task,
             subagentId: record.id,
@@ -446,85 +440,8 @@ export class SubAgentManager {
         );
       }
       this.prune();
-      return subResult;
-    });
-
-    this.runPromises.set(record.id, promise);
-    return promise;
-  }
-
-  spawnBackground(parentRunId: string, input: SubAgentSpawnInput): { record: SubAgentRecord; reused: boolean } {
-    const duplicate = this.findDuplicateRunning(parentRunId, input);
-    if (duplicate) {
-      const existing = this.runPromises.get(duplicate.id);
-      if (existing) {
-        return { record: duplicate, reused: true };
-      }
+      return { record: { ...this.records.get(record.id)! }, result: subResult };
     }
-
-    const promise = this.run(parentRunId, input);
-    promise.catch(() => {});
-    const id = Array.from(this.records.values())
-      .filter(record => record.parentRunId === parentRunId)
-      .sort((a, b) => b.createdAt - a.createdAt)[0]?.id;
-    if (!id) throw new Error('Failed to create sub-agent');
-    return { record: this.get(id)!, reused: false };
-  }
-
-  async wait(id: string, timeoutMs: number = 120_000): Promise<SubAgentResult> {
-    const existing = this.results.get(id);
-    if (existing) return { ...existing };
-
-    const promise = this.runPromises.get(id);
-    if (!promise) throw new Error(`Sub-agent not found: ${id}`);
-
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<SubAgentResult>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error(`Timed out waiting for sub-agent ${id}`)), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
-  }
-
-  cancel(id: string): SubAgentRecord {
-    const record = this.records.get(id);
-    if (!record) throw new Error(`Sub-agent not found: ${id}`);
-    const next: SubAgentRecord = {
-      ...record,
-      status: 'cancelled',
-      completedAt: Date.now(),
-      error: 'Cancelled',
-    };
-    this.records.set(id, next);
-    this.results.set(id, {
-      id,
-      status: 'cancelled',
-      summary: 'Cancelled',
-      findings: [],
-      changedFiles: [],
-      commands: [],
-      blockers: ['Cancelled'],
-      toolCalls: [],
-      validation: emptyValidation(),
-    });
-    this.prune();
-    return { ...next };
-  }
-
-  get(id: string): SubAgentRecord | null {
-    const record = this.records.get(id);
-    return record ? { ...record } : null;
-  }
-
-  list(parentRunId?: string): SubAgentRecord[] {
-    return Array.from(this.records.values())
-      .filter(record => !parentRunId || record.parentRunId === parentRunId)
-      .map(record => ({ ...record }));
   }
 
   private skillNamesForRole(role: string, canSpawnSubagents: boolean): string[] {
@@ -580,7 +497,5 @@ export class SubAgentManager {
 
   private deleteRecord(id: string): void {
     this.records.delete(id);
-    this.results.delete(id);
-    this.runPromises.delete(id);
   }
 }

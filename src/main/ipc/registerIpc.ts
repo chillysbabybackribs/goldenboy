@@ -239,6 +239,31 @@ export function registerIpc(): void {
       throw new Error(`Window not available: ${role}`);
     }
     browserService.attachSurface(targetWindow, role);
+
+    // Single-window mode: when the browser is hosted by the command window,
+    // hide the execution window; when it moves back, reveal it again.
+    const executionWindow = getWindowByRole('execution');
+    if (executionWindow) {
+      if (role === 'command') {
+        if (executionWindow.isVisible()) {
+          executionWindow.hide();
+          appStateStore.dispatch({
+            type: ActionType.SET_WINDOW_VISIBLE,
+            role: 'execution',
+            isVisible: false,
+          });
+        }
+      } else {
+        if (!executionWindow.isVisible()) {
+          executionWindow.show();
+          appStateStore.dispatch({
+            type: ActionType.SET_WINDOW_VISIBLE,
+            role: 'execution',
+            isVisible: true,
+          });
+        }
+      }
+    }
     return { role };
   });
 

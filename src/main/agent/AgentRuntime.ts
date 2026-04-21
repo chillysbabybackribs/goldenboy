@@ -1,5 +1,10 @@
-import { AgentProvider, AgentRuntimeConfig, AgentProviderResult } from './AgentTypes';
-import { agentPromptBuilder, buildResponseStyleAddendum } from './AgentPromptBuilder';
+import { AgentProvider, AgentRuntimeConfig, AgentProviderResult, PARTIAL_USAGE_ERROR_KEY } from './AgentTypes';
+import {
+  agentPromptBuilder,
+  buildCurrentDateTimeLine,
+  buildResponseStyleAddendum,
+  type SystemPromptBreakdown,
+} from './AgentPromptBuilder';
 import { agentRunStore } from './AgentRunStore';
 import { agentSkillLoader } from './AgentSkillLoader';
 import { agentToolExecutor } from './AgentToolExecutor';
@@ -11,9 +16,22 @@ import { isProviderId } from '../../shared/types/model';
 import type { AgentProviderRequest } from './AgentTypes';
 import { buildTaskProfile } from './taskProfile';
 import { getChatSessionMemory } from '../chatKnowledge/ChatSessionMemory';
+import { createToolScopeState, listActiveTools } from './toolScopeState';
+import { isAgentCancellationError } from './cancellation';
+import { describeInputSchemaCompact } from './CodexProvider';
+import { taskMemoryStore } from '../models/taskMemoryStore';
+import { buildBrowserContextBlock, type BrowserContextSources } from './browserContextInjection';
+import { defaultBrowserContextSources } from './defaultBrowserContextSources';
 
 export class AgentRuntime {
-  constructor(private readonly provider: AgentProvider) {}
+  private readonly browserContextSources: BrowserContextSources;
+
+  constructor(
+    private readonly provider: AgentProvider,
+    options?: { browserContextSources?: BrowserContextSources },
+  ) {
+    this.browserContextSources = options?.browserContextSources ?? defaultBrowserContextSources;
+  }
 
   abort(): void {
     if (this.provider.abort) {
@@ -34,8 +52,14 @@ export class AgentRuntime {
 
     try {
       const runtimeToolRegistry = filterToolRegistryForConfig(agentToolExecutor.list(), config);
-      const scopedTools = filterToolsForConfig(runtimeToolRegistry, config);
-      const loadableTools = config.restrictLoadableToolsToAllowedTools ? scopedTools : runtimeToolRegistry;
+      const scopedTools = selectStartupToolsForConfig(runtimeToolRegistry, config);
+      const toolScope = createToolScopeState(
+        scopedTools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      );
       assertInitialBrowserScope(config.task, scopedTools.map(tool => tool.name));
       
       // OPTIMIZATION: Lazy-load skills.
@@ -47,27 +71,26 @@ export class AgentRuntime {
         : [];
       
       const responseStyleAddendum = buildResponseStyleAddendum(config.task);
-      const systemPrompt = agentPromptBuilder.buildSystemPrompt({
-        config: responseStyleAddendum
-          ? {
-            ...config,
-            systemPromptAddendum: [config.systemPromptAddendum?.trim(), responseStyleAddendum].filter(Boolean).join('\n\n'),
-          }
-          : config,
+      const promptConfig: AgentRuntimeConfig = responseStyleAddendum
+        ? {
+          ...config,
+          systemPromptAddendum: [config.systemPromptAddendum?.trim(), responseStyleAddendum].filter(Boolean).join('\n\n'),
+        }
+        : config;
+      const promptInput = {
+        config: promptConfig,
         skills,
         tools: scopedTools,
-      });
-      
+      };
+      const systemPrompt = agentPromptBuilder.buildSystemPrompt(promptInput);
+      const systemBreakdown = agentPromptBuilder.describeSystemPromptSections(promptInput);
+
       logPromptBudget(run.id, config, {
         systemPrompt,
+        systemBreakdown,
         contextPrompt: config.contextPrompt,
         skillCount: skills.length,
         tools: scopedTools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
-        loadableTools: loadableTools.map(tool => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema,
@@ -78,8 +101,20 @@ export class AgentRuntime {
       const sessionMemory = getChatSessionMemory();
       const previousMessages = sessionMemory.getPreviousSessionContext();
       const sessionContextBlock = sessionMemory.buildContextInjectionString(previousMessages);
+      // Datetime + browser overview ride the user turn so the system prompt stays
+      // byte-stable for prompt-cache reuse. Browser overview sits before the
+      // caller-supplied context so cross-tab working memory survives truncation
+      // when the shared cap is tight.
+      const browserContextBlock = buildBrowserContextBlock(this.browserContextSources);
+      const taskMemoryBlock = config.taskId ? taskMemoryStore.buildContext(config.taskId) : null;
       const contextPrompt = packContextSections(
-        [config.contextPrompt, sessionContextBlock],
+        [
+          buildCurrentDateTimeLine(config.agentId),
+          browserContextBlock,
+          config.contextPrompt,
+          sessionContextBlock,
+          taskMemoryBlock,
+        ],
         4_000,
         '\n...[context truncated]',
       );
@@ -92,17 +127,10 @@ export class AgentRuntime {
         systemPrompt,
         task: config.task,
         contextPrompt,
+        priorTurns: config.priorTurns,
         maxToolTurns: config.maxToolTurns,
-        tools: scopedTools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
-        loadableTools: loadableTools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
+        toolScope,
+        tools: listActiveTools(toolScope),
         attachments: config.attachments,
         onToken: config.onToken,
         onStatus: config.onStatus,
@@ -116,10 +144,43 @@ export class AgentRuntime {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      agentRunStore.finishRun(run.id, 'failed', null, message);
+      agentRunStore.finishRun(
+        run.id,
+        isAgentCancellationError(err) ? 'cancelled' : 'failed',
+        null,
+        message,
+      );
+      // Attach whatever usage the provider accumulated before the failure so
+      // higher layers can record it instead of losing the spend to zeros.
+      const partialUsage = this.provider.getPartialUsage?.() ?? null;
+      if (partialUsage && err && typeof err === 'object') {
+        try {
+          (err as Record<string, unknown>)[PARTIAL_USAGE_ERROR_KEY] = partialUsage;
+        } catch {
+          // Best-effort; non-extensible errors are rare and the data is
+          // advisory.
+        }
+      }
       throw err;
     }
   }
+}
+
+type AgentProviderUsage = NonNullable<AgentProviderResult['usage']>;
+
+export function readPartialUsageFromError(err: unknown): AgentProviderUsage | null {
+  if (!err || typeof err !== 'object') return null;
+  const value = (err as Record<string, unknown>)[PARTIAL_USAGE_ERROR_KEY];
+  if (!value || typeof value !== 'object') return null;
+  const usage = value as Partial<AgentProviderUsage>;
+  if (typeof usage.inputTokens !== 'number' || typeof usage.outputTokens !== 'number') return null;
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    cacheCreationInputTokens: usage.cacheCreationInputTokens,
+    durationMs: typeof usage.durationMs === 'number' ? usage.durationMs : 0,
+  };
 }
 
 export function assertInitialBrowserScope(
@@ -177,10 +238,10 @@ function logPromptBudget(
   config: AgentRuntimeConfig,
   input: {
     systemPrompt: string;
+    systemBreakdown?: SystemPromptBreakdown;
     contextPrompt?: string | null;
     skillCount: number;
     tools: AgentProviderRequest['tools'];
-    loadableTools: AgentProviderRequest['loadableTools'];
     lazyLoadEnabled?: boolean;
   },
 ): void {
@@ -190,13 +251,17 @@ function logPromptBudget(
   const sharedChars = systemChars + contextChars + taskChars;
   const toolPayloadChars = estimateProviderToolPayloadChars(config.agentId, input.tools);
   const totalChars = sharedChars + toolPayloadChars;
+
+  const source = resolveLogSource(config.agentId);
+  const timestamp = Date.now();
+
   appStateStore.dispatch({
     type: ActionType.ADD_LOG,
     log: {
       id: generateId('log'),
-      timestamp: Date.now(),
+      timestamp,
       level: 'info',
-      source: resolveLogSource(config.agentId),
+      source,
       taskId: config.taskId,
       message: [
         `Prompt budget run=${runId}`,
@@ -204,8 +269,10 @@ function logPromptBudget(
         `role=${config.role}`,
         `skills=${input.skillCount}`,
         `tools=${input.tools.length}`,
-        `loadableTools=${input.loadableTools.length}`,
         `maxToolTurns=${config.maxToolTurns ?? 'default'}`,
+        `systemChars=${systemChars}`,
+        `contextChars=${contextChars}`,
+        `taskChars=${taskChars}`,
         `sharedChars=${sharedChars}`,
         `sharedTokens=${Math.ceil(sharedChars / 4)}`,
         `toolPayloadChars=${toolPayloadChars}`,
@@ -213,11 +280,28 @@ function logPromptBudget(
         `totalChars=${totalChars}`,
         `totalEstTokens=${Math.ceil(totalChars / 4)}`,
         input.tools.length > 0 ? `scopedToolNames=${input.tools.map((tool) => tool.name).join(',')}` : 'scopedToolNames=none',
-        input.loadableTools.length > 0 ? `loadableToolNames=${input.loadableTools.map((tool) => tool.name).join(',')}` : 'loadableToolNames=none',
         input.lazyLoadEnabled ? 'lazyLoad=enabled' : '',
       ].filter(Boolean).join(' '),
     },
   });
+
+  if (input.systemBreakdown) {
+    const nonZeroSections = input.systemBreakdown.sections.filter((section) => section.chars > 0);
+    const breakdownSummary = nonZeroSections
+      .map((section) => `${section.name}=${section.chars}`)
+      .join(' ');
+    appStateStore.dispatch({
+      type: ActionType.ADD_LOG,
+      log: {
+        id: generateId('log'),
+        timestamp,
+        level: 'info',
+        source,
+        taskId: config.taskId,
+        message: `Prompt breakdown run=${runId} systemChars=${input.systemBreakdown.total} ${breakdownSummary}`,
+      },
+    });
+  }
 }
 
 function estimateProviderToolPayloadChars(
@@ -238,13 +322,10 @@ function estimateProviderToolPayloadChars(
   }
 
   return tools.map((tool) => {
-    const schema = JSON.stringify(tool.inputSchema, null, 2);
-    return [
-      `- ${tool.name}`,
-      `  Description: ${tool.description}`,
-      `  Input schema: ${schema}`,
-    ].join('\n');
-  }).join('\n\n').length;
+    const sig = describeInputSchemaCompact(tool.inputSchema);
+    const head = sig ? `- ${tool.name}(${sig})` : `- ${tool.name}()`;
+    return `${head}\n  ${tool.description}`;
+  }).join('\n').length;
 }
 
 function resolveLogSource(agentId: string): LogSource {
@@ -273,4 +354,26 @@ function filterToolRegistryForConfig(
     if (config.canSpawnSubagents === false && tool.name.startsWith('subagent.')) return false;
     return true;
   });
+}
+
+// Initial tool surface for a run.
+//
+// The long-standing "map-first" / lazy-load behavior used to hide most tools on
+// startup and force the model to bootstrap its own scope via `context.load`.
+// That caused every provider to lose access to tools mid-task whenever the
+// startup regex failed to match intent. It is intentionally removed here.
+//
+// Rule, applied uniformly to every provider and every invocation:
+//   - `allowedTools === 'all'` (or unset): expose every registered tool
+//     (minus `subagent.*` if the caller explicitly disabled spawning).
+//   - `allowedTools: AgentToolName[]`: the caller is opting in to a narrow
+//     surface (e.g. a sub-agent spawn with a deliberate, explicit tool list).
+//     Respect it exactly.
+//
+// There is no heuristic narrowing, no "startup scope", no preload regex.
+function selectStartupToolsForConfig(
+  tools: ReturnType<typeof agentToolExecutor.list>,
+  config: AgentRuntimeConfig,
+): ReturnType<typeof agentToolExecutor.list> {
+  return filterToolsForConfig(tools, config);
 }

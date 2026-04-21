@@ -22,6 +22,7 @@ import {
   replaceWithResult as replaceWithResultInternal,
 } from './live-run.js';
 import { attachmentIconSvg, getAttachmentFileKind } from './attachmentIcons.js';
+import { renderMarkdown } from './markdown.js';
 
 const getWorkspaceAPI = () => (window as any).workspaceAPI as WorkspaceAPI | null;
 const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
@@ -41,6 +42,15 @@ const logsClearBtn = document.getElementById('logsClearBtn')!;
 const logsBtn = document.getElementById('logsBtn') as HTMLButtonElement;
 const logsOverlay = document.getElementById('logsOverlay') as HTMLDivElement;
 const logsCloseBtn = document.getElementById('logsCloseBtn')!;
+
+// Terminal overlay
+const commandTerminalBtn = document.getElementById('commandTerminalBtn') as HTMLButtonElement | null;
+const terminalOverlay = document.getElementById('terminalOverlay') as HTMLDivElement | null;
+const commandTerminalSurface = document.getElementById('commandTerminalSurface') as HTMLDivElement | null;
+const commandTerminalStatus = document.getElementById('commandTerminalStatus') as HTMLSpanElement | null;
+const commandTerminalMeta = document.getElementById('commandTerminalMeta') as HTMLSpanElement | null;
+const commandTerminalCloseBtn = document.getElementById('commandTerminalCloseBtn') as HTMLButtonElement | null;
+const commandTerminalRestartBtn = document.getElementById('commandTerminalRestartBtn') as HTMLButtonElement | null;
 
 // Chat
 const chatThread = document.getElementById('chatThread')!;
@@ -69,10 +79,13 @@ const commandBrowserAttachBtn = document.getElementById('commandBrowserAttachBtn
 
 // Agent tabs
 const agentTabsShell = document.getElementById('agentTabsShell') as HTMLDivElement;
-const agentSidebarToggleBtn = document.getElementById('agentSidebarToggleBtn') as HTMLButtonElement;
+const agentSidebarHeaderToggleBtn = document.getElementById('agentSidebarHeaderToggleBtn') as HTMLButtonElement;
 const agentTabs = document.getElementById('agentTabs') as HTMLDivElement;
 const agentTabsList = document.getElementById('agentTabsList') as HTMLDivElement;
 const agentTabNewBtn = document.getElementById('agentTabNewBtn') as HTMLButtonElement;
+const agentSidebarFooter = document.getElementById('agentSidebarFooter') as HTMLDivElement;
+const agentSidebarCollapseMoreBtn = document.getElementById('agentSidebarCollapseMoreBtn') as HTMLButtonElement;
+const agentSidebarFooterCount = document.getElementById('agentSidebarFooterCount') as HTMLSpanElement;
 
 // History
 const chatHistoryBtn = document.getElementById('chatHistoryBtn')!;
@@ -142,11 +155,15 @@ let chatZoom = 1;
 let agentSidebarCollapsed = true;
 const runningTaskIds = new Set<string>();
 let completedExpanded = false;
+/** Keys of date buckets (e.g. 'today', 'previous-7', 'month-2025-8') the user has opened. */
+const expandedBuckets = new Set<string>();
 let lastTaskListSignature = '';
+let lastAgentTabsRenderKey = '';
 let browserBoundsTimer: number | null = null;
 let browserBoundsObserver: ResizeObserver | null = null;
 let lastCommandBrowserState: BrowserState | null = null;
 const pendingLiveProgressByTask = new Map<string, Array<any>>();
+let lastStateChromeKey = '';
 
 const CHAT_ZOOM_STORAGE_KEY = 'command-center-chat-zoom';
 const CHAT_ZOOM_DEFAULT = 1;
@@ -258,6 +275,7 @@ function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as an
   selectedOwner = normalizeSelectedOwner(nextOwner, state);
   persistSelectedOwner();
   syncModelToggleState(state);
+  updateTokenUsageDisplay(state, selectedOwner);
 }
 
 function getModelBtn(owner: ExplicitSelectableOwner): HTMLButtonElement {
@@ -379,7 +397,7 @@ function renderCommandBrowserState(state: BrowserState): void {
     commandBrowserPane.hidden = !attached;
   }
   commandBrowserAttachBtn.disabled = state.hostWindowRole === null;
-  commandBrowserAttachBtn.textContent = attached ? 'Detach Browser' : 'Attach Browser';
+  commandBrowserAttachBtn.textContent = attached ? 'Detach' : 'Attach';
   commandBrowserAttachBtn.title = attached ? 'Move browser back to execution window' : 'Move browser to command window';
   commandBrowserAttachBtn.setAttribute('aria-label', commandBrowserAttachBtn.title);
   renderCommandBrowserTabs(
@@ -481,6 +499,7 @@ function initializeCommandBrowserPane(): void {
 let lastLogCount = 0;
 let logsCopyFeedbackTimer: number | null = null;
 let logsOpen = false;
+let lastLogsSignature = '';
 
 function setLogsOpen(open: boolean): void {
   logsOpen = open;
@@ -503,6 +522,14 @@ document.addEventListener('click', (e) => {
 });
 
 function renderLogs(logs: any[]): void {
+  const nextSignature = logs.length > 0
+    ? `${logs.length}:${logs[0]?.id || ''}:${logs[logs.length - 1]?.id || ''}`
+    : '0';
+  if (nextSignature === lastLogsSignature) return;
+  if (logs.length < lastLogCount) {
+    logStream.innerHTML = '';
+    lastLogCount = 0;
+  }
   const newLogs = logs.slice(lastLogCount);
   for (const log of newLogs) {
     const el = document.createElement('div');
@@ -511,6 +538,7 @@ function renderLogs(logs: any[]): void {
     logStream.appendChild(el);
   }
   lastLogCount = logs.length;
+  lastLogsSignature = nextSignature;
   logStream.scrollTop = logStream.scrollHeight;
 }
 
@@ -555,6 +583,167 @@ logsCopyBtn.addEventListener('click', () => {
 logsClearBtn.addEventListener('click', () => {
   logStream.innerHTML = '';
   lastLogCount = 0;
+});
+
+// ─── Terminal Overlay ─────────────────────────────────────────────────────
+
+declare const Terminal: any;
+declare const FitAddon: any;
+
+let commandTerm: any = null;
+let commandTermFitAddon: any = null;
+let commandTermInitialized = false;
+let commandTermOverlayOpen = false;
+let commandTermResizeObserver: ResizeObserver | null = null;
+let commandTermFitTimer: number | null = null;
+let commandTermScrollbackLoaded = false;
+
+function fitCommandTerminal(): void {
+  if (!commandTerm || !commandTermFitAddon) return;
+  try {
+    commandTermFitAddon.fit();
+    const dims = { cols: commandTerm.cols, rows: commandTerm.rows };
+    if (dims.cols > 0 && dims.rows > 0) {
+      void getWorkspaceAPI()?.terminal.resize(dims.cols, dims.rows);
+    }
+  } catch {
+    // xterm resize errors are non-fatal and can recur on overlay close.
+  }
+}
+
+function scheduleCommandTerminalFit(): void {
+  if (commandTermFitTimer !== null) window.clearTimeout(commandTermFitTimer);
+  commandTermFitTimer = window.setTimeout(() => {
+    fitCommandTerminal();
+    commandTermFitTimer = null;
+  }, 32);
+}
+
+function updateCommandTerminalMeta(session: { status?: string; cwd?: string; pid?: number | null } | null): void {
+  if (!session) return;
+  const statusMap: Record<string, string> = {
+    running: 'Running', exited: 'Exited', error: 'Error', starting: 'Starting',
+  };
+  if (commandTerminalStatus) {
+    commandTerminalStatus.textContent = statusMap[session.status || ''] || session.status || '';
+  }
+  if (commandTerminalMeta) {
+    const bits: string[] = [];
+    if (session.pid) bits.push(`pid ${session.pid}`);
+    if (session.cwd) bits.push(session.cwd);
+    commandTerminalMeta.textContent = bits.join(' | ');
+  }
+}
+
+async function ensureCommandTerminalInitialized(): Promise<void> {
+  if (commandTermInitialized) return;
+  if (!commandTerminalSurface) return;
+  if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
+    console.error('[command] xterm vendor scripts not loaded');
+    return;
+  }
+
+  commandTerm = new Terminal({
+    theme: {
+      background: '#000000', foreground: '#ededed', cursor: '#ffffff',
+      cursorAccent: '#000000', selectionBackground: 'rgba(255,255,255,0.12)',
+      selectionForeground: '#ffffff',
+      black: '#000000', red: '#ee4444', green: '#00d47b', yellow: '#ff9500',
+      blue: '#3b82f6', magenta: '#a78bfa', cyan: '#22d3ee', white: '#ededed',
+      brightBlack: '#555555', brightRed: '#ff6b6b', brightGreen: '#34d399',
+      brightYellow: '#fbbf24', brightBlue: '#60a5fa', brightMagenta: '#c4b5fd',
+      brightCyan: '#67e8f9', brightWhite: '#ffffff',
+    },
+    fontFamily: "'Geist Mono', 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
+    fontSize: 13, lineHeight: 1.35, cursorBlink: true, cursorStyle: 'bar',
+    allowTransparency: false, scrollback: 50000,
+  });
+  commandTermFitAddon = new FitAddon.FitAddon();
+  commandTerm.loadAddon(commandTermFitAddon);
+  commandTerm.open(commandTerminalSurface);
+
+  const api = getWorkspaceAPI();
+  commandTerm.onData((data: string) => { void api?.terminal.write(data); });
+  api?.terminal.onOutput((data: string) => { commandTerm?.write(data); });
+  api?.terminal.onStatus((session: any) => updateCommandTerminalMeta(session));
+  api?.terminal.onExit((code: number) => {
+    if (commandTerminalStatus) commandTerminalStatus.textContent = `Exited (${code})`;
+  });
+
+  if (typeof ResizeObserver !== 'undefined' && commandTerminalSurface) {
+    commandTermResizeObserver = new ResizeObserver(() => scheduleCommandTerminalFit());
+    commandTermResizeObserver.observe(commandTerminalSurface);
+  }
+
+  commandTermInitialized = true;
+
+  requestAnimationFrame(() => fitCommandTerminal());
+
+  try {
+    const existing = await api?.terminal.getSession();
+    if (existing && existing.status === 'running') {
+      updateCommandTerminalMeta(existing);
+    } else {
+      const started = await api?.terminal.startSession(commandTerm.cols, commandTerm.rows);
+      if (started) updateCommandTerminalMeta(started);
+    }
+  } catch (err) {
+    console.warn('[command] terminal session bootstrap failed:', err);
+  }
+
+  if (!commandTermScrollbackLoaded) {
+    try {
+      const capture = await api?.terminal.captureScrollback();
+      if (typeof capture === 'string' && capture.length > 0) {
+        commandTerm.write(capture);
+      }
+    } catch {
+      // Scrollback capture is best-effort; empty terminal is still usable.
+    }
+    commandTermScrollbackLoaded = true;
+  }
+}
+
+function setCommandTerminalOpen(open: boolean): void {
+  commandTermOverlayOpen = open;
+  if (!terminalOverlay || !commandTerminalBtn) return;
+  terminalOverlay.hidden = !open;
+  commandTerminalBtn.classList.toggle('active', open);
+  commandTerminalBtn.setAttribute('aria-expanded', String(open));
+  commandTerminalBtn.setAttribute('title', open ? 'Hide terminal' : 'Show terminal');
+  commandTerminalBtn.setAttribute('aria-label', open ? 'Hide terminal' : 'Show terminal');
+  if (open) {
+    void ensureCommandTerminalInitialized().then(() => {
+      requestAnimationFrame(() => {
+        fitCommandTerminal();
+        commandTerm?.focus();
+      });
+    });
+  }
+}
+
+commandTerminalBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setCommandTerminalOpen(!commandTermOverlayOpen);
+});
+
+commandTerminalCloseBtn?.addEventListener('click', () => setCommandTerminalOpen(false));
+
+commandTerminalRestartBtn?.addEventListener('click', async () => {
+  if (!commandTerminalRestartBtn) return;
+  commandTerminalRestartBtn.disabled = true;
+  try {
+    await getWorkspaceAPI()?.actions.submit({
+      target: 'terminal', kind: 'terminal.restart', payload: {},
+    });
+    commandTerm?.clear();
+  } finally {
+    commandTerminalRestartBtn.disabled = false;
+  }
+});
+
+window.addEventListener('resize', () => {
+  if (commandTermOverlayOpen) scheduleCommandTerminalFit();
 });
 
 // ─── Chat Scroll ───────────────────────────────────────────────────────────
@@ -721,98 +910,6 @@ chatScrollBottomBtn.addEventListener('click', () => {
   chatThread.scrollTo({ top: chatThread.scrollHeight, behavior: 'smooth' });
   updateChatScrollControls();
 });
-
-// ─── Markdown Rendering ────────────────────────────────────────────────────
-
-function renderInlineMarkdown(text: string): string {
-  return escapeHtml(text)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-}
-
-function renderMarkdown(text: string): string {
-  // Normalize: convert literal <br> tags and \r\n to newlines before splitting
-  const normalized = text
-    .replace(/\r\n/g, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .trim();
-
-  const lines = normalized.split('\n');
-  const parts: string[] = [];
-  let paragraph: string[] = [];
-  let listItems: string[] = [];
-  let listOrdered = false;
-  /** Tracks whether the previous non-empty block was a list item — lets us merge
-   *  lists separated by blank lines into a single <ol>/<ul>. */
-  let lastBlockWasList = false;
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    parts.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
-    paragraph = [];
-    lastBlockWasList = false;
-  };
-
-  const flushList = () => {
-    if (listItems.length === 0) return;
-    const tag = listOrdered ? 'ol' : 'ul';
-    // Use CSS-driven numbering: ignore whatever numbers the model emitted —
-    // sequential output is what the reader wants.
-    parts.push(`<${tag}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
-    listItems = [];
-    listOrdered = false;
-    lastBlockWasList = true;
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      // Blank line: flush paragraph but DON'T flush the list yet — a following
-      // list item of the same kind should extend the current list.
-      flushParagraph();
-      continue;
-    }
-
-    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = Math.min(4, heading[1].length);
-      parts.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-      lastBlockWasList = false;
-      continue;
-    }
-
-    const isUnordered = trimmed.startsWith('- ') || trimmed.startsWith('* ');
-    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
-
-    if (isUnordered) {
-      if (listItems.length > 0 && listOrdered) flushList();
-      flushParagraph();
-      listOrdered = false;
-      listItems.push(trimmed.slice(2));
-      continue;
-    }
-
-    if (orderedMatch) {
-      if (listItems.length > 0 && !listOrdered) flushList();
-      flushParagraph();
-      listOrdered = true;
-      listItems.push(orderedMatch[1]);
-      continue;
-    }
-
-    // Non-list content after a list — flush the list now.
-    flushList();
-    paragraph.push(trimmed);
-  }
-
-  flushParagraph();
-  flushList();
-  void lastBlockWasList;
-  return parts.join('');
-}
-
 
 // ─── Chat Message Helpers ──────────────────────────────────────────────────
 
@@ -1039,6 +1136,58 @@ async function copyLastAgentResponse(): Promise<void> {
   getWorkspaceAPI()?.addLog('error', 'system', 'Failed to copy last agent response');
 }
 
+const COPY_ICON_SVG =
+  '<svg class="chat-msg-copy-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="5" y="5" width="8.5" height="9" rx="1.5"/>' +
+    '<path d="M10.5 5V3.5A1 1 0 0 0 9.5 2.5h-6A1 1 0 0 0 2.5 3.5v7A1 1 0 0 0 3.5 11.5H5"/>' +
+  '</svg>';
+
+const COPY_CHECK_SVG =
+  '<svg class="chat-msg-copy-icon chat-msg-copy-icon-check" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M3.5 8.5 6.75 11.5 12.5 5.25"/>' +
+  '</svg>';
+
+function attachResponseCopyButton(msgRoot: HTMLElement, getText: () => string): void {
+  msgRoot.querySelector(':scope > .chat-msg-actions')?.remove();
+
+  const actions = document.createElement('div');
+  actions.className = 'chat-msg-actions';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chat-msg-copy-btn';
+  btn.setAttribute('title', 'Copy response');
+  btn.setAttribute('aria-label', 'Copy response');
+  btn.innerHTML = COPY_ICON_SVG;
+
+  let feedbackTimer: number | null = null;
+  btn.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const text = (getText() || '').trim();
+    if (!text) return;
+    const copied = await copyTextToClipboard(text);
+    if (!copied) {
+      getWorkspaceAPI()?.addLog('error', 'system', 'Failed to copy response');
+      return;
+    }
+    btn.classList.add('chat-msg-copy-btn-copied');
+    btn.setAttribute('title', 'Copied');
+    btn.setAttribute('aria-label', 'Copied');
+    btn.innerHTML = COPY_CHECK_SVG;
+    if (feedbackTimer !== null) window.clearTimeout(feedbackTimer);
+    feedbackTimer = window.setTimeout(() => {
+      btn.classList.remove('chat-msg-copy-btn-copied');
+      btn.setAttribute('title', 'Copy response');
+      btn.setAttribute('aria-label', 'Copy response');
+      btn.innerHTML = COPY_ICON_SVG;
+      feedbackTimer = null;
+    }, 1200);
+  });
+
+  actions.appendChild(btn);
+  msgRoot.appendChild(actions);
+}
+
 function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
   const container = activeTurnWrapper ?? chatInner;
   // Keep activeTurnWrapper set until the turn completes (flushFinalResult/flushError
@@ -1052,6 +1201,7 @@ function createLiveRunCard(taskId: string, _provider: string, prompt?: string): 
       chatAutoPinned = false;
       updateChatScrollControls();
     },
+    attachResponseCopyButton,
   }, prompt);
   flushPendingLiveProgress(taskId);
 }
@@ -1139,6 +1289,7 @@ function appendModelMemoryEntry(entry: TaskMemoryEntry): void {
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-model chat-msg-done';
   el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
+  attachResponseCopyButton(el, () => entry.text);
 
   const container = activeTurnWrapper ?? chatInner;
   activeTurnWrapper = null;
@@ -1653,10 +1804,86 @@ function formatTokenCount(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-function updateTokenUsageDisplay(state: any): void {
-  const usage = state?.tokenUsage;
-  if (!usage) return;
-  tokenStatusLabel.textContent = `${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out`;
+type FooterTokenFigures = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  apiCalls: number;
+};
+
+const EMPTY_FIGURES: FooterTokenFigures = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  apiCalls: 0,
+};
+
+function readFooterTokenFigures(state: any, owner: SelectableOwner): FooterTokenFigures {
+  const activeTaskId: string | null = state?.activeTaskId ?? null;
+  if (!activeTaskId || !isExplicitSelectableOwner(owner)) return EMPTY_FIGURES;
+  const task = state?.taskTokenUsage?.[activeTaskId];
+  const breakdown = task?.providerBreakdown?.[owner];
+  if (!breakdown) return EMPTY_FIGURES;
+  return {
+    inputTokens: breakdown.inputTokens ?? 0,
+    outputTokens: breakdown.outputTokens ?? 0,
+    cachedInputTokens: breakdown.cachedInputTokens ?? 0,
+    cacheCreationInputTokens: breakdown.cacheCreationInputTokens ?? 0,
+    apiCalls: breakdown.apiCalls ?? 0,
+  };
+}
+
+function buildFooterTokenTooltip(owner: SelectableOwner, figures: FooterTokenFigures, total: number, freshInput: number): string {
+  const label = isExplicitSelectableOwner(owner) ? OWNER_LABELS[owner] : String(owner);
+  const lines = [
+    `${label} · active task`,
+    `total    ${total.toLocaleString()}`,
+    `in       ${freshInput.toLocaleString()} (fresh input)`,
+    `cached   ${figures.cachedInputTokens.toLocaleString()} (cache read)`,
+    `out      ${figures.outputTokens.toLocaleString()}`,
+  ];
+  if (figures.cacheCreationInputTokens > 0) {
+    lines.push(`cache+   ${figures.cacheCreationInputTokens.toLocaleString()} (cache write)`);
+  }
+  if (figures.apiCalls > 0) {
+    lines.push(`calls    ${figures.apiCalls.toLocaleString()}`);
+  }
+  return lines.join('\n');
+}
+
+function updateTokenUsageDisplay(state: any = (window as any).__lastState, owner: SelectableOwner = selectedOwner): void {
+  if (!state) return;
+  const figures = readFooterTokenFigures(state, owner);
+  const freshInput = Math.max(0, figures.inputTokens - figures.cachedInputTokens);
+  const total = freshInput + figures.cachedInputTokens + figures.outputTokens;
+
+  tokenStatusLabel.innerHTML = '';
+
+  const totalEl = document.createElement('span');
+  totalEl.className = 'cc-token-total';
+  totalEl.textContent = `${formatTokenCount(total)} total`;
+  tokenStatusLabel.appendChild(totalEl);
+
+  const appendBreakdown = (value: number, label: string): void => {
+    const sep = document.createElement('span');
+    sep.className = 'cc-token-sep';
+    sep.setAttribute('aria-hidden', 'true');
+    sep.textContent = '·';
+    tokenStatusLabel.appendChild(sep);
+
+    const part = document.createElement('span');
+    part.className = 'cc-token-part';
+    part.textContent = `${formatTokenCount(value)} ${label}`;
+    tokenStatusLabel.appendChild(part);
+  };
+
+  appendBreakdown(freshInput, 'in');
+  appendBreakdown(figures.cachedInputTokens, 'cached');
+  appendBreakdown(figures.outputTokens, 'out');
+
+  tokenStatusLabel.title = buildFooterTokenTooltip(owner, figures, total, freshInput);
 }
 
 // ─── Agent Tab Strip ───────────────────────────────────────────────────────
@@ -1666,10 +1893,12 @@ const COMPLETED_PREVIEW_COUNT = 3;
 function syncAgentSidebarUi(hasVisibleTasks: boolean): void {
   agentTabsShell.hidden = !hasVisibleTasks;
   agentTabsShell.classList.toggle('is-collapsed', agentSidebarCollapsed);
-  agentSidebarToggleBtn.setAttribute('aria-expanded', String(!agentSidebarCollapsed));
-  const label = agentSidebarCollapsed ? 'Expand agent sidebar' : 'Collapse agent sidebar';
-  agentSidebarToggleBtn.title = label;
-  agentSidebarToggleBtn.setAttribute('aria-label', label);
+  agentSidebarHeaderToggleBtn.hidden = !hasVisibleTasks;
+  agentSidebarHeaderToggleBtn.classList.toggle('is-active', !agentSidebarCollapsed);
+  agentSidebarHeaderToggleBtn.setAttribute('aria-expanded', String(!agentSidebarCollapsed));
+  const toggleLabel = agentSidebarCollapsed ? 'Show agents' : 'Hide agents';
+  agentSidebarHeaderToggleBtn.title = toggleLabel;
+  agentSidebarHeaderToggleBtn.setAttribute('aria-label', toggleLabel);
 }
 
 function setAgentSidebarCollapsed(nextCollapsed: boolean): void {
@@ -1682,9 +1911,62 @@ function setAgentSidebarCollapsed(nextCollapsed: boolean): void {
   const hasVisibleTasks = tasks.some((task) =>
     (task.status === 'running' && task.id !== activeId) ||
     task.status === 'completed' ||
-    task.status === 'failed');
+    task.status === 'failed' ||
+    task.status === 'cancelled');
 
   syncAgentSidebarUi(hasVisibleTasks);
+}
+
+type CompletedBucket = {
+  /** Stable key, used to preserve order of first-occurrence across renders. */
+  key: string;
+  label: string;
+  tasks: any[];
+};
+
+/** Bucket a completed task into a human-friendly date group. Newest first. */
+function bucketCompletedTask(task: any, now: number): { key: string; label: string } {
+  const ts = typeof task.updatedAt === 'number'
+    ? task.updatedAt
+    : typeof task.createdAt === 'number'
+      ? task.createdAt
+      : now;
+
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const taskDay = new Date(ts);
+  taskDay.setHours(0, 0, 0, 0);
+  const daysAgo = Math.round((today.getTime() - taskDay.getTime()) / 86_400_000);
+
+  if (daysAgo <= 0) return { key: 'today', label: 'Today' };
+  if (daysAgo === 1) return { key: 'yesterday', label: 'Yesterday' };
+  if (daysAgo <= 7) return { key: 'previous-7', label: 'Previous 7 days' };
+  if (daysAgo <= 30) return { key: 'previous-30', label: 'Previous 30 days' };
+
+  const d = new Date(ts);
+  const sameYear = d.getFullYear() === today.getFullYear();
+  const label = sameYear
+    ? d.toLocaleDateString('en-US', { month: 'long' })
+    : d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const key = `month-${d.getFullYear()}-${d.getMonth()}`;
+  return { key, label };
+}
+
+function groupCompletedByDate(tasks: any[]): CompletedBucket[] {
+  const now = Date.now();
+  const buckets: CompletedBucket[] = [];
+  const index = new Map<string, number>();
+  for (const task of tasks) {
+    const { key, label } = bucketCompletedTask(task, now);
+    let idx = index.get(key);
+    if (idx === undefined) {
+      idx = buckets.length;
+      index.set(key, idx);
+      buckets.push({ key, label, tasks: [] });
+    }
+    buckets[idx].tasks.push(task);
+  }
+  return buckets;
 }
 
 function syncAgentTabs(state: any): void {
@@ -1695,11 +1977,12 @@ function syncAgentTabs(state: any): void {
   const runningTasks = tasks.filter(t => t.status === 'running' && t.id !== activeId);
   // Completed = done or failed, newest first
   const completedTasks = [...tasks]
-    .filter(t => t.status === 'completed' || t.status === 'failed')
+    .filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
     .sort((a, b) => b.updatedAt - a.updatedAt);
 
   // Sidebar only appears when there are backgrounded running OR completed tasks
   if (runningTasks.length === 0 && completedTasks.length === 0) {
+    lastAgentTabsRenderKey = '';
     syncAgentSidebarUi(false);
     return;
   }
@@ -1711,80 +1994,267 @@ function syncAgentTabs(state: any): void {
     lastTaskListSignature = signature;
     completedExpanded = false;
   }
+  const renderKey = [
+    activeId || '',
+    runningTasks.map(t => `${t.id}:${t.updatedAt}:${t.status}`).join(','),
+    completedTasks.map(t => `${t.id}:${t.updatedAt}:${t.status}`).join(','),
+    completedExpanded ? '1' : '0',
+    agentSidebarCollapsed ? '1' : '0',
+  ].join('|');
+  if (renderKey === lastAgentTabsRenderKey) {
+    return;
+  }
+  lastAgentTabsRenderKey = renderKey;
 
   agentTabsList.innerHTML = '';
 
   // ── Running section ──────────────────────────────────────────────────
   if (runningTasks.length > 0) {
-    const runningLabel = document.createElement('div');
-    runningLabel.className = 'cc-agent-section-label cc-agent-section-label-running';
-    runningLabel.textContent = 'Running';
-    agentTabsList.appendChild(runningLabel);
-
+    agentTabsList.appendChild(buildSectionLabel('Running', 'running'));
     for (const task of runningTasks) {
       agentTabsList.appendChild(buildAgentTab(task, activeId));
     }
   }
 
   // ── Completed section ────────────────────────────────────────────────
+  const hiddenCount = completedTasks.length - COMPLETED_PREVIEW_COUNT;
+  const canExpand = hiddenCount > 0;
+
   if (completedTasks.length > 0) {
-    const completedLabel = document.createElement('div');
-    completedLabel.className = 'cc-agent-section-label cc-agent-section-label-completed';
-    completedLabel.textContent = 'Completed';
-    agentTabsList.appendChild(completedLabel);
-
-    const visibleCompleted = completedExpanded
-      ? completedTasks
-      : completedTasks.slice(0, COMPLETED_PREVIEW_COUNT);
-
-    for (const task of visibleCompleted) {
-      agentTabsList.appendChild(buildAgentTab(task, activeId));
-    }
-
-    const hiddenCount = completedTasks.length - COMPLETED_PREVIEW_COUNT;
-    if (hiddenCount > 0 || completedExpanded) {
-      const showMoreBtn = document.createElement('button');
-      showMoreBtn.type = 'button';
-      showMoreBtn.className = 'cc-agent-show-more';
-      showMoreBtn.textContent = completedExpanded
-        ? 'Show less'
-        : `Show ${hiddenCount} more`;
-      showMoreBtn.addEventListener('click', () => {
-        completedExpanded = !completedExpanded;
-        syncAgentTabs((window as any).__lastState);
-      });
-      agentTabsList.appendChild(showMoreBtn);
+    if (completedExpanded) {
+      // Expanded: show every completed task bucketed by date group; each section
+      // starts collapsed and toggles open via its chevron header.
+      const groups = groupCompletedByDate(completedTasks);
+      // Drop stale keys so expandedBuckets doesn't grow unbounded over time.
+      const liveKeys = new Set(groups.map(g => g.key));
+      for (const key of Array.from(expandedBuckets)) {
+        if (!liveKeys.has(key)) expandedBuckets.delete(key);
+      }
+      for (const group of groups) {
+        agentTabsList.appendChild(buildCollapsibleSection(group, activeId));
+      }
+    } else {
+      // Collapsed: flat preview, a single "Completed" header.
+      agentTabsList.appendChild(buildSectionLabel('Completed', 'completed'));
+      const visibleCompleted = completedTasks.slice(0, COMPLETED_PREVIEW_COUNT);
+      for (const task of visibleCompleted) {
+        agentTabsList.appendChild(buildAgentTab(task, activeId));
+      }
+      if (canExpand) {
+        const showMoreBtn = document.createElement('button');
+        showMoreBtn.type = 'button';
+        showMoreBtn.className = 'cc-agent-show-more';
+        showMoreBtn.innerHTML =
+          `<span>Show ${hiddenCount} more</span>`
+          + '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
+        showMoreBtn.addEventListener('click', () => {
+          completedExpanded = true;
+          expandedBuckets.clear();
+          syncAgentTabs((window as any).__lastState);
+        });
+        agentTabsList.appendChild(showMoreBtn);
+      }
     }
   }
+
+  // Sticky footer — only while the full history is expanded.
+  const footerVisible = completedExpanded && canExpand;
+  agentSidebarFooter.hidden = !footerVisible;
+  agentSidebarFooterCount.textContent = footerVisible
+    ? `${completedTasks.length} total`
+    : '';
+}
+
+function buildSectionLabel(text: string, variant: 'running' | 'completed'): HTMLDivElement {
+  const el = document.createElement('div');
+  el.className = `cc-agent-section-label cc-agent-section-label-${variant}`;
+  el.textContent = text;
+  return el;
+}
+
+/**
+ * Render one date bucket (Today / Yesterday / Previous 7 days / month) as a
+ * collapsible `<details>`-style block. Starts collapsed by default so expanding
+ * the full history doesn't dump a 400-row wall on the user.
+ */
+function buildCollapsibleSection(group: CompletedBucket, activeId: string | null): HTMLDivElement {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'cc-agent-section';
+  wrapper.dataset.bucketKey = group.key;
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'cc-agent-section-header';
+  const isOpen = expandedBuckets.has(group.key);
+  header.setAttribute('aria-expanded', String(isOpen));
+
+  const chevron = document.createElement('span');
+  chevron.className = 'cc-agent-section-chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.innerHTML =
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M6 4l4 4-4 4"/>'
+    + '</svg>';
+
+  const label = document.createElement('span');
+  label.className = 'cc-agent-section-header-label';
+  label.textContent = group.label;
+
+  const count = document.createElement('span');
+  count.className = 'cc-agent-section-header-count';
+  count.textContent = String(group.tasks.length);
+
+  header.append(chevron, label, count);
+
+  const body = document.createElement('div');
+  body.className = 'cc-agent-section-body';
+  body.hidden = !isOpen;
+  for (const task of group.tasks) {
+    body.appendChild(buildAgentTab(task, activeId));
+  }
+
+  header.addEventListener('click', () => {
+    const nextOpen = !expandedBuckets.has(group.key);
+    if (nextOpen) {
+      expandedBuckets.add(group.key);
+    } else {
+      expandedBuckets.delete(group.key);
+    }
+    wrapper.classList.toggle('is-open', nextOpen);
+    header.setAttribute('aria-expanded', String(nextOpen));
+    body.hidden = !nextOpen;
+  });
+
+  if (isOpen) wrapper.classList.add('is-open');
+  wrapper.append(header, body);
+  return wrapper;
+}
+
+function formatRelativeTime(ts: number | undefined | null): string {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 5) return 'now';
+  if (diffSec < 60) return `${diffSec}s`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 7) return `${diffDay}d`;
+  const diffWk = Math.floor(diffDay / 7);
+  if (diffWk < 5) return `${diffWk}w`;
+  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function getAgentTabProviderLabel(owner: unknown): string {
+  if (typeof owner !== 'string') return '';
+  if (isExplicitSelectableOwner(owner)) return OWNER_LABELS[owner];
+  if (owner.includes('codex') || owner.startsWith('gpt-')) return 'Codex';
+  if (owner.includes('haiku') || owner.includes('claude')) return 'Haiku';
+  if (owner.includes('gemini')) return 'Gemini';
+  return owner;
+}
+
+/** Inline SVG for per-row status. Kept tiny so rows stay compact. */
+function agentTabStatusSvg(status: string): string {
+  if (status === 'running' || status === 'queued') {
+    // Three-dot pulsing glyph, animated via CSS keyframes below.
+    return '<span class="cc-agent-tab-status-pulse"></span>';
+  }
+  if (status === 'failed') {
+    return (
+      '<svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">'
+      + '<path d="M3.5 3.5l5 5M8.5 3.5l-5 5"/>'
+      + '</svg>'
+    );
+  }
+  if (status === 'cancelled') {
+    return (
+      '<svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">'
+      + '<circle cx="6" cy="6" r="4"/>'
+      + '<path d="M3.8 3.8l4.4 4.4"/>'
+      + '</svg>'
+    );
+  }
+  return (
+    '<svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M2.8 6.3l2.3 2.3 4.1-4.4"/>'
+    + '</svg>'
+  );
 }
 
 function buildAgentTab(task: any, activeId: string | null): HTMLButtonElement {
   const tab = document.createElement('button');
   tab.type = 'button';
-  tab.className = 'cc-agent-tab' +
-    (task.id === activeId ? ' cc-agent-tab-active' : '') +
-    (task.status === 'running' ? ' cc-agent-tab-running' : '');
+  tab.dataset.taskId = task.id;
+  const status: string = task.status || 'queued';
+  const classes = ['cc-agent-tab', `cc-agent-tab-status-${status}`];
+  if (task.id === activeId) classes.push('cc-agent-tab-active');
+  if (status === 'running') classes.push('cc-agent-tab-running');
+  tab.className = classes.join(' ');
 
-  const dot = document.createElement('span');
-  dot.className = 'cc-agent-tab-dot';
+  const statusBadge = document.createElement('span');
+  statusBadge.className = 'cc-agent-tab-status';
+  statusBadge.innerHTML = agentTabStatusSvg(status);
 
-  const title = document.createElement('span');
-  title.className = 'cc-agent-tab-title';
+  const body = document.createElement('span');
+  body.className = 'cc-agent-tab-body';
+
+  const titleRow = document.createElement('span');
+  titleRow.className = 'cc-agent-tab-title';
   const label = task.title || task.id;
-  title.textContent = label.length > 24 ? label.slice(0, 24) + '…' : label;
-  title.title = task.title || task.id;
+  titleRow.textContent = label;
+  titleRow.title = task.title || task.id;
 
-  tab.append(dot, title);
+  const meta = document.createElement('span');
+  meta.className = 'cc-agent-tab-meta';
+  const provider = getAgentTabProviderLabel(task.owner);
+  if (provider) {
+    const providerEl = document.createElement('span');
+    providerEl.className = 'cc-agent-tab-model';
+    providerEl.textContent = provider;
+    meta.appendChild(providerEl);
+  }
+  const timeLabel = formatRelativeTime(task.updatedAt ?? task.createdAt);
+  if (timeLabel) {
+    if (provider) {
+      const sep = document.createElement('span');
+      sep.className = 'cc-agent-tab-meta-sep';
+      sep.textContent = '·';
+      sep.setAttribute('aria-hidden', 'true');
+      meta.appendChild(sep);
+    }
+    const timeEl = document.createElement('span');
+    timeEl.className = 'cc-agent-tab-time';
+    timeEl.textContent = timeLabel;
+    meta.appendChild(timeEl);
+  }
+
+  body.append(titleRow);
+  if (meta.childElementCount > 0) body.append(meta);
+  tab.append(statusBadge, body);
 
   if (task.id !== activeId) {
     tab.addEventListener('click', () => switchToTask(task.id));
+  } else {
+    tab.setAttribute('aria-current', 'true');
   }
 
   return tab;
 }
 
-agentSidebarToggleBtn.addEventListener('click', () => {
+agentSidebarHeaderToggleBtn.addEventListener('click', () => {
   setAgentSidebarCollapsed(!agentSidebarCollapsed);
+});
+
+agentSidebarCollapseMoreBtn.addEventListener('click', () => {
+  if (!completedExpanded) return;
+  completedExpanded = false;
+  expandedBuckets.clear();
+  lastAgentTabsRenderKey = '';
+  syncAgentTabs((window as any).__lastState);
+  // Keep the user at the top of the list so the preview is immediately visible.
+  agentTabsList.scrollTop = 0;
 });
 
 agentTabNewBtn.addEventListener('click', () => { void startNewChat(); });
@@ -1793,6 +2263,26 @@ agentTabNewBtn.addEventListener('click', () => { void startNewChat(); });
 
 function renderState(state: any): void {
   (window as any).__lastState = state;
+  const activeTaskForKey = state?.activeTaskId
+    ? state?.taskTokenUsage?.[state.activeTaskId]
+    : null;
+  const activeTokenKey = activeTaskForKey
+    ? `${activeTaskForKey.inputTokens ?? 0}:${activeTaskForKey.outputTokens ?? 0}:${activeTaskForKey.cachedInputTokens ?? 0}:${activeTaskForKey.cacheCreationInputTokens ?? 0}:${activeTaskForKey.updatedAt ?? 0}`
+    : '0:0:0:0:0';
+  const chromeKey = [
+    state?.activeTaskId || '',
+    state?.tasks?.length || 0,
+    state?.logs?.length || 0,
+    activeTokenKey,
+    state?.tasks?.map((task: any) => `${task.id}:${task.status}:${task.updatedAt}`).join(',') || '',
+    state?.providers
+      ? Object.entries(state.providers).map(([id, runtime]: [string, any]) => `${id}:${runtime?.status || ''}:${runtime?.model || ''}`).join(',')
+      : '',
+  ].join('|');
+  if (chromeKey === lastStateChromeKey) {
+    return;
+  }
+  lastStateChromeKey = chromeKey;
   syncSelectedOwnerForActiveTask(state);
   syncModelToggleState(state);
   syncAgentTabs(state);
@@ -1801,7 +2291,6 @@ function renderState(state: any): void {
   renderLogs(state.logs);
 
   taskCount.textContent = `tasks: ${state.tasks.length}`;
-  updateTokenUsageDisplay(state);
   if (active?.id) {
     taskSummary.textContent = active.id;
     taskSummary.hidden = false;
@@ -1817,6 +2306,7 @@ function renderState(state: any): void {
     ? activeProviderId
     : selectedOwner;
   modelLabel.textContent = OWNER_LABELS[footerOwner];
+  updateTokenUsageDisplay(state, footerOwner);
 
   syncModelToggleState(state);
 

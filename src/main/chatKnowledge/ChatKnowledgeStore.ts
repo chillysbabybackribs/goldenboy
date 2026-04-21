@@ -187,6 +187,50 @@ export class ChatKnowledgeStore {
     return { ...meta };
   }
 
+  /**
+   * Returns prior user/assistant turns as structured role-tagged entries,
+   * ready to prepend to a provider's chat-message array. Excludes `tool` and
+   * `system` entries — only real chat turns that the model should see as
+   * conversation history. The caller's current in-flight user message (if
+   * any) can be excluded via `excludeMessageIds`.
+   *
+   * The returned list is chronological (oldest first). Total content length
+   * is capped by `maxChars` by trimming the oldest turns first, so the most
+   * recent turns always survive.
+   */
+  listPriorTurns(
+    taskId: string,
+    options?: { count?: number; maxChars?: number; excludeMessageIds?: string[] },
+  ): Array<{ role: 'user' | 'assistant'; content: string }> {
+    const count = Math.min(Math.max(options?.count ?? 6, 1), 20);
+    const maxChars = Math.min(Math.max(options?.maxChars ?? 6000, 500), 40_000);
+    const excluded = new Set(options?.excludeMessageIds ?? []);
+    const index = this.loadIndex(taskId);
+    const candidates = index.messages
+      .filter(meta => !excluded.has(meta.id))
+      .filter(meta => meta.role === 'user' || meta.role === 'assistant')
+      .slice(-count);
+
+    const entries = candidates.map((meta) => {
+      const raw = this.readRawMessage(taskId, meta.id) ?? meta.preview;
+      return {
+        role: meta.role as 'user' | 'assistant',
+        content: raw.trim(),
+      };
+    });
+
+    // Drop oldest turns until the combined content fits within maxChars so
+    // the most recent turns (which carry the strongest continuity signal)
+    // always survive.
+    let total = entries.reduce((acc, entry) => acc + entry.content.length, 0);
+    while (entries.length > 1 && total > maxChars) {
+      total -= entries[0].content.length;
+      entries.shift();
+    }
+
+    return entries;
+  }
+
   buildInvocationContext(
     taskId: string,
     currentMessageId?: string,
@@ -206,7 +250,7 @@ export class ChatKnowledgeStore {
 
     const sections = [
       '## Conversation Memory',
-      'Full chat history is cached on disk. Use chat.read_last for immediate follow-ups, chat.search for older context, and chat.read_window/read_message only when needed. Do not ask the user to repeat prior context until chat recall has failed.',
+      'Full chat history is cached on disk and summarized by the host. Treat the thread summary and recent prior messages below as the default continuity context for this turn. Do not ask the user to repeat prior context unless the injected continuity context is clearly insufficient.',
     ];
     if (current?.text) sections.push('', '### Current User Message', current.text);
     if (summary) sections.push('', '### Thread Summary', summary);

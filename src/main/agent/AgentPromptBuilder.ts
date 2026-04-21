@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import { AgentRuntimeConfig, AgentSkill, AgentToolDefinition } from './AgentTypes';
-import { GEMINI_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/model';
+import { GEMINI_PROVIDER_ID } from '../../shared/types/model';
 import { APP_WORKSPACE_ROOT, resolveWorkspacePath } from '../workspaceRoot';
 import {
   ALWAYS_ON_SOURCE_VALIDATION_RULE,
@@ -11,17 +11,27 @@ import {
   shouldUseStrictSourceValidation,
 } from './sourceValidationPolicy';
 import { buildTaskProfile } from './taskProfile';
+import { TOOL_CATEGORIES, TOOL_CATEGORY_IDS } from './toolCategories';
+import { workspaceManifestService } from './workspaceManifest';
 
 const AGENT_CONTRACT_PATH = resolveWorkspacePath('AGENTS.md');
 const PLANNING_CONTRACT_PATH = resolveWorkspacePath('PLANS.md');
+// Sections intentionally omitted and why:
+// - 'Result Validation Discipline' : its classification rule, common failure
+//   patterns, and probabilistic-vs-deterministic guardrails are fully re-stated
+//   by the injected `DETERMINISTIC_VALIDATION_OVERRIDE_RULE` prompt section.
+// - 'Runtime Path' : internal code-path architecture (CodexProvider →
+//   AgentRuntime → ...). Zero model-facing decision value; the model calls
+//   tools and V2 owns what happens inside.
+// - 'Skill Loading' : runtime-facing meta-info about when to load skills and a
+//   table of available skills. The runtime already resolves skill selection
+//   before the prompt is built; the model only sees the skills actually loaded
+//   (rendered in the separate `skills` section below).
 const ALWAYS_ON_CONTRACT_SECTIONS = new Set([
   'Application Mental Model',
-  'Runtime Path',
   'Operating Rules',
-  'Result Validation Discipline',
   'Token Discipline',
   'Sub-Agent Rules',
-  'Skill Loading',
   'Response Style',
 ]);
 const ALWAYS_ON_PLANNING_SECTIONS = new Set([
@@ -53,47 +63,34 @@ export class AgentPromptBuilder {
     tools: AgentToolDefinition[];
   }): string {
     const templateKey = buildSystemPromptTemplateKey(input);
-    const cachedTemplate = systemPromptTemplateCache.get(templateKey);
-    if (cachedTemplate) {
-      return cachedTemplate.replace('__CURRENT_DATETIME__', buildCurrentDateTimeLine(input.config.agentId));
-    }
+    const cached = systemPromptTemplateCache.get(templateKey);
+    if (cached) return cached;
 
-    const baseContract = buildBaseContract(readCachedContract());
-    const planningContract = shouldIncludePlanningContract(input.config.task)
-      ? buildPlanningContract(readCachedPlanningContract())
-      : '';
-    const skillText = buildSkillPromptSection(input.skills);
-    const toolText = buildToolPromptSummary(input.tools);
-    const browserSurfaceText = buildBrowserSurfacePromptSection(input.tools);
-    const providerToolPriorityText = buildProviderToolPrioritySection(input.config.agentId);
-    const geminiExecutionText = buildGeminiExecutionPromptSection(input.config.agentId, input.tools);
-
-    const template = [
-      baseContract,
-      planningContract ? `\n\n## Planning Contract\n\n${planningContract}` : '',
-      `\n\n## Source Validation\n\n${ALWAYS_ON_SOURCE_VALIDATION_RULE}`,
-      `\n\n## Constraint Ledger\n\n${CONSTRAINT_LEDGER_PROTOCOL}`,
-      `\n\n## Deterministic Validation Authority\n\n${DETERMINISTIC_VALIDATION_OVERRIDE_RULE}`,
-      `\n\n## Physical Task Completion\n\n${PHYSICAL_TASK_COMPLETION_PROTOCOL}`,
-      shouldUseStrictSourceValidation(input.config.task)
-        ? `\n\n## Strict Source Validation Protocol\n\n${STRICT_SOURCE_VALIDATION_PROTOCOL}`
-        : '',
-      `\n\n## Active Runtime\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\n__CURRENT_DATETIME__`,
-      `\n\n## Workspace Root\n\nAbsolute workspace root: ${APP_WORKSPACE_ROOT}\nResolve relative repository paths from this root unless a tool result explicitly reports a different cwd.${input.config.cwd ? `\nCurrent working directory: ${input.config.cwd}` : ''}`,
-      input.config.systemPromptAddendum?.trim()
-        ? `\n\n## Additional Invocation Instructions\n\n${input.config.systemPromptAddendum.trim()}`
-        : '',
-      '\n\n## Tool Scope Recovery\n\nIf additional tools are authorized for the active run, use `runtime.load_tools` to request them by exact tool name.',
-      providerToolPriorityText,
-      geminiExecutionText,
-      browserSurfaceText,
-      '\n\n## Tool Scope Truth\n\nTreat the listed tools in this run as the authoritative execution surface. Do not assume hidden capabilities, and do not describe a tool path as available unless it appears in the current tool list or is added through the runtime tool-pack flow.',
-      `\n\n## Available Tools\n\nTool schemas are provided separately. Available tool names: ${toolText}`,
-      skillText,
-    ].join('');
+    const sections = buildSystemPromptSectionEntries(input);
+    const template = sections.map((section) => section.text).join('');
 
     systemPromptTemplateCache.set(templateKey, template);
-    return template.replace('__CURRENT_DATETIME__', buildCurrentDateTimeLine(input.config.agentId));
+    return template;
+  }
+
+  /**
+   * Returns per-section byte measurements for the system prompt produced by
+   * `buildSystemPrompt` with the same inputs. Purely diagnostic — does NOT
+   * touch or invalidate the template cache. The measured text includes
+   * datetime substitution so lengths match the actual send payload.
+   */
+  describeSystemPromptSections(input: {
+    config: AgentRuntimeConfig;
+    skills: AgentSkill[];
+    tools: AgentToolDefinition[];
+  }): SystemPromptBreakdown {
+    const sections = buildSystemPromptSectionEntries(input);
+    const entries: SystemPromptSectionEntry[] = sections.map((section) => ({
+      name: section.name,
+      chars: section.text.length,
+    }));
+    const total = entries.reduce((acc, entry) => acc + entry.chars, 0);
+    return { sections: entries, total };
   }
 
   /**
@@ -117,6 +114,86 @@ export class AgentPromptBuilder {
 }
 
 export const agentPromptBuilder = new AgentPromptBuilder();
+
+export type SystemPromptSectionEntry = {
+  name: string;
+  chars: number;
+};
+
+export type SystemPromptBreakdown = {
+  sections: SystemPromptSectionEntry[];
+  total: number;
+};
+
+type SystemPromptSection = {
+  name: string;
+  text: string;
+};
+
+function buildSystemPromptSectionEntries(
+  input: {
+    config: AgentRuntimeConfig;
+    skills: AgentSkill[];
+    tools: AgentToolDefinition[];
+  },
+): SystemPromptSection[] {
+  const baseContract = buildBaseContract(readCachedContract());
+  const planningContract = shouldIncludePlanningContract(input.config.task)
+    ? buildPlanningContract(readCachedPlanningContract())
+    : '';
+  const skillText = buildSkillPromptSection(input.skills);
+  const toolMapText = buildToolCategoryMapSection(input.tools);
+
+  return [
+    { name: 'baseContract', text: baseContract },
+    {
+      name: 'planningContract',
+      text: planningContract ? `\n\n## Planning Contract\n\n${planningContract}` : '',
+    },
+    {
+      name: 'sourceValidation',
+      text: `\n\n## Source Validation\n\n${ALWAYS_ON_SOURCE_VALIDATION_RULE}`,
+    },
+    {
+      name: 'constraintLedger',
+      text: `\n\n## Constraint Ledger\n\n${CONSTRAINT_LEDGER_PROTOCOL}`,
+    },
+    {
+      name: 'deterministicValidation',
+      text: `\n\n## Deterministic Validation Authority\n\n${DETERMINISTIC_VALIDATION_OVERRIDE_RULE}`,
+    },
+    {
+      name: 'physicalTaskCompletion',
+      text: `\n\n## Physical Task Completion\n\n${PHYSICAL_TASK_COMPLETION_PROTOCOL}`,
+    },
+    {
+      name: 'strictSourceValidation',
+      text: shouldUseStrictSourceValidation(input.config.task)
+        ? `\n\n## Strict Source Validation Protocol\n\n${STRICT_SOURCE_VALIDATION_PROTOCOL}`
+        : '',
+    },
+    {
+      name: 'activeRuntime',
+      text: `\n\n## Active Runtime\n\nMode: ${input.config.mode}\nRole: ${input.config.role}\nAgent ID: ${input.config.agentId}\nCurrent date/time is provided in the user-turn runtime context below.`,
+    },
+    {
+      name: 'workspaceRoot',
+      text: `\n\n## Workspace Root\n\nAbsolute workspace root: ${APP_WORKSPACE_ROOT}\nResolve relative repository paths from this root unless a tool result explicitly reports a different cwd.${input.config.cwd ? `\nCurrent working directory: ${input.config.cwd}` : ''}`,
+    },
+    {
+      name: 'workspaceOverview',
+      text: buildWorkspaceOverviewSection(),
+    },
+    {
+      name: 'additionalInvocationInstructions',
+      text: input.config.systemPromptAddendum?.trim()
+        ? `\n\n## Additional Invocation Instructions\n\n${input.config.systemPromptAddendum.trim()}`
+        : '',
+    },
+    { name: 'toolCategoryMap', text: toolMapText },
+    { name: 'skills', text: skillText },
+  ];
+}
 
 function buildSystemPromptTemplateKey(input: {
   config: AgentRuntimeConfig;
@@ -146,6 +223,7 @@ function buildSystemPromptTemplateKey(input: {
     strictValidation,
     toolSignature,
     skillSignature,
+    workspaceManifestService.getVersion(APP_WORKSPACE_ROOT),
   ].join('::');
 }
 
@@ -157,38 +235,55 @@ function buildSkillPromptSection(skills: AgentSkill[]): string {
   return skills.map(skill => `\n\n## Skill: ${skill.name}\n\n${compactSkillBody(skill.body)}`).join('');
 }
 
-function buildToolPromptSummary(tools: AgentToolDefinition[]): string {
-  return tools.length > 0
-    ? tools.map(tool => tool.name).join(', ')
-    : 'No tools registered.';
+function buildWorkspaceOverviewSection(): string {
+  const overview = workspaceManifestService.getOverviewSync(APP_WORKSPACE_ROOT, {
+    maxDepth: 3,
+    maxChars: 4000,
+  });
+  if (!overview) return '';
+  return [
+    '',
+    '',
+    '## Workspace Overview',
+    '',
+    'Directory map of the current workspace with extracted purpose lines (first JSDoc / markdown heading / frontmatter description). Use this to self-locate before grepping or listing directories. Purpose lines are best-effort — treat them as hints, not contracts.',
+    '',
+    'When a prompt references an unfamiliar area, call `workspace.locate` with the concept keywords before opening files. Call `workspace.tree` for a deeper slice of a single subtree.',
+    '',
+    '```',
+    overview,
+    '```',
+  ].join('\n');
 }
 
-function buildBrowserSurfacePromptSection(tools: AgentToolDefinition[]): string {
-  if (!tools.some((tool) => tool.name.startsWith('browser.'))) {
-    return '';
+function buildToolCategoryMapSection(tools: AgentToolDefinition[]): string {
+  const activeCategories = new Set<string>();
+  for (const tool of tools) {
+    const dot = tool.name.indexOf('.');
+    if (dot > 0) activeCategories.add(tool.name.slice(0, dot));
   }
 
-  return '\n\n## Browser Surface Model\n\nThe V2 browser is an app-owned multi-tab workspace, not a stateless page fetcher.\n\n- Use `browser.get_tabs` to understand the tab set and `browser.get_state` to understand the active tab plus its current navigation state.\n- Use `browser.navigate` to change the current page in the active tab. Use `browser.create_tab` only when the user wants a new, separate, or additional tab.\n- Treat tab ids, active-tab state, and returned browser state as authoritative. Do not invent tab behavior that the tool result did not report.\n- `browser.close_all_tabs` is a standard reset operation. It always leaves one default Google homepage tab open and verifies that final state.\n- When the user asks to close all tabs, treat that remaining homepage tab as internal workspace hygiene. Do not mention it in the final answer unless the user asks for browser state details or it materially affects the task outcome.';
-}
+  const categoryLines = TOOL_CATEGORY_IDS.map((id) => {
+    const desc = TOOL_CATEGORIES[id];
+    const marker = activeCategories.has(id) ? '[active]' : '[inactive]';
+    return `- \`${id}\` ${marker} — ${desc.summary}`;
+  }).join('\n');
 
-function buildProviderToolPrioritySection(agentId: string): string {
-  if (agentId === PRIMARY_PROVIDER_ID) {
-    return '\n\n## V2 Tool Priority\n\nYou are running inside V2 Workspace. All browser, filesystem, terminal, and research operations must go through the v2 tools in your current runtime scope. These tools are first-class — they operate the real app-owned browser, real filesystem, and real terminal surfaces.\n\nDo not use any Codex-native capabilities: no built-in web search, no native browser control. Every action must produce a v2 tool record.\n\nTool execution is provider-driven: select from the scoped tools exposed in this run, and rely on the host to execute them and return results.\n\n## Web Access Hard Rule\n\nNEVER use shell commands to access the internet. This means: never use python, python3, curl, wget, node, or any other shell command to make HTTP requests, fetch URLs, scrape web pages, call APIs, or retrieve any online content. This prohibition is absolute — no exceptions, no fallbacks.\n\nFor ANY task involving web search, browsing, looking something up, or retrieving online information:\n- Use `browser.research_search` for research tasks (searches and reads multiple pages)\n- Use `browser.navigate` + `browser.extract_page` for direct URL navigation\n- Use `browser.search_web` to open a search without reading results\n\nThese are the ONLY valid paths to web content. Do not fall back to shell commands.';
-  }
-
-  if (agentId === GEMINI_PROVIDER_ID) {
-    return '\n\n## V2 Tool Priority\n\nYou are running inside V2 Workspace. Use only the scoped v2 tools in this run for browser, filesystem, terminal, and research work. Do not use provider-native search, browser control, or shell-based web access.\n\nEvery real action must produce a v2 tool record. Treat tool results and runtime validation as authoritative.\n\n## Web Access Hard Rule\n\nNever use shell commands to reach the internet. For web tasks use:\n- `browser.research_search` for research\n- `browser.navigate` + `browser.extract_page` for direct URLs\n- `browser.search_web` to open a search page';
-  }
-
-  return '';
-}
-
-function buildGeminiExecutionPromptSection(agentId: string, tools: AgentToolDefinition[]): string {
-  if (agentId !== GEMINI_PROVIDER_ID || tools.length === 0) {
-    return '';
-  }
-
-  return '\n\n## Gemini Execution Rules\n\n- Prefer the final answer as soon as the available evidence is sufficient.\n- If more evidence is required, request only the single minimal next tool call unless multiple calls are clearly independent and safe to parallelize.\n- Do not spend tool turns restating a plan when you can gather or use evidence instead.\n- After receiving decisive tool results or deterministic validation, stop and answer instead of continuing to explore.';
+  return [
+    '',
+    '',
+    '## Tool Map',
+    '',
+    'Every tool listed in your tool schema is already active for this run — there is no lazy-load / `context.load` bootstrap step. Call any tool directly by name. The categories below are informational groupings so you can see the surface at a glance.',
+    '',
+    categoryLines,
+    '',
+    '### Navigation rules',
+    '',
+    '- Never use shell/terminal commands to reach the internet. Use `browser.*` tools for any web work.',
+    '- Do not invent tools. If a needed capability is not in your tool schema, answer without it or ask the user.',
+    '- Stop calling tools once the evidence is sufficient to answer.',
+  ].join('\n');
 }
 
 function readCachedContract(): string {
@@ -342,7 +437,14 @@ function normalizeListSection(section: string): string {
     .trim();
 }
 
-function buildCurrentDateTimeLine(agentId?: string): string {
+/**
+ * Builds the volatile current-date/time line that is now injected into the
+ * user-turn context block (outside the cached system prompt). Keeping it out
+ * of the system block is critical: the Anthropic ephemeral cache breakpoints
+ * only match when the system text is byte-identical across turns, and any
+ * minute-precision substring busts that invariant.
+ */
+export function buildCurrentDateTimeLine(agentId?: string): string {
   if (agentId === GEMINI_PROVIDER_ID) {
     return 'Current date/time should be inferred from runtime-provided dates, browser evidence, and explicit task context. Do not rely on a volatile timestamp string when stable evidence is available.';
   }

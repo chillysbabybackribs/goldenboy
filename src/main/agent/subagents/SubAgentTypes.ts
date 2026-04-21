@@ -10,13 +10,20 @@ export type SubAgentSpawnInput = {
   mode?: AgentMode;
   inheritedContext?: 'full' | 'summary' | 'none';
   providerId?: ProviderId | 'auto';
+  modelId?: string;
   allowedTools?: 'all' | AgentToolName[];
   canSpawnSubagents?: boolean;
+  timeoutMs?: number;
+  onStatus?: (status: string) => void;
 };
 
 export type SubAgentScopeResolution = {
   allowedTools: 'all' | AgentToolName[];
-  source: 'explicit-all' | 'explicit-list' | 'derived-mode4' | 'derived-mode6';
+  source:
+    | 'explicit-all'
+    | 'explicit-list'
+    | 'derived-runtime-selected'
+    | 'derived-runtime-selected-adaptive';
 };
 
 export type SubAgentRecord = {
@@ -26,6 +33,8 @@ export type SubAgentRecord = {
   role: string;
   task: string;
   mode: AgentMode;
+  providerId: ProviderId | 'auto' | null;
+  modelId: string | null;
   status: SubAgentStatus;
   createdAt: number;
   completedAt: number | null;
@@ -57,9 +66,4 @@ export type SubAgentValidationSummary = {
   valid: number;
   invalid: number;
   incomplete: number;
-};
-
-export type SubAgentWaitInput = {
-  id: string;
-  timeoutMs?: number;
 };

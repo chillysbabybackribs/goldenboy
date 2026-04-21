@@ -71,9 +71,9 @@ describe('ConstraintValidator', () => {
     ]));
   });
 
-  it('validates browser navigate_to against the normalized target', () => {
+  it('validates browser navigate with normalize=true against the normalized target', () => {
     const result = validateToolResult(
-      'browser.navigate_to',
+      'browser.navigate',
       {
         summary: 'Navigated to https://example.com',
         data: {
@@ -81,7 +81,7 @@ describe('ConstraintValidator', () => {
           normalizedUrl: 'https://example.com',
         },
       },
-      { url: 'example' },
+      { url: 'example', normalize: true },
     );
 
     expect(result?.status).toBe('VALID');
@@ -146,37 +146,6 @@ describe('ConstraintValidator', () => {
       }),
       expect.objectContaining({
         name: 'selected_value',
-        status: 'PASS',
-      }),
-    ]));
-  });
-
-  it('validates browser close_all_tabs against a single Google homepage tab', () => {
-    const result = validateToolResult(
-      'browser.close_all_tabs',
-      {
-        summary: 'Closed 2 tabs and reset the browser to Google',
-        data: {
-          activeTabId: 'tab-1',
-          tabs: [{
-            id: 'tab-1',
-            navigation: { url: 'https://www.google.com/' },
-          }],
-          url: 'https://www.google.com/',
-          homepageUrl: 'https://www.google.com/',
-        },
-      },
-      {},
-    );
-
-    expect(result?.status).toBe('VALID');
-    expect(result?.constraints).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        name: 'single_tab_remaining',
-        status: 'PASS',
-      }),
-      expect.objectContaining({
-        name: 'homepage_target',
         status: 'PASS',
       }),
     ]));

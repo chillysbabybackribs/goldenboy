@@ -69,7 +69,13 @@ const PARTITION = 'persist:workspace-browser';
 const MAX_RECENT_PERMISSIONS = 50;
 const HISTORY_PERSIST_DEBOUNCE = 2000;
 const BROWSER_STATE_SYNC_DEBOUNCE = 48;
-const ENABLE_BACKGROUND_PAGE_EXTRACTION = false;
+// Background page extraction now runs on every `did-stop-loading`, but the
+// per-tab + per-URL guard in `cachePageKnowledge` short-circuits repeated
+// extractions for the same URL within this window so flaky pages that keep
+// firing load events do not trash the CPU. The PageKnowledgeStore itself also
+// fast-paths caching when the cleaned content hash matches an existing record.
+const ENABLE_BACKGROUND_PAGE_EXTRACTION = true;
+const BACKGROUND_EXTRACTION_TAB_COOLDOWN_MS = 2_500;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5.0;
@@ -273,6 +279,10 @@ export class BrowserService {
   private diskCache: DiskCache | null = null;
   private activeTaskId: string | null = null;
   private stateSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  // Tracks the last URL we ran background page extraction against per tab, so
+  // repeated `did-stop-loading` events (spinners, lazy-loaders, auth redirects)
+  // don't re-clone and re-parse the same DOM every few hundred milliseconds.
+  private lastBackgroundExtractionByTab = new Map<string, { url: string; at: number }>();
 
   constructor(private readonly contextId: string = DEFAULT_BROWSER_CONTEXT_ID) {
     this.profile = { id: PROFILE_ID, partition: PARTITION, persistent: true, userAgent: null };
@@ -314,6 +324,15 @@ export class BrowserService {
     this.activeTaskId = null;
   }
 
+  /**
+   * Current task id the browser surface has been tied to (via `setDiskCache`),
+   * exposed so page-cache tooling can stamp cached pages / chunks with the
+   * running task and later scope searches to avoid cross-task leakage.
+   */
+  getActiveTaskId(): string | null {
+    return this.activeTaskId;
+  }
+
   private async extractToDisk(tabId: string): Promise<void> {
     if (!this.diskCache || !this.activeTaskId) return;
     const entry = this.tabs.get(tabId);
@@ -341,6 +360,13 @@ export class BrowserService {
     const url = entry.info.navigation.url || entry.view.webContents.getURL();
     if (!url || url === 'about:blank' || url.startsWith('devtools://')) return;
 
+    const previous = this.lastBackgroundExtractionByTab.get(tabId);
+    const now = Date.now();
+    if (previous && previous.url === url && now - previous.at < BACKGROUND_EXTRACTION_TAB_COOLDOWN_MS) {
+      return;
+    }
+    this.lastBackgroundExtractionByTab.set(tabId, { url, at: now });
+
     try {
       const content = await this.pageExtractor.extractContent(tabId);
       if (!content.content.trim()) return;
@@ -350,6 +376,7 @@ export class BrowserService {
         title: content.title || entry.info.navigation.title || '',
         content: content.content,
         tier: content.tier,
+        taskId: this.activeTaskId ?? undefined,
       });
       this.emitLog('info', `Cached page knowledge: ${content.title || content.url || tabId}`);
     } catch (err) {
@@ -688,6 +715,7 @@ export class BrowserService {
     this.layoutService.detachTab(entry.id, entry.view);
     this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
     pageKnowledgeStore.removePagesForTab(entry.id);
+    this.lastBackgroundExtractionByTab.delete(entry.id);
     this.dialogManager.detachTab(entry.id);
     try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
   }

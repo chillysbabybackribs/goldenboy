@@ -1,6 +1,6 @@
-import { AgentToolDefinition } from '../AgentTypes';
-import { terminalService } from '../../terminal/TerminalService';
-import { agentCache } from '../AgentCache';
+import { AgentToolDefinition } from '../../AgentTypes';
+import { terminalService } from '../../../terminal/TerminalService';
+import { agentCache } from '../../AgentCache';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -54,7 +54,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
   return [
     {
       name: 'terminal.exec',
-      description: 'Execute a shell command in the shared terminal and wait for completion. Use this for real external actions such as git, gh, package managers, CLIs, tests, builds, deployment commands, and local automation. Prefer non-interactive commands.',
+      description: 'Run a shell command in the shared terminal and wait for completion. Use for git, gh, package managers, CLIs, tests, builds, deploys, and local automation. Prefer non-interactive commands.',
       inputSchema: {
         type: 'object',
         required: ['command'],
@@ -112,7 +112,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'terminal.spawn',
-      description: 'Start a long-running shell command in the shared terminal without waiting for completion. Use for dev servers, watchers, tunnels, and other processes that should keep running.',
+      description: 'Start a long-running shell command in the shared terminal without waiting. Use for dev servers, watchers, tunnels, and similar processes.',
       inputSchema: {
         type: 'object',
         required: ['command'],
@@ -147,7 +147,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'terminal.write',
-      description: 'Write raw input to the shared terminal. Use only for interactive prompts or process input after terminal.spawn or terminal.exec reports a running command.',
+      description: 'Write raw input to the shared terminal. Use only for interactive prompts after terminal.spawn/terminal.exec reports a running command.',
       inputSchema: {
         type: 'object',
         required: ['input'],
@@ -171,7 +171,7 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'terminal.kill',
-      description: 'Interrupt the current terminal foreground process with Ctrl+C. Use to stop long-running commands started in the shared terminal.',
+      description: 'Send Ctrl+C to the shared terminal to interrupt the foreground process.',
       inputSchema: { type: 'object', properties: {} },
       async execute() {
         if (!terminalService.isBusy()) {
@@ -186,6 +186,29 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
             sessionId: session.id,
             recentOutput: compactOutput(terminalService.getRecentOutput(30), 4000),
             filesystemCacheInvalidated: true,
+          },
+        };
+      },
+    },
+    {
+      name: 'terminal.status',
+      description: 'Report shared terminal status: whether a command is active, the current cwd, and recent output.',
+      inputSchema: {
+        type: 'object',
+        properties: { recentLines: { type: 'number' } },
+      },
+      async execute(input) {
+        const obj = objectInput(input);
+        const recentLines = Math.max(1, Math.min(optionalNumber(obj, 'recentLines', 40), 200));
+        const session = terminalService.getSession();
+        return {
+          summary: terminalService.isBusy() ? 'Terminal is busy' : 'Terminal is idle',
+          data: {
+            isBusy: terminalService.isBusy(),
+            cwd: terminalService.getCwd() || session?.cwd || null,
+            sessionId: session?.id || null,
+            status: session?.status || null,
+            recentOutput: compactOutput(terminalService.getRecentOutput(recentLines), 4000),
           },
         };
       },

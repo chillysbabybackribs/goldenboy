@@ -156,6 +156,8 @@ export function appReducer(state: AppState, action: Action): AppState {
         outputTokens: 0,
         apiCalls: 0,
       };
+      const cachedDelta = action.cachedInputTokens ?? 0;
+      const cacheCreationDelta = action.cacheCreationInputTokens ?? 0;
       return {
         ...state,
         taskTokenUsage: {
@@ -166,12 +168,16 @@ export function appReducer(state: AppState, action: Action): AppState {
             apiCalls: current.apiCalls + action.apiCalls,
             updatedAt: Date.now(),
             lastProviderId: action.providerId,
+            cachedInputTokens: (current.cachedInputTokens ?? 0) + cachedDelta,
+            cacheCreationInputTokens: (current.cacheCreationInputTokens ?? 0) + cacheCreationDelta,
             providerBreakdown: {
               ...current.providerBreakdown,
               [action.providerId]: {
                 inputTokens: providerCurrent.inputTokens + action.inputTokens,
                 outputTokens: providerCurrent.outputTokens + action.outputTokens,
                 apiCalls: providerCurrent.apiCalls + action.apiCalls,
+                cachedInputTokens: (providerCurrent.cachedInputTokens ?? 0) + cachedDelta,
+                cacheCreationInputTokens: (providerCurrent.cacheCreationInputTokens ?? 0) + cacheCreationDelta,
               },
             },
           },
@@ -185,13 +191,15 @@ export function appReducer(state: AppState, action: Action): AppState {
         tokenUsage: {
           inputTokens: state.tokenUsage.inputTokens + action.inputTokens,
           outputTokens: state.tokenUsage.outputTokens + action.outputTokens,
+          cachedInputTokens: (state.tokenUsage.cachedInputTokens ?? 0) + (action.cachedInputTokens ?? 0),
+          cacheCreationInputTokens: (state.tokenUsage.cacheCreationInputTokens ?? 0) + (action.cacheCreationInputTokens ?? 0),
         },
       };
 
     case ActionType.RESET_TOKEN_USAGE:
       return {
         ...state,
-        tokenUsage: { inputTokens: 0, outputTokens: 0 },
+        tokenUsage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0 },
         taskTokenUsage: {},
       };
 

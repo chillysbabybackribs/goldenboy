@@ -1,20 +1,20 @@
-import { AgentToolDefinition } from '../AgentTypes';
-import { browserService } from '../../browser/BrowserService';
-import { PageExtractor } from '../../context/pageExtractor';
-import { pageKnowledgeStore } from '../../browserKnowledge/PageKnowledgeStore';
-import { appStateStore } from '../../state/appStateStore';
-import { ActionType } from '../../state/actions';
-import { generateId } from '../../../shared/utils/ids';
-import { geminiSidecar } from '../GeminiSidecar';
-import { WebIntentInstruction, WebIntentVM } from '../../browser/WebIntentVM';
-import { agentCache } from '../AgentCache';
-import { normalizeWebsiteTarget } from '../../browser/navigationTarget';
+import { AgentToolDefinition } from '../../AgentTypes';
+import { browserService } from '../../../browser/BrowserService';
+import { PageExtractor } from '../../../context/pageExtractor';
+import { pageKnowledgeStore } from '../../../browserKnowledge/PageKnowledgeStore';
+import { appStateStore } from '../../../state/appStateStore';
+import { ActionType } from '../../../state/actions';
+import { generateId } from '../../../../shared/utils/ids';
+import { geminiSidecar } from '../../GeminiSidecar';
+import { WebIntentInstruction, WebIntentVM } from '../../../browser/WebIntentVM';
+import { agentCache } from '../../AgentCache';
+import { normalizeWebsiteTarget } from '../../../browser/navigationTarget';
 import {
   BrowserOperationKind,
   BrowserOperationPayloadMap,
   BrowserOperationResult,
   executeBrowserOperation,
-} from '../../browser/browserOperations';
+} from '../../../browser/browserOperations';
 
 const SIDECAR_RANK_TIMEOUT_MS = 1200;
 const SIDECAR_JUDGE_TIMEOUT_MS = 1200;
@@ -70,6 +70,32 @@ function requireBrowserCreated(): void {
   if (!browserService.isCreated()) {
     throw new Error('Browser surface is not initialized yet. Open the execution window before using browser tools.');
   }
+}
+
+/**
+ * Compact tab inventory echoed on action-tool responses so the model keeps an
+ * up-to-date cross-tab working memory without re-calling `browser.tabs` after
+ * every navigation or interaction. Intentionally trimmed to id/url/title/loading
+ * to avoid dominating the response payload.
+ */
+function compactTabInventory(): Array<{ id: string; url: string; title: string; isLoading: boolean }> {
+  return browserService.getTabs().map((tab) => ({
+    id: tab.id,
+    url: tab.navigation.url,
+    title: tab.navigation.title,
+    isLoading: tab.navigation.isLoading,
+  }));
+}
+
+function withTabEcho(result: BrowserOperationResult): BrowserOperationResult {
+  return {
+    summary: result.summary,
+    data: {
+      ...result.data,
+      activeTabId: browserService.getState().activeTabId,
+      tabs: compactTabInventory(),
+    },
+  };
 }
 
 async function runBrowserOperation<K extends BrowserOperationKind>(
@@ -212,7 +238,11 @@ function requireWebsiteTarget(input: string): string {
   return normalized;
 }
 
-async function cachePageForTab(pageExtractor: PageExtractor, tabId: string): Promise<{
+async function cachePageForTab(
+  pageExtractor: PageExtractor,
+  tabId: string,
+  taskId?: string,
+): Promise<{
   id: string;
   tabId: string;
   url: string;
@@ -226,6 +256,7 @@ async function cachePageForTab(pageExtractor: PageExtractor, tabId: string): Pro
     title: content.title,
     content: content.content,
     tier: content.tier,
+    taskId: taskId ?? browserService.getActiveTaskId() ?? undefined,
   });
   return {
     id: page.id,
@@ -349,85 +380,54 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
 
   return [
     {
-      name: 'browser.get_state',
-      description: 'Return the authoritative browser state for the active tab, including the active tab id and current navigation details. Use this before tab-sensitive actions when the current tab context matters.',
-      inputSchema: { type: 'object' },
-      async execute() {
+      name: 'browser.tabs',
+      description: 'Return browser tab state. scope="active" (default) returns the active tab id and current navigation; scope="all" returns every open tab with ids.',
+      inputSchema: {
+        type: 'object',
+        properties: { scope: { type: 'string', enum: ['active', 'all'] } },
+      },
+      async execute(input) {
+        const scope = typeof objectInput(input).scope === 'string' ? String(objectInput(input).scope) : 'active';
+        if (scope === 'all') return runBrowserOperation('browser.get-tabs', {});
         return runBrowserOperation('browser.get-state', {});
       },
     },
     {
-      name: 'browser.get_tabs',
-      description: 'Return the full set of currently open browser tabs with their ids. Use this before activating or closing tabs when tab ids are unknown.',
-      inputSchema: { type: 'object' },
-      async execute() {
-        return runBrowserOperation('browser.get-tabs', {});
-      },
-    },
-    {
       name: 'browser.navigate',
-      description: 'Navigate the active browser tab to a URL or direct address. This does not open a new tab; use browser.create_tab when the user asks for a new, separate, or additional tab. For user requests phrased as "search ..." use browser.search_web instead.',
+      description: 'Navigate the active tab to a URL. Set normalize=true to treat bare domains (e.g. "example") as "example.com". Use browser.create_tab for a new tab, browser.research_search for search workflows.',
       inputSchema: {
         type: 'object',
         required: ['url'],
         properties: {
-          url: {
-            type: 'string',
-            description: 'The destination URL or direct address to load in the current active tab.',
-          },
+          url: { type: 'string' },
+          normalize: { type: 'boolean' },
         },
       },
       async execute(input) {
         requireBrowserCreated();
-        const url = requireString(objectInput(input), 'url');
-        return runBrowserOperation('browser.navigate', { url }, { invalidateCache: true });
+        const obj = objectInput(input);
+        const rawUrl = requireString(obj, 'url');
+        const shouldNormalize = obj.normalize === true;
+        const targetUrl = shouldNormalize ? requireWebsiteTarget(rawUrl) : rawUrl;
+        const result = await runBrowserOperation('browser.navigate', { url: targetUrl }, { invalidateCache: true });
+        const enriched = shouldNormalize
+          ? {
+            summary: result.summary,
+            data: { ...result.data, inputUrl: rawUrl, normalizedUrl: targetUrl },
+          }
+          : result;
+        return withTabEcho(enriched);
       },
     },
     {
-      name: 'browser.navigate_to',
-      description: 'Navigate directly to a website. This tool treats the input as a site/domain, adds `.com` when the user omits it for simple domains like `example`, and verifies the final navigation target.',
-      inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } } },
-      async execute(input) {
-        requireBrowserCreated();
-        const rawUrl = requireString(objectInput(input), 'url');
-        const normalizedUrl = requireWebsiteTarget(rawUrl);
-        const result = await runBrowserOperation('browser.navigate', { url: normalizedUrl }, { invalidateCache: true });
-        return {
-          summary: result.summary,
-          data: {
-            ...result.data,
-            inputUrl: rawUrl,
-            normalizedUrl,
-          },
-        };
-      },
-    },
-    {
-      name: 'browser.search_web',
-      description: 'Search the web in the owned browser using the configured search engine. Use this whenever the user says search, look up, find online, research online, or asks for current web information.',
+      name: 'browser.research_search',
+      description: 'Web-research workflow (default): open a search page, parse ranked results, optionally open top results, cache pages, return evidence. mode="open" opens the search page only without ranking/opening results.',
       inputSchema: {
         type: 'object',
         required: ['query'],
         properties: {
           query: { type: 'string' },
-        },
-      },
-      async execute(input) {
-        requireBrowserCreated();
-        const query = requireString(objectInput(input), 'query');
-        const result = await runBrowserOperation('browser.search-web', { query }, { invalidateCache: true });
-        logBrowserCache(`Opened web search for "${query}"`);
-        return result;
-      },
-    },
-    {
-      name: 'browser.research_search',
-      description: 'Run the default browser research workflow for a web query: open search results in the owned browser, cache the search page, parse result links, optionally open top results, cache those pages, and return compact evidence. Use this as the first tool for web search tasks.',
-      inputSchema: {
-        type: 'object',
-        required: ['query'],
-        properties: {
-          query: { type: 'string', description: 'The exact research query to search for in the owned browser.' },
+          mode: { type: 'string', enum: ['workflow', 'open'] },
           maxPages: { type: 'number' },
           openTopResults: { type: 'number' },
           resultLimit: { type: 'number' },
@@ -439,6 +439,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const query = requireString(obj, 'query');
+        const mode = typeof obj.mode === 'string' ? obj.mode : 'workflow';
+        if (mode === 'open') {
+          const result = await runBrowserOperation('browser.search-web', { query }, { invalidateCache: true });
+          logBrowserCache(`Opened web search for "${query}"`);
+          return result;
+        }
         const resultLimit = Math.min(optionalNumber(obj, 'resultLimit', 8), 12);
         const maxPages = Math.min(
           optionalNumber(obj, 'maxPages', optionalNumber(obj, 'openTopResults', 3)),
@@ -459,7 +465,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
 
         progress('caching the search page');
         const [searchPage, searchResults] = await Promise.all([
-          cachePageForTab(pageExtractor, searchTabId),
+          cachePageForTab(pageExtractor, searchTabId, context.taskId),
           browserService.extractSearchResults(searchTabId, resultLimit),
         ]);
         const defaultRankedResults = {
@@ -485,6 +491,8 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const cacheMatches = pageKnowledgeStore.answerFromCache(query, {
           tabId: searchTabId,
           limit: 4,
+          taskId: context.taskId,
+          activeTabId: browserService.getState().activeTabId,
         });
 
         const openedPages: Array<Record<string, unknown>> = [];
@@ -499,12 +507,14 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           if (!tabId) throw new Error(`Browser create-tab did not return a tab id for ${target.url}`);
           await waitForBrowserSettled(10_000);
           const [page, evidence] = await Promise.all([
-            cachePageForTab(pageExtractor, tabId),
+            cachePageForTab(pageExtractor, tabId, context.taskId),
             browserService.extractPageEvidence(tabId),
           ]);
           const relevantChunks = pageKnowledgeStore.answerFromCache(query, {
             tabId,
             limit: 4,
+            taskId: context.taskId,
+            activeTabId: browserService.getState().activeTabId,
           });
           const matchSnippets = relevantChunks.matches.map(match => match.snippet);
           const score = scoreEvidence({
@@ -629,7 +639,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const result = await runBrowserOperation('browser.back', {}, { invalidateCache: true });
         await waitForBrowserSettled();
-        return result;
+        return withTabEcho(result);
       },
     },
     {
@@ -640,7 +650,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const result = await runBrowserOperation('browser.forward', {}, { invalidateCache: true });
         await waitForBrowserSettled();
-        return result;
+        return withTabEcho(result);
       },
     },
     {
@@ -651,7 +661,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const result = await runBrowserOperation('browser.reload', {}, { invalidateCache: true });
         await waitForBrowserSettled();
-        return result;
+        return withTabEcho(result);
       },
     },
     {
@@ -660,10 +670,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: {
         type: 'object',
         properties: {
-          url: {
-            type: 'string',
-            description: 'Optional starting URL for the new tab. Omit to open a blank/default tab.',
-          },
+          url: { type: 'string' },
         },
       },
       async execute(input) {
@@ -683,19 +690,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.close_tab',
-      description: 'Close one or more browser tabs by id. Use browser.get_tabs first when tab ids are unknown, and read browser.get_tabs again before claiming the final tab state.',
+      description: 'Close one or more tabs by id. Run browser.get_tabs first if ids are unknown, and again before claiming final state.',
       inputSchema: {
         type: 'object',
         properties: {
-          tabId: {
-            type: 'string',
-            description: 'Single browser tab id to close.',
-          },
-          tabIds: {
-            type: 'array',
-            description: 'Optional list of browser tab ids to close in one request.',
-            items: { type: 'string' },
-          },
+          tabId: { type: 'string' },
+          tabIds: { type: 'array', items: { type: 'string' } },
         },
       },
       async execute(input) {
@@ -720,56 +720,13 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'browser.close_all_tabs',
-      description: 'Close all browser tabs down to a single Google homepage tab, then verify the remaining browser state before returning.',
-      inputSchema: { type: 'object' },
-      async execute() {
-        requireBrowserCreated();
-        const existingTabs = browserService.getTabs();
-        let survivorTabId = browserService.getState().activeTabId || existingTabs[0]?.id || '';
-
-        if (!survivorTabId) {
-          const created = await runBrowserOperation('browser.create-tab', { url: GOOGLE_HOME_URL }, { invalidateCache: true });
-          survivorTabId = typeof created.data.tabId === 'string' ? created.data.tabId : '';
-        }
-
-        const tabsToClose = browserService.getTabs()
-          .map(tab => tab.id)
-          .filter(tabId => tabId !== survivorTabId);
-
-        for (const tabId of tabsToClose) {
-          await runBrowserOperation('browser.close-tab', { tabId }, { invalidateCache: true });
-        }
-
-        await runBrowserOperation('browser.activate-tab', { tabId: survivorTabId }, { invalidateCache: true });
-        const navigation = await runBrowserOperation('browser.navigate', { url: GOOGLE_HOME_URL }, { invalidateCache: true });
-        await waitForBrowserSettled();
-
-        const finalState = browserService.getState();
-        return {
-          summary: `Closed ${tabsToClose.length} tab${tabsToClose.length === 1 ? '' : 's'} and reset the browser to Google`,
-          data: {
-            tabIds: tabsToClose,
-            activeTabId: finalState.activeTabId,
-            tabs: browserService.getTabs(),
-            url: typeof navigation.data.url === 'string' ? navigation.data.url : finalState.navigation.url,
-            title: typeof navigation.data.title === 'string' ? navigation.data.title : finalState.navigation.title,
-            homepageUrl: GOOGLE_HOME_URL,
-          },
-        };
-      },
-    },
-    {
       name: 'browser.activate_tab',
       description: 'Activate a browser tab.',
       inputSchema: {
         type: 'object',
         required: ['tabId'],
         properties: {
-          tabId: {
-            type: 'string',
-            description: 'The exact id of the existing browser tab to make active.',
-          },
+          tabId: { type: 'string' },
         },
       },
       async execute(input) {
@@ -788,17 +745,51 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.click',
-      description: 'Click a page element by selector.',
-      inputSchema: { type: 'object', required: ['selector'], properties: { selector: { type: 'string' }, tabId: { type: 'string' } } },
+      description: 'Click a page element. Provide selector for an exact target, or text to click the first actionable element whose visible text/label/role contains the string.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string' },
+          text: { type: 'string' },
+          tabId: { type: 'string' },
+        },
+      },
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const selector = requireString(obj, 'selector');
-        return runBrowserOperation(
+        const selector = optionalString(obj, 'selector');
+        const text = optionalString(obj, 'text');
+        const tabId = optionalString(obj, 'tabId');
+        if (!selector && !text) {
+          throw new Error('browser.click requires either selector or text');
+        }
+        if (selector) {
+          const clickResult = await runBrowserOperation('browser.click', { selector, tabId }, { invalidateCache: true });
+          return withTabEcho(clickResult);
+        }
+        const elements = await browserService.getActionableElements(tabId);
+        const match = elements.find((element) => {
+          const haystack = [
+            element.text,
+            element.ariaLabel,
+            element.role,
+            element.ref?.selector,
+            element.href,
+          ].filter(Boolean).join(' ');
+          return includesText(haystack, text!);
+        });
+        if (!match?.ref?.selector) {
+          throw new Error(`No clickable element found for text: ${text}`);
+        }
+        const result = await runBrowserOperation(
           'browser.click',
-          { selector, tabId: optionalString(obj, 'tabId') },
+          { selector: match.ref.selector, tabId },
           { invalidateCache: true },
         );
+        return withTabEcho({
+          summary: `Clicked text "${text}"`,
+          data: { result: result.data.result, element: match },
+        });
       },
     },
     {
@@ -810,11 +801,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const text = requireString(obj, 'text');
-        return runBrowserOperation(
+        const result = await runBrowserOperation(
           'browser.type',
           { selector, text, tabId: optionalString(obj, 'tabId') },
           { invalidateCache: true },
         );
+        return withTabEcho(result);
       },
     },
     {
@@ -833,7 +825,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.select_option',
-      description: 'Select an option in a native select element by exact selector and value, label, or index. Returns the final selected state after dispatching input and change events.',
+      description: 'Select an option in a native select element by selector and value, label, or index. Dispatches input+change events and returns the final selection.',
       inputSchema: {
         type: 'object',
         required: ['selector'],
@@ -855,7 +847,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         if (!value && !label && !hasIndex) {
           throw new Error('browser.select_option requires one of value, label, or index');
         }
-        return runBrowserOperation(
+        const result = await runBrowserOperation(
           'browser.select-option',
           {
             selector,
@@ -866,6 +858,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           },
           { invalidateCache: true },
         );
+        return withTabEcho(result);
       },
     },
     {
@@ -877,41 +870,38 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
         const filePath = requireString(obj, 'filePath');
-        return runBrowserOperation(
+        const result = await runBrowserOperation(
           'browser.upload-file',
           { selector, filePath, tabId: optionalString(obj, 'tabId') },
           { invalidateCache: true },
         );
+        return withTabEcho(result);
       },
     },
     {
-      name: 'browser.download_link',
-      description: 'Start a tracked browser download from a page link selector without relying on normal click/navigation behavior.',
-      inputSchema: { type: 'object', required: ['selector'], properties: { selector: { type: 'string' }, tabId: { type: 'string' } } },
-      async execute(input) {
-        requireBrowserCreated();
-        const obj = objectInput(input);
-        const selector = requireString(obj, 'selector');
-        return runBrowserOperation(
-          'browser.download-link',
-          { selector, tabId: optionalString(obj, 'tabId') },
-          { invalidateCache: true },
-        );
+      name: 'browser.download',
+      description: 'Start a tracked browser download. Provide selector for a page link, or url for a direct download.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string' },
+          url: { type: 'string' },
+          tabId: { type: 'string' },
+        },
       },
-    },
-    {
-      name: 'browser.download_url',
-      description: 'Start a tracked browser download from an explicit URL.',
-      inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' }, tabId: { type: 'string' } } },
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        const url = requireString(obj, 'url');
-        return runBrowserOperation(
-          'browser.download-url',
-          { url, tabId: optionalString(obj, 'tabId') },
-          { invalidateCache: true },
-        );
+        const selector = optionalString(obj, 'selector');
+        const url = optionalString(obj, 'url');
+        const tabId = optionalString(obj, 'tabId');
+        if (!selector && !url) {
+          throw new Error('browser.download requires either selector or url');
+        }
+        if (selector) {
+          return runBrowserOperation('browser.download-link', { selector, tabId }, { invalidateCache: true });
+        }
+        return runBrowserOperation('browser.download-url', { url: url!, tabId }, { invalidateCache: true });
       },
     },
     {
@@ -975,11 +965,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const sourceSelector = requireString(obj, 'sourceSelector');
         const targetSelector = requireString(obj, 'targetSelector');
-        return runBrowserOperation(
+        const result = await runBrowserOperation(
           'browser.drag',
           { sourceSelector, targetSelector, tabId: optionalString(obj, 'tabId') },
           { invalidateCache: true },
         );
+        return withTabEcho(result);
       },
     },
     {
@@ -997,32 +988,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const obj = objectInput(input);
         const selector = requireString(obj, 'selector');
-        return runBrowserOperation(
+        const result = await runBrowserOperation(
           'browser.hover',
           { selector, tabId: optionalString(obj, 'tabId') },
           { invalidateCache: true },
         );
-      },
-    },
-    {
-      name: 'browser.hit_test',
-      description: 'Check whether a selector is the topmost clickable element at its center point.',
-      inputSchema: {
-        type: 'object',
-        required: ['selector'],
-        properties: {
-          selector: { type: 'string' },
-          tabId: { type: 'string' },
-        },
-      },
-      async execute(input) {
-        requireBrowserCreated();
-        const obj = objectInput(input);
-        const selector = requireString(obj, 'selector');
-        return runBrowserOperation('browser.hit-test', {
-          selector,
-          tabId: optionalString(obj, 'tabId'),
-        });
+        return withTabEcho(result);
       },
     },
     {
@@ -1048,11 +1019,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           tabId: { type: 'string' },
         },
       },
-      async execute(input) {
+      async execute(input, context) {
         requireBrowserCreated();
         const tabId = optionalString(objectInput(input), 'tabId') || browserService.getState().activeTabId;
         if (!tabId) throw new Error('No active tab to cache');
-        const page = await cachePageForTab(pageExtractor, tabId);
+        const page = await cachePageForTab(pageExtractor, tabId, context.taskId);
         logBrowserCache(`Cached current page into ${page.chunkIds.length} chunks: ${page.title || page.url}`);
         return {
           summary: `Cached page ${page.title || page.url} into ${page.chunkIds.length} chunks`,
@@ -1061,59 +1032,47 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'browser.answer_from_cache',
-      description: 'Cheap first-pass retrieval for a browser question. Searches cached page chunks and returns snippets plus suggested chunk ids without broad page extraction.',
-      inputSchema: {
-        type: 'object',
-        required: ['question'],
-        properties: {
-          question: { type: 'string' },
-          tabId: { type: 'string' },
-          pageId: { type: 'string' },
-          limit: { type: 'number' },
-        },
-      },
-      async execute(input) {
-        const obj = objectInput(input);
-        const question = requireString(obj, 'question');
-        const answer = pageKnowledgeStore.answerFromCache(question, {
-          tabId: optionalString(obj, 'tabId'),
-          pageId: optionalString(obj, 'pageId'),
-          limit: Math.min(optionalNumber(obj, 'limit', 8), 20),
-        });
-        logBrowserCache(
-          `Cache answer ${answer.answerable ? 'hit' : 'miss'} for "${question}" (${answer.matches.length} matches, est ${answer.tokenEstimate} tokens)`,
-          answer.answerable ? 'info' : 'warn',
-        );
-        return {
-          summary: answer.answerable
-            ? `Cache found ${answer.matches.length} relevant chunks`
-            : 'Cache had no relevant chunks',
-          data: answer,
-        };
-      },
-    },
-    {
       name: 'browser.search_page_cache',
-      description: 'Search cached browser page chunks and return compact snippets plus chunk ids. Prefer this before reading full page text.',
+      description: 'Search cached browser page chunks and return snippets plus chunk ids. mode="answer" additionally classifies answerability and returns suggested chunk ids.',
       inputSchema: {
         type: 'object',
         required: ['query'],
         properties: {
           query: { type: 'string' },
+          mode: { type: 'string', enum: ['snippets', 'answer'] },
           tabId: { type: 'string' },
           pageId: { type: 'string' },
           limit: { type: 'number' },
         },
       },
-      async execute(input) {
+      async execute(input, context) {
         const obj = objectInput(input);
         const query = requireString(obj, 'query');
-        const results = pageKnowledgeStore.search(query, {
-          tabId: optionalString(obj, 'tabId'),
-          pageId: optionalString(obj, 'pageId'),
-          limit: Math.min(optionalNumber(obj, 'limit', 8), 20),
-        });
+        const tabId = optionalString(obj, 'tabId');
+        const pageId = optionalString(obj, 'pageId');
+        const limit = Math.min(optionalNumber(obj, 'limit', 8), 20);
+        const mode = typeof obj.mode === 'string' ? obj.mode : 'snippets';
+        const scopeOptions = {
+          tabId,
+          pageId,
+          limit,
+          taskId: context.taskId,
+          activeTabId: browserService.isCreated() ? browserService.getState().activeTabId : undefined,
+        };
+        if (mode === 'answer') {
+          const answer = pageKnowledgeStore.answerFromCache(query, scopeOptions);
+          logBrowserCache(
+            `Cache answer ${answer.answerable ? 'hit' : 'miss'} for "${query}" (${answer.matches.length} matches, est ${answer.tokenEstimate} tokens)`,
+            answer.answerable ? 'info' : 'warn',
+          );
+          return {
+            summary: answer.answerable
+              ? `Cache found ${answer.matches.length} relevant chunks`
+              : 'Cache had no relevant chunks',
+            data: answer,
+          };
+        }
+        const results = pageKnowledgeStore.search(query, scopeOptions);
         logBrowserCache(`Cache search ${results.length > 0 ? 'hit' : 'miss'} for "${query}" (${results.length} matches)`, results.length > 0 ? 'info' : 'warn');
         return {
           summary: `Found ${results.length} cached page chunks for "${query}"`,
@@ -1145,54 +1104,40 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'browser.cache_stats',
-      description: 'Return browser page-cache stats including pages, chunks, estimated stored tokens, and search hit/miss counts.',
-      inputSchema: { type: 'object' },
-      async execute() {
-        const stats = pageKnowledgeStore.getStats();
-        return {
-          summary: `Browser cache has ${stats.pageCount} pages and ${stats.chunkCount} chunks`,
-          data: { stats },
-        };
-      },
-    },
-    {
-      name: 'browser.list_cached_pages',
-      description: 'List cached browser pages with page ids, tab ids, titles, urls, headings, and chunk counts.',
-      inputSchema: { type: 'object' },
-      async execute() {
-        const pages = pageKnowledgeStore.listPages().map(page => ({
-          id: page.id,
-          tabId: page.tabId,
-          url: page.url,
-          title: page.title,
-          tier: page.tier,
-          chunkCount: page.chunkIds.length,
-          headings: page.headings.slice(0, 20),
-          updatedAt: page.updatedAt,
-        }));
-        return {
-          summary: `Listed ${pages.length} cached pages`,
-          data: { pages },
-        };
-      },
-    },
-    {
-      name: 'browser.list_cached_sections',
-      description: 'List cached page sections/headings for a page id or tab id, with chunk ids for targeted reads.',
+      name: 'browser.cache_inventory',
+      description: 'Report browser page-cache state. scope="stats" returns totals and hit/miss counts; scope="pages" lists cached pages; scope="sections" lists headings+chunk ids for a given pageIdOrTabId.',
       inputSchema: {
         type: 'object',
-        required: ['pageIdOrTabId'],
         properties: {
+          scope: { type: 'string', enum: ['stats', 'pages', 'sections'] },
           pageIdOrTabId: { type: 'string' },
         },
       },
       async execute(input) {
-        const pageIdOrTabId = requireString(objectInput(input), 'pageIdOrTabId');
-        const sections = pageKnowledgeStore.listSections(pageIdOrTabId);
+        const obj = objectInput(input);
+        const scope = typeof obj.scope === 'string' ? obj.scope : 'stats';
+        if (scope === 'pages') {
+          const pages = pageKnowledgeStore.listPages().map(page => ({
+            id: page.id,
+            tabId: page.tabId,
+            url: page.url,
+            title: page.title,
+            tier: page.tier,
+            chunkCount: page.chunkIds.length,
+            headings: page.headings.slice(0, 20),
+            updatedAt: page.updatedAt,
+          }));
+          return { summary: `Listed ${pages.length} cached pages`, data: { pages } };
+        }
+        if (scope === 'sections') {
+          const pageIdOrTabId = requireString(obj, 'pageIdOrTabId');
+          const sections = pageKnowledgeStore.listSections(pageIdOrTabId);
+          return { summary: `Listed ${sections.length} cached sections`, data: { sections } };
+        }
+        const stats = pageKnowledgeStore.getStats();
         return {
-          summary: `Listed ${sections.length} cached sections`,
-          data: { sections },
+          summary: `Browser cache has ${stats.pageCount} pages and ${stats.chunkCount} chunks`,
+          data: { stats },
         };
       },
     },
@@ -1210,11 +1155,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
-        return runBrowserOperation('browser.inspect-page', {
+        const result = await runBrowserOperation('browser.inspect-page', {
           tabId: optionalString(obj, 'tabId'),
           textLimit: Math.min(optionalNumber(obj, 'textLimit', 3000), 6000),
           elementLimit: Math.min(optionalNumber(obj, 'elementLimit', 30), 80),
         });
+        return withTabEcho(result);
       },
     },
     {
@@ -1264,47 +1210,6 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'browser.click_text',
-      description: 'Click the first actionable element whose text, label, role, selector, or href contains the given text.',
-      inputSchema: {
-        type: 'object',
-        required: ['text'],
-        properties: {
-          text: { type: 'string' },
-          tabId: { type: 'string' },
-        },
-      },
-      async execute(input) {
-        requireBrowserCreated();
-        const obj = objectInput(input);
-        const text = requireString(obj, 'text');
-        const tabId = optionalString(obj, 'tabId');
-        const elements = await browserService.getActionableElements(tabId);
-        const match = elements.find((element) => {
-          const haystack = [
-            element.text,
-            element.ariaLabel,
-            element.role,
-            element.ref?.selector,
-            element.href,
-          ].filter(Boolean).join(' ');
-          return includesText(haystack, text);
-        });
-        if (!match?.ref?.selector) {
-          throw new Error(`No clickable element found for text: ${text}`);
-        }
-        const result = await runBrowserOperation(
-          'browser.click',
-          { selector: match.ref.selector, tabId },
-          { invalidateCache: true },
-        );
-        return {
-          summary: `Clicked text "${text}"`,
-          data: { result: result.data.result, element: match },
-        };
-      },
-    },
-    {
       name: 'browser.wait_for',
       description: 'Wait until page load settles, a selector/text is present, or a selector/text is absent.',
       inputSchema: {
@@ -1324,10 +1229,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const state = obj.state === 'absent' || obj.state === 'load' ? obj.state : 'present';
         if (state === 'load') {
           await waitForBrowserSettled(timeoutMs);
-          return {
+          return withTabEcho({
             summary: 'Browser load settled',
             data: { navigation: browserService.getState().navigation },
-          };
+          });
         }
         const result = await waitForCondition({
           selector: optionalString(obj, 'selector'),
@@ -1336,10 +1241,10 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           tabId: optionalString(obj, 'tabId'),
           timeoutMs,
         });
-        return {
+        return withTabEcho({
           summary: result.success ? `Wait condition ${state} satisfied` : `Wait condition ${state} timed out`,
           data: result,
-        };
+        });
       },
     },
     {
@@ -1452,64 +1357,8 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'browser.get_dialogs',
-      description: 'Return pending JavaScript alert/confirm/prompt dialogs.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          tabId: { type: 'string' },
-        },
-      },
-      async execute(input) {
-        requireBrowserCreated();
-        return runBrowserOperation('browser.get-dialogs', {
-          tabId: optionalString(objectInput(input), 'tabId'),
-        });
-      },
-    },
-    {
-      name: 'browser.accept_dialog',
-      description: 'Accept a pending JavaScript alert/confirm/prompt dialog.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          tabId: { type: 'string' },
-          dialogId: { type: 'string' },
-          promptText: { type: 'string' },
-        },
-      },
-      async execute(input) {
-        requireBrowserCreated();
-        const obj = objectInput(input);
-        return runBrowserOperation('browser.accept-dialog', {
-          tabId: optionalString(obj, 'tabId'),
-          dialogId: optionalString(obj, 'dialogId'),
-          promptText: optionalString(obj, 'promptText'),
-        }, { invalidateCache: true });
-      },
-    },
-    {
-      name: 'browser.dismiss_dialog',
-      description: 'Dismiss a pending JavaScript confirm/prompt dialog.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          tabId: { type: 'string' },
-          dialogId: { type: 'string' },
-        },
-      },
-      async execute(input) {
-        requireBrowserCreated();
-        const obj = objectInput(input);
-        return runBrowserOperation('browser.dismiss-dialog', {
-          tabId: optionalString(obj, 'tabId'),
-          dialogId: optionalString(obj, 'dialogId'),
-        }, { invalidateCache: true });
-      },
-    },
-    {
       name: 'browser.run_intent_program',
-      description: 'Execute semantic Web Intent VM bytecode (NAVIGATE, ASSERT, INTENT.LOGIN, INTENT.ACCEPT_DIALOG, INTENT.DISMISS_DIALOG, INTENT.HOVER, INTENT.DRAG_DROP, INTENT.ADD_TO_CART, INTENT.OPEN_CART, INTENT.CHECKOUT, INTENT.FILL_CHECKOUT_INFO, INTENT.FINISH_ORDER, INTENT.UPLOAD, INTENT.EXTRACT) using selector-agnostic resolution and postcondition checks.',
+      description: 'Run a Web Intent VM bytecode program (NAVIGATE, ASSERT, INTENT.*) with selector-agnostic resolution and postcondition checks.',
       inputSchema: {
         type: 'object',
         required: ['instructions'],
@@ -1544,28 +1393,6 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             : `Intent program failed at step ${result.failedAt} (${failedStep?.op || 'unknown'}): ${failureReason}`,
           data: result,
         };
-      },
-    },
-    {
-      name: 'browser.get_actionable_elements',
-      description: 'Return actionable page elements for a tab.',
-      inputSchema: { type: 'object', properties: { tabId: { type: 'string' } } },
-      async execute(input) {
-        requireBrowserCreated();
-        return runBrowserOperation('browser.get-actionable-elements', {
-          tabId: optionalString(objectInput(input), 'tabId'),
-        });
-      },
-    },
-    {
-      name: 'browser.capture_snapshot',
-      description: 'Capture a browser tab snapshot.',
-      inputSchema: { type: 'object', properties: { tabId: { type: 'string' } } },
-      async execute(input) {
-        requireBrowserCreated();
-        return runBrowserOperation('browser.capture-snapshot', {
-          tabId: optionalString(objectInput(input), 'tabId'),
-        });
       },
     },
   ];

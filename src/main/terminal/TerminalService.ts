@@ -2,6 +2,7 @@
 // Terminal Service — Plain PTY, no tmux
 // ═══════════════════════════════════════════════════════════════════════════
 
+import * as fs from 'fs';
 import * as os from 'os';
 import * as pty from 'node-pty';
 import { TerminalSessionInfo, TerminalSessionStatus, CommandState, CommandFinishResult, createDefaultCommandState } from '../../shared/types/terminal';
@@ -20,6 +21,35 @@ function resolveShell(): string {
     return process.env.COMSPEC || 'cmd.exe';
   }
   return process.env.SHELL || '/bin/bash';
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function resolveTrackedExecShell(): string {
+  if (process.platform === 'win32') {
+    return process.env.COMSPEC || 'cmd.exe';
+  }
+  if (fs.existsSync('/bin/bash')) return '/bin/bash';
+  return '/bin/sh';
+}
+
+export function buildTrackedExecCommand(command: string, execShellOverride?: string): string {
+  if (process.platform === 'win32') {
+    return command;
+  }
+
+  const execShell = execShellOverride || resolveTrackedExecShell();
+  const script = [
+    `printf '\\x1b]633;C\\x07\\x1b]633;D;%s\\x07' "$PWD"`,
+    command,
+    '__v2_ec=$?',
+    `printf '\\x1b]633;E;%d\\x07\\x1b]633;D;%s\\x07\\x1b]633;B\\x07' "$__v2_ec" "$PWD"`,
+    'exit "$__v2_ec"',
+  ].join('; ');
+
+  return `${execShell} -lc ${shellQuote(script)}`;
 }
 
 export class TerminalService {
@@ -220,9 +250,13 @@ export class TerminalService {
 
   async executeCommand(command: string, timeoutMs: number = 10_000): Promise<CommandFinishResult | null> {
     return this.enqueueExclusiveCommand(async () => {
-      await this.waitForShellReady(Math.min(timeoutMs, 2_000));
+      const shellReady = await this.waitForShellReady(Math.min(timeoutMs, 2_000));
       const resultPromise = this.waitForCommandFinish(timeoutMs);
-      this.dispatchCommand(command);
+      const trackedCommand = shellReady ? command : buildTrackedExecCommand(command);
+      if (!shellReady) {
+        this.emitLog('warn', 'Shell integration unavailable for terminal.exec; using wrapped command tracking fallback');
+      }
+      this.dispatchCommand(trackedCommand);
       return resultPromise;
     });
   }

@@ -179,7 +179,7 @@ describe('web_search config enforcement', () => {
 });
 
 describe('turn text emission', () => {
-  it('does not stream interim assistant text for tool-calling turns', async () => {
+  it('streams assistant message deltas via onToken so the chat UI sees live output', async () => {
     const tokens: string[] = [];
     const mockWs = {
       send: (data: string) => {
@@ -244,7 +244,7 @@ describe('turn text emission', () => {
 
     expect(result.kind).toBe('tool_calls');
     expect(result.message).toContain('Checking the page');
-    expect(tokens).toEqual([]);
+    expect(tokens).toEqual(['Checking the page before I click.']);
   });
 });
 
@@ -388,5 +388,235 @@ describe('turn recovery', () => {
     expect(JSON.stringify(resumedTurn.params.input)).toContain('Your previous response was interrupted before it completed.');
     expect(JSON.stringify(resumedTurn.params.input)).toContain('Partial answer');
     expect(connectedWs).toBe(ws2);
+  });
+});
+
+describe('agent message paragraph separation', () => {
+  it('inserts a paragraph break between consecutive agentMessage thoughts in a single turn', async () => {
+    const tokens: string[] = [];
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'turn/start') {
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            const handler = handlers[0];
+            if (handler) {
+              // First thought streams in, then the item closes.
+              handler({ data: JSON.stringify({
+                method: 'item/agentMessage/delta',
+                params: { delta: 'First thought.' },
+              }) });
+              handler({ data: JSON.stringify({
+                method: 'item/completed',
+                params: {
+                  item: {
+                    id: 'msg-1',
+                    type: 'agentMessage',
+                    text: 'First thought.',
+                  },
+                },
+              }) });
+              // Second thought begins — UI should see a paragraph break
+              // before the new deltas.
+              handler({ data: JSON.stringify({
+                method: 'item/agentMessage/delta',
+                params: { delta: 'Second thought.' },
+              }) });
+              handler({ data: JSON.stringify({
+                method: 'item/completed',
+                params: {
+                  item: {
+                    id: 'msg-2',
+                    type: 'agentMessage',
+                    text: 'Second thought.',
+                  },
+                },
+              }) });
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    const result = await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: 'Answer in two thoughts.',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: 'Answer in two thoughts.',
+        tools: [],
+        loadableTools: [],
+        onToken: (text: string) => tokens.push(text),
+      },
+      currentTools: [],
+      loadableTools: [],
+    });
+
+    expect(result.kind).toBe('final');
+    // Tokens stream in order: first thought, paragraph break, second thought,
+    // trailing break from closing the last item. The trailing break renders
+    // as an empty paragraph in markdown (no visible effect) and is trimmed
+    // from the published message below.
+    expect(tokens).toEqual(['First thought.', '\n\n', 'Second thought.', '\n\n']);
+    // The final published message separates the two thoughts with a blank
+    // line and strips any trailing whitespace from the closing break.
+    expect(result.message).toBe('First thought.\n\nSecond thought.');
+  });
+});
+
+describe('turn boundary signalling', () => {
+  it('emits a turn-boundary onStatus between tool-calling turns so the UI clears the prior descriptive line', async () => {
+    const ws = createMockWs();
+    let turnStartCount = 0;
+
+    ws.send = function send(data: string) {
+      this.sent.push(JSON.parse(data));
+      const msg = this.sent[this.sent.length - 1];
+      if (msg.method === 'turn/start') {
+        turnStartCount += 1;
+        const isFirstTurn = turnStartCount === 1;
+        setTimeout(() => {
+          if (isFirstTurn) {
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/agentMessage/delta',
+              params: { delta: 'First, I will check the page.' },
+            }) });
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/started',
+              params: {
+                item: {
+                  id: 'mcp-1',
+                  type: 'mcpToolCall',
+                  server: 'v2-tools',
+                  tool: 'browser__snapshot',
+                  arguments: {},
+                },
+              },
+            }) });
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/completed',
+              params: {
+                item: {
+                  id: 'mcp-1',
+                  type: 'mcpToolCall',
+                  server: 'v2-tools',
+                  tool: 'browser__snapshot',
+                  arguments: {},
+                  result: { ok: true },
+                  error: null,
+                },
+              },
+            }) });
+            ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+          } else {
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/agentMessage/delta',
+              params: { delta: 'Now here is my final answer.' },
+            }) });
+            ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+          }
+        }, 0);
+      }
+    };
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+    (provider as any).ws = ws;
+    (provider as any).acquireThread = async () => 'thread-1';
+    (provider as any).writeContextFile = () => {};
+
+    const statuses: string[] = [];
+    const tokens: string[] = [];
+    const result = await provider.invoke({
+      runId: 'run-1',
+      agentId: 'gpt-5.4',
+      mode: 'unrestricted-dev',
+      taskId: 'task-1',
+      systemPrompt: 'system',
+      task: 'Take a snapshot and answer.',
+      tools: [],
+      onStatus: (status: string) => statuses.push(status),
+      onToken: (text: string) => tokens.push(text),
+    } as any);
+
+    expect(turnStartCount).toBe(2);
+    expect(result.output).toBe('Now here is my final answer.');
+    // The exact ordering matters: the tool lifecycle for turn 1 comes first,
+    // THEN the turn-boundary, THEN the next turn's deltas. The UI relies on
+    // this order to clear the prior descriptive text before new deltas arrive.
+    const turnBoundaryIdx = statuses.indexOf('turn-boundary');
+    const toolDoneIdx = statuses.findIndex(s => s.startsWith('tool-done:'));
+    expect(turnBoundaryIdx).toBeGreaterThan(-1);
+    expect(toolDoneIdx).toBeGreaterThan(-1);
+    expect(turnBoundaryIdx).toBeGreaterThan(toolDoneIdx);
+    // Tokens for both turns still flow through the same onToken channel;
+    // the UI uses the turn-boundary signal (not token gaps) to reset.
+    expect(tokens.join('')).toBe('First, I will check the page.Now here is my final answer.');
+  });
+
+  it('does not emit a turn-boundary after a final turn', async () => {
+    const ws = createMockWs();
+
+    ws.send = function send(data: string) {
+      this.sent.push(JSON.parse(data));
+      const msg = this.sent[this.sent.length - 1];
+      if (msg.method === 'turn/start') {
+        setTimeout(() => {
+          ws.emit('message', { data: JSON.stringify({
+            method: 'item/agentMessage/delta',
+            params: { delta: 'The answer.' },
+          }) });
+          ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+        }, 0);
+      }
+    };
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+    (provider as any).ws = ws;
+    (provider as any).acquireThread = async () => 'thread-1';
+    (provider as any).writeContextFile = () => {};
+
+    const statuses: string[] = [];
+    await provider.invoke({
+      runId: 'run-1',
+      agentId: 'gpt-5.4',
+      mode: 'unrestricted-dev',
+      taskId: 'task-1',
+      systemPrompt: 'system',
+      task: 'Answer directly.',
+      tools: [],
+      onStatus: (status: string) => statuses.push(status),
+    } as any);
+
+    expect(statuses).not.toContain('turn-boundary');
   });
 });

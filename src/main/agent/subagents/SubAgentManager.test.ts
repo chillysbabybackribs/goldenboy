@@ -25,16 +25,6 @@ function createStubProvider(output = 'sub-agent completed'): AgentProvider {
   };
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 describe('SubAgentManager', () => {
   let userDataDir = '';
 
@@ -66,14 +56,15 @@ describe('SubAgentManager', () => {
     });
 
     const providerFactory = vi.fn((input: SubAgentSpawnInput) => {
-      return createStubProvider(`handled:${input.providerId ?? 'auto'}:${input.task}`);
+      return createStubProvider(`handled:${input.providerId ?? 'auto'}:${input.modelId ?? 'default'}:${input.task}`);
     });
 
     const manager = new SubAgentManager(providerFactory);
-    const result = await manager.run('parent-run', {
+    const execution = await manager.run('parent-run', {
       task: 'Search online for the latest Electron release notes',
       role: 'research',
       providerId: PRIMARY_PROVIDER_ID,
+      modelId: PRIMARY_PROVIDER_ID,
     });
 
     expect(providerFactory).toHaveBeenCalledTimes(1);
@@ -81,9 +72,11 @@ describe('SubAgentManager', () => {
       task: 'Search online for the latest Electron release notes',
       role: 'research',
       providerId: PRIMARY_PROVIDER_ID,
+      modelId: PRIMARY_PROVIDER_ID,
     }));
-    expect(result.status).toBe('completed');
-    expect(result.summary).toContain(`handled:${PRIMARY_PROVIDER_ID}:Search online for the latest Electron release notes`);
+    expect(execution.record.status).toBe('completed');
+    expect(execution.result.status).toBe('completed');
+    expect(execution.result.summary).toContain(`handled:${PRIMARY_PROVIDER_ID}:${PRIMARY_PROVIDER_ID}:Search online for the latest Electron release notes`);
   });
 
   it('returns structured execution details for completed sub-agents', async () => {
@@ -129,27 +122,27 @@ describe('SubAgentManager', () => {
     }));
 
     const manager = new SubAgentManager(providerFactory);
-    const result = await manager.run('parent-run', {
+    const execution = await manager.run('parent-run', {
       task: 'Patch the provider and verify the command failure',
       role: 'code',
       providerId: HAIKU_PROVIDER_ID,
     });
 
-    expect(result.status).toBe('completed');
-    expect(result.findings).toEqual(['Fixed provider routing', 'Reproduced the failing command']);
-    expect(result.changedFiles).toEqual([
+    expect(execution.result.status).toBe('completed');
+    expect(execution.result.findings).toEqual(['Fixed provider routing', 'Reproduced the failing command']);
+    expect(execution.result.changedFiles).toEqual([
       'src/main/agent/CodexProvider.ts',
       '/home/dp/Desktop/v2workspace/src/example.ts',
     ]);
-    expect(result.commands).toEqual(['npm test (exit 1)']);
-    expect(result.validation).toEqual({
+    expect(execution.result.commands).toEqual(['npm test (exit 1)']);
+    expect(execution.result.validation).toEqual({
       total: 2,
       valid: 1,
       invalid: 1,
       incomplete: 0,
     });
-    expect(result.blockers).toEqual(['terminal.exec: Command exited with code 1']);
-    expect(result.toolCalls).toEqual([
+    expect(execution.result.blockers).toEqual(['terminal.exec: Command exited with code 1']);
+    expect(execution.result.toolCalls).toEqual([
       {
         toolName: 'filesystem.patch',
         status: 'completed',
@@ -163,6 +156,62 @@ describe('SubAgentManager', () => {
         validationStatus: 'INVALID',
       },
     ]);
+  });
+
+  it('rolls sub-agent usage through the recorder using the child provider id', async () => {
+    const provider: AgentProvider & { providerId: string } = {
+      providerId: HAIKU_PROVIDER_ID,
+      invoke: vi.fn(async (): Promise<AgentProviderResult> => ({
+        output: 'delegated summary',
+        usage: {
+          inputTokens: 120,
+          outputTokens: 37,
+          cachedInputTokens: 60,
+          durationMs: 45,
+        },
+      })),
+    };
+    const recorder = vi.fn();
+    const manager = new SubAgentManager(() => provider, recorder);
+
+    await manager.run('parent-run', {
+      task: 'Investigate the module graph',
+      role: 'research',
+      taskId: 'task-usage-rollup',
+      providerId: HAIKU_PROVIDER_ID,
+    });
+
+    expect(recorder).toHaveBeenCalledTimes(1);
+    expect(recorder).toHaveBeenCalledWith({
+      taskId: 'task-usage-rollup',
+      providerId: HAIKU_PROVIDER_ID,
+      usage: {
+        inputTokens: 120,
+        outputTokens: 37,
+        cachedInputTokens: 60,
+        durationMs: 45,
+      },
+    });
+  });
+
+  it('skips usage recording when no taskId is supplied', async () => {
+    const provider: AgentProvider = {
+      providerId: HAIKU_PROVIDER_ID,
+      invoke: vi.fn(async (): Promise<AgentProviderResult> => ({
+        output: 'done',
+        usage: { inputTokens: 1, outputTokens: 2, durationMs: 1 },
+      })),
+    };
+    const recorder = vi.fn();
+    const manager = new SubAgentManager(() => provider, recorder);
+
+    await manager.run('parent-run', {
+      task: 'No-task usage case',
+      role: 'research',
+      providerId: HAIKU_PROVIDER_ID,
+    });
+
+    expect(recorder).not.toHaveBeenCalled();
   });
 
   it('records plan milestones for spawn and completion when task memory is available', async () => {
@@ -189,47 +238,29 @@ describe('SubAgentManager', () => {
     expect(context).toContain('Sub-agent research completed');
   });
 
-  it('reuses an identical running sub-agent instead of spawning a duplicate', async () => {
-    const deferred = createDeferred<AgentProviderResult>();
-    const providerInvoke = vi.fn(async () => deferred.promise);
-    const providerFactory = vi.fn((): AgentProvider => ({
-      invoke: providerInvoke,
-    }));
+  it('runs a sub-agent as a single delegated call and returns its result with the record', async () => {
+    const providerFactory = vi.fn(() => createStubProvider('blocking result'));
     const manager = new SubAgentManager(providerFactory);
 
-    const first = manager.spawnBackground('parent-run', {
-      task: 'Inspect renderer build pipeline',
+    const execution = await manager.run('parent-run', {
+      task: 'Search Reddit for Claude Code discussions',
       role: 'research',
-      taskId: 'task-dedupe',
-      providerId: PRIMARY_PROVIDER_ID,
-    });
-    const second = manager.spawnBackground('parent-run', {
-      task: 'Inspect renderer build pipeline',
-      role: 'research',
-      taskId: 'task-dedupe',
       providerId: PRIMARY_PROVIDER_ID,
     });
 
-    expect(first.reused).toBe(false);
-    expect(second.reused).toBe(true);
-    expect(second.record.id).toBe(first.record.id);
-    expect(providerFactory).toHaveBeenCalledTimes(1);
-
-    deferred.resolve({
-      output: 'done',
-      usage: { inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    expect(execution.record.status).toBe('completed');
+    expect(execution.result).toMatchObject({
+      status: 'completed',
+      summary: 'blocking result',
     });
-
-    const result = await manager.wait(first.record.id);
-    expect(result.status).toBe('completed');
   });
 
   it('derives a narrow role-based tool scope for sub-agents when none is specified', async () => {
     agentToolExecutor.register({
-      name: 'runtime.list_loaded_tools',
-      description: 'List loaded tools',
-      inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-      execute: async () => ({ summary: 'listed', data: {} }),
+      name: 'browser.research_search',
+      description: 'Research the web for current information',
+      inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' } } },
+      execute: async () => ({ summary: 'researched web', data: {} }),
     });
     agentToolExecutor.register({
       name: 'browser.search_page_cache',
@@ -273,17 +304,26 @@ describe('SubAgentManager', () => {
     });
 
     expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0].tools.map((tool) => tool.name)).toHaveLength(4);
+    expect(seenRequests[0].tools.map((tool) => tool.name)).toHaveLength(3);
     expect(seenRequests[0].tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-      'runtime.list_loaded_tools',
       'browser.research_search',
       'browser.search_page_cache',
       'browser.read_cached_chunk',
     ]));
   });
 
-  it('preserves an explicit all-tools sub-agent scope', async () => {
+  it('starts an explicit all-tools sub-agent with the map-first surface (context.load + preloaded categories)', async () => {
     const seenRequests: AgentProviderRequest[] = [];
+    agentToolExecutor.register({
+      name: 'context.load',
+      description: 'Load tool categories',
+      inputSchema: {
+        type: 'object',
+        properties: { categories: { type: 'array', items: { type: 'string' } } },
+        required: ['categories'],
+      },
+      execute: async () => ({ summary: 'loaded', data: {} }),
+    });
     agentToolExecutor.register({
       name: 'terminal.exec',
       description: 'Run a command',
@@ -296,6 +336,16 @@ describe('SubAgentManager', () => {
         summary: 'ran',
         data: {},
       }),
+    });
+    agentToolExecutor.register({
+      name: 'filesystem.patch',
+      description: 'Patch a file',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { path: { type: 'string' }, patch: { type: 'string' } },
+      },
+      execute: async () => ({ summary: 'patched', data: {} }),
     });
 
     const providerFactory = vi.fn((): AgentProvider => ({
@@ -310,7 +360,7 @@ describe('SubAgentManager', () => {
     const manager = new SubAgentManager(providerFactory);
 
     await manager.run('parent-run-all', {
-      task: 'Patch the provider and verify the command failure',
+      task: 'Run the build and patch the file that is failing',
       role: 'code',
       taskId: 'task-scope-all',
       providerId: PRIMARY_PROVIDER_ID,
@@ -318,16 +368,13 @@ describe('SubAgentManager', () => {
     });
 
     expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0].tools.map((tool) => tool.name)).toContain('terminal.exec');
+    const toolNames = seenRequests[0].tools.map((tool) => tool.name);
+    expect(toolNames).toContain('context.load');
+    expect(toolNames).toContain('terminal.exec');
+    expect(toolNames).toContain('filesystem.patch');
   });
 
   it('keeps a broader scope for verification-heavy child tasks even during execution phase', async () => {
-    agentToolExecutor.register({
-      name: 'runtime.list_loaded_tools',
-      description: 'List loaded tools',
-      inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-      execute: async () => ({ summary: 'listed', data: {} }),
-    });
     agentToolExecutor.register({
       name: 'filesystem.search',
       description: 'Search files',
@@ -390,7 +437,6 @@ describe('SubAgentManager', () => {
 
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0].tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-      'runtime.list_loaded_tools',
       'filesystem.search',
       'filesystem.read',
       'filesystem.patch',

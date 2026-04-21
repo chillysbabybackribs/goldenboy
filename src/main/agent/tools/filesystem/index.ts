@@ -1,12 +1,14 @@
-import { AgentToolDefinition } from '../AgentTypes';
+import { AgentToolDefinition } from '../../AgentTypes';
 import * as fs from 'fs';
 import * as path from 'path';
-import { agentCache } from '../AgentCache';
-import { fileKnowledgeStore } from '../../fileKnowledge/FileKnowledgeStore';
-import { appStateStore } from '../../state/appStateStore';
-import { ActionType } from '../../state/actions';
-import { generateId } from '../../../shared/utils/ids';
-import { APP_WORKSPACE_ROOT } from '../../workspaceRoot';
+import { agentCache } from '../../AgentCache';
+import { fileKnowledgeStore } from '../../../fileKnowledge/FileKnowledgeStore';
+import { appStateStore } from '../../../state/appStateStore';
+import { ActionType } from '../../../state/actions';
+import { generateId } from '../../../../shared/utils/ids';
+import { APP_WORKSPACE_ROOT } from '../../../workspaceRoot';
+import { repoMapService } from '../../repoMap';
+import { workspaceManifestService } from '../../workspaceManifest';
 
 const DEFAULT_FILE_READ_MAX_CHARS = 6_000;
 const MAX_FILE_READ_MAX_CHARS = 20_000;
@@ -88,6 +90,41 @@ function trimContent(content: string, maxChars: number): { content: string; trun
   };
 }
 
+function globToRegex(pattern: string): RegExp {
+  let src = '^';
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === '*') {
+      if (pattern[i + 1] === '*') {
+        src += '.*';
+        i += 2;
+        if (pattern[i] === '/') i += 1;
+      } else {
+        src += '[^/]*';
+        i += 1;
+      }
+    } else if (ch === '?') {
+      src += '[^/]';
+      i += 1;
+    } else if (ch === '{') {
+      const end = pattern.indexOf('}', i);
+      if (end === -1) { src += '\\{'; i += 1; continue; }
+      const parts = pattern.slice(i + 1, end).split(',').map(part => part.replace(/[.+^$()|[\]\\]/g, '\\$&'));
+      src += `(?:${parts.join('|')})`;
+      i = end + 1;
+    } else if ('.+^$()|[]\\'.includes(ch)) {
+      src += `\\${ch}`;
+      i += 1;
+    } else {
+      src += ch;
+      i += 1;
+    }
+  }
+  src += '$';
+  return new RegExp(src);
+}
+
 function walkFiles(root: string, limit: number): string[] {
   const out: string[] = [];
   const stack = [root];
@@ -125,8 +162,38 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
+      name: 'filesystem.glob',
+      description: 'Match files by glob pattern relative to a root. Supports **, *, ?, and {a,b} alternates. Returns up to limit matches sorted by path.',
+      inputSchema: {
+        type: 'object',
+        required: ['pattern'],
+        properties: {
+          pattern: { type: 'string' },
+          path: { type: 'string' },
+          limit: { type: 'number' },
+        },
+      },
+      async execute(input) {
+        const obj = objectInput(input);
+        const pattern = requireString(obj, 'pattern');
+        const root = resolveLocalPath(String(obj.path || '.'));
+        const limit = Math.max(1, Math.min(optionalNumber(obj, 'limit', 200), 2000));
+        const regex = globToRegex(pattern);
+        const matches: string[] = [];
+        for (const file of walkFiles(root, limit * 20)) {
+          const rel = path.relative(root, file).split(path.sep).join('/');
+          if (regex.test(rel)) {
+            matches.push(file);
+            if (matches.length >= limit) break;
+          }
+        }
+        matches.sort();
+        return { summary: `Matched ${matches.length} files for ${pattern}`, data: { root, pattern, matches } };
+      },
+    },
+    {
       name: 'filesystem.search',
-      description: 'Fallback file path and text search under a local path. Prefer filesystem.search_file_cache for indexed source lookup when possible.',
+      description: 'Fallback path+text search under a local path. Prefer filesystem.search_file_cache for indexed source lookup.',
       inputSchema: { type: 'object', required: ['query'], properties: { query: { type: 'string' }, path: { type: 'string' }, limit: { type: 'number' } } },
       async execute(input) {
         const obj = objectInput(input);
@@ -157,7 +224,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'filesystem.index_workspace',
-      description: 'Index a local workspace into compact searchable file chunks. Run this before file-heavy reasoning or after code changes.',
+      description: 'Index a local workspace into searchable file chunks. Run before file-heavy reasoning or after code changes.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -179,44 +246,14 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'filesystem.answer_from_cache',
-      description: 'Answer a file/code question from cached file chunks with compact excerpts and source chunk ids. Prefer this before full file reads.',
-      inputSchema: {
-        type: 'object',
-        required: ['query'],
-        properties: {
-          query: { type: 'string' },
-          pathPrefix: { type: 'string' },
-          language: { type: 'string' },
-          limit: { type: 'number' },
-        },
-      },
-      async execute(input) {
-        const obj = objectInput(input);
-        const query = requireString(obj, 'query');
-        const answer = fileKnowledgeStore.answerFromCache(query, {
-          pathPrefix: optionalString(obj, 'pathPrefix'),
-          language: optionalString(obj, 'language'),
-          limit: optionalNumber(obj, 'limit', 5),
-        });
-        logFileCache(
-          `File cache answer ${answer.sources.length > 0 ? 'hit' : 'miss'} for "${query}" (${answer.sources.length} sources)`,
-          answer.sources.length > 0 ? 'info' : 'warn',
-        );
-        return {
-          summary: `Found ${answer.sources.length} cached file sources`,
-          data: answer,
-        };
-      },
-    },
-    {
       name: 'filesystem.search_file_cache',
-      description: 'Search indexed file chunks by query, optional path prefix, and language. Returns ranked snippets, summaries, and chunk ids for targeted reads.',
+      description: 'Search indexed file chunks by query, optional path prefix, and language. mode="answer" additionally returns compact excerpts grouped by source.',
       inputSchema: {
         type: 'object',
         required: ['query'],
         properties: {
           query: { type: 'string' },
+          mode: { type: 'string', enum: ['snippets', 'answer'] },
           pathPrefix: { type: 'string' },
           language: { type: 'string' },
           limit: { type: 'number' },
@@ -225,9 +262,27 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       async execute(input) {
         const obj = objectInput(input);
         const query = requireString(obj, 'query');
+        const pathPrefix = optionalString(obj, 'pathPrefix');
+        const language = optionalString(obj, 'language');
+        const mode = typeof obj.mode === 'string' ? obj.mode : 'snippets';
+        if (mode === 'answer') {
+          const answer = fileKnowledgeStore.answerFromCache(query, {
+            pathPrefix,
+            language,
+            limit: optionalNumber(obj, 'limit', 5),
+          });
+          logFileCache(
+            `File cache answer ${answer.sources.length > 0 ? 'hit' : 'miss'} for "${query}" (${answer.sources.length} sources)`,
+            answer.sources.length > 0 ? 'info' : 'warn',
+          );
+          return {
+            summary: `Found ${answer.sources.length} cached file sources`,
+            data: answer,
+          };
+        }
         const results = fileKnowledgeStore.search(query, {
-          pathPrefix: optionalString(obj, 'pathPrefix'),
-          language: optionalString(obj, 'language'),
+          pathPrefix,
+          language,
           limit: optionalNumber(obj, 'limit', 10),
         });
         logFileCache(
@@ -242,7 +297,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'filesystem.read_file_chunk',
-      description: 'Read one indexed file chunk by chunk id. Use after filesystem.search_file_cache instead of reading whole files.',
+      description: 'Read one indexed file chunk by id. Use after filesystem.search_file_cache to avoid whole-file reads.',
       inputSchema: {
         type: 'object',
         required: ['chunkId'],
@@ -264,27 +319,29 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'filesystem.list_cached_files',
-      description: 'List files currently indexed in the file knowledge cache.',
-      inputSchema: { type: 'object', properties: { limit: { type: 'number' } } },
+      name: 'filesystem.cache_inventory',
+      description: 'Report file knowledge cache state. scope="stats" (default) returns totals and hit/miss counters; scope="files" lists indexed files.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['stats', 'files'] },
+          limit: { type: 'number' },
+        },
+      },
       async execute(input) {
         const obj = objectInput(input);
-        const files = fileKnowledgeStore.listFiles({ limit: optionalNumber(obj, 'limit', 200) });
-        return { summary: `Listed ${files.length} cached files`, data: { files } };
-      },
-    },
-    {
-      name: 'filesystem.file_cache_stats',
-      description: 'Return file knowledge cache size, token estimate, hit/miss counters, and hottest files/directories.',
-      inputSchema: { type: 'object', properties: {} },
-      async execute() {
+        const scope = typeof obj.scope === 'string' ? obj.scope : 'stats';
+        if (scope === 'files') {
+          const files = fileKnowledgeStore.listFiles({ limit: optionalNumber(obj, 'limit', 200) });
+          return { summary: `Listed ${files.length} cached files`, data: { files } };
+        }
         const stats = fileKnowledgeStore.getStats();
         return { summary: `File cache has ${stats.fileCount} files and ${stats.chunkCount} chunks`, data: { stats } };
       },
     },
     {
       name: 'filesystem.read',
-      description: 'Read a UTF-8 file with freshness-aware cache reuse. Prefer indexed chunks when available, and use startLine/endLine/maxChars to keep reads tight.',
+      description: 'Read a UTF-8 file with freshness-aware cache reuse. Prefer indexed chunks; use startLine/endLine/maxChars to keep reads tight.',
       inputSchema: {
         type: 'object',
         required: ['path'],
@@ -348,6 +405,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
         fileKnowledgeStore.notePatch(target);
         invalidateFilesystemCaches();
+        repoMapService.noteFileChanged(target);
+        workspaceManifestService.noteFileChanged(target);
         return { summary: `Wrote ${content.length} characters`, data: { path: target } };
       },
     },
@@ -367,6 +426,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
         fileKnowledgeStore.notePatch(target);
         invalidateFilesystemCaches();
+        repoMapService.noteFileChanged(target);
+        workspaceManifestService.noteFileChanged(target);
         return { summary: `Patched ${target}`, data: { path: target, changed: before !== after } };
       },
     },
@@ -379,18 +440,9 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         fs.rmSync(target, { recursive: true, force: true });
         const removedRecords = fileKnowledgeStore.removePathTree(target);
         invalidateFilesystemCaches();
+        repoMapService.noteFileDeleted(target);
+        workspaceManifestService.noteFileDeleted(target);
         return { summary: `Deleted ${target}`, data: { path: target, removedRecords } };
-      },
-    },
-    {
-      name: 'filesystem.mkdir',
-      description: 'Create a local directory.',
-      inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } },
-      async execute(input) {
-        const target = resolveLocalPath(requireString(objectInput(input), 'path'));
-        fs.mkdirSync(target, { recursive: true });
-        invalidateFilesystemCaches();
-        return { summary: `Created directory ${target}`, data: { path: target } };
       },
     },
     {
@@ -410,6 +462,8 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
           fileKnowledgeStore.notePatch(to);
         }
         invalidateFilesystemCaches();
+        repoMapService.noteFileMoved(from, to);
+        workspaceManifestService.noteFileMoved(from, to);
         return {
           summary: `Moved ${from} to ${to}`,
           data: { from, to, removedRecords, refreshed: stat.isFile() },

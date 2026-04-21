@@ -76,7 +76,6 @@ function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProvi
     task: 'What is 2 + 2?',
     contextPrompt: '',
     tools: resolvedTools,
-    loadableTools: overrides.loadableTools ?? resolvedTools,
     maxToolTurns: 2,
     ...overrides,
   };
@@ -190,14 +189,14 @@ describe('CodexProvider', () => {
     expect(firstPrompt).not.toContain('tool-runtime.html');
     expect(firstPrompt).not.toContain('window.runTool');
     expect(firstPrompt).not.toContain('## Tool Catalog');
-    expect(executeMock).toHaveBeenCalledWith('filesystem.list', { path: '.' }, {
+    expect(executeMock).toHaveBeenCalledWith('filesystem.list', { path: '.' }, expect.objectContaining({
       runId: 'run-1',
       agentId: PRIMARY_PROVIDER_ID,
       mode: 'unrestricted-dev',
       taskId: 'task-1',
       toolNames: ['filesystem.list'],
       onProgress: undefined,
-    });
+    }));
     expect(recordToolMessageMock).toHaveBeenCalledTimes(1);
     expect(tokens).toEqual(['Found the files.']);
     expect(itemEvents).toEqual([
@@ -222,6 +221,7 @@ describe('CodexProvider', () => {
       usage: {
         inputTokens: 24,
         outputTokens: 6,
+        cachedInputTokens: 0,
         durationMs: expect.any(Number),
       },
     });
@@ -251,10 +251,36 @@ describe('CodexProvider', () => {
       usage: {
         inputTokens: 12,
         outputTokens: 3,
+        cachedInputTokens: 0,
         durationMs: expect.any(Number),
       },
     });
     expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it('includes reasoning_output_tokens in the reported output token total', async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const provider = new CodexProvider();
+    const resultPromise = provider.invoke(buildRequest());
+    const structured = JSON.stringify({ kind: 'final', tool_calls: [], message: '4' });
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        child.stdout.write(`{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":${JSON.stringify(structured)}}}\n`);
+        // GPT-5-class models report reasoning tokens separately from
+        // output_tokens; they are billed as output so must be added in.
+        child.stdout.write(`{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":5,"output_tokens":4,"reasoning_output_tokens":30}}\n`);
+        child.stdout.end();
+        child.emit('close', 0);
+        resolve();
+      }, 0);
+    });
+
+    const result = await resultPromise;
+    expect(result.usage?.inputTokens).toBe(20);
+    expect(result.usage?.outputTokens).toBe(34);
+    expect(result.usage?.cachedInputTokens).toBe(5);
   });
 
   it('disables native web_search in exec mode', async () => {
@@ -279,119 +305,6 @@ describe('CodexProvider', () => {
       ]),
       expect.any(Object),
     );
-  });
-
-  it('expands the active tool scope after loading exact tools', async () => {
-    const expandTurn = createMockChildProcess();
-    const workTurn = createMockChildProcess();
-    const finalTurn = createMockChildProcess();
-    spawnMock
-      .mockReturnValueOnce(expandTurn)
-      .mockReturnValueOnce(workTurn)
-      .mockReturnValueOnce(finalTurn);
-    let firstPrompt = '';
-    let secondPrompt = '';
-    expandTurn.stdin?.on('data', (chunk) => {
-      firstPrompt += chunk.toString();
-    });
-    workTurn.stdin?.on('data', (chunk) => {
-      secondPrompt += chunk.toString();
-    });
-
-    executeMock
-      .mockResolvedValueOnce({
-        summary: 'Loaded 1 tool',
-        data: {
-          tools: ['filesystem.list'],
-        },
-      })
-      .mockResolvedValueOnce({
-        summary: 'Listed 2 files',
-        data: { entries: ['a.ts', 'b.ts'] },
-      });
-
-    const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
-    const resultPromise = provider.invoke(buildRequest({
-      task: 'Load the needed tools, inspect the workspace, and answer.',
-      tools: [
-        {
-          name: 'runtime.load_tools',
-          description: 'Load exact tools.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { tools: { type: 'array', items: { type: 'string' } } },
-            required: ['tools'],
-          },
-        },
-      ],
-      loadableTools: [
-        {
-          name: 'runtime.load_tools',
-          description: 'Load exact tools.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { tools: { type: 'array', items: { type: 'string' } } },
-            required: ['tools'],
-          },
-        },
-        {
-          name: 'filesystem.list',
-          description: 'List a directory',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { path: { type: 'string' } },
-            required: ['path'],
-          },
-        },
-      ],
-    }));
-
-    await completeTurn(
-      expandTurn,
-      JSON.stringify({
-        kind: 'tool_calls',
-        tool_calls: [
-          {
-            name: 'runtime.load_tools',
-            arguments_json: '{"tools":["filesystem.list"]}',
-          },
-        ],
-        message: 'Need filesystem listing first.',
-      }),
-    );
-    await completeTurn(
-      workTurn,
-      JSON.stringify({
-        kind: 'tool_calls',
-        tool_calls: [
-          {
-            name: 'filesystem.list',
-            arguments_json: '{"path":"."}',
-          },
-        ],
-        message: 'Now listing the workspace.',
-      }),
-    );
-    await completeTurn(
-      finalTurn,
-      JSON.stringify({
-        kind: 'final',
-        tool_calls: [],
-        message: 'Expansion worked.',
-      }),
-    );
-
-    const result = await resultPromise;
-
-    expect(executeMock).toHaveBeenNthCalledWith(1, 'runtime.load_tools', { tools: ['filesystem.list'] }, expect.any(Object));
-    expect(executeMock).toHaveBeenNthCalledWith(2, 'filesystem.list', { path: '.' }, expect.any(Object));
-    expect(firstPrompt).toContain('runtime.load_tools');
-    expect(firstPrompt).not.toContain('filesystem.list');
-    expect(secondPrompt).toContain('filesystem.list');
-    expect(result.output).toBe('Expansion worked.');
   });
 
   it('aborts an active Codex process', () => {

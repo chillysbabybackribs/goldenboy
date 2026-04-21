@@ -6,13 +6,12 @@ import {
 import { AgentProvider, AgentProviderRequest, AgentProviderResult } from './AgentTypes';
 import {
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
-  describeLoadedToolNames,
   executeProviderToolCallWithEvents,
-  mergeLoadedTools,
+  normalizeProviderFinalOutput,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
-  resolveLoadedToolExpansion,
 } from './providerToolRuntime';
+import { createToolScopeState, hasActiveTool, listActiveTools } from './toolScopeState';
 import {
   GeminiClient,
   type GeminiContent,
@@ -233,18 +232,28 @@ function assertUsableCandidate(
 }
 
 export class GeminiProvider implements AgentProvider {
+  readonly providerId = GEMINI_PROVIDER_ID;
   readonly modelId: string;
   readonly supportsAppToolExecutor = true;
 
   private readonly client: GeminiClient;
   private aborted = false;
+  private partialUsage: AgentProviderResult['usage'] | null = null;
 
-  constructor(apiKey = loadGeminiEnvValue('GEMINI_API_KEY')) {
+  getPartialUsage(): AgentProviderResult['usage'] | null {
+    return this.partialUsage;
+  }
+
+  constructor(options: string | { apiKey?: string | null; modelId?: string | null } = loadGeminiEnvValue('GEMINI_API_KEY') || '') {
+    const apiKey = typeof options === 'string'
+      ? options
+      : (options.apiKey ?? loadGeminiEnvValue('GEMINI_API_KEY') ?? '');
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY is not configured.');
     }
     this.client = new GeminiClient(apiKey);
-    this.modelId = routeGeminiModel({
+    const requestedModelId = typeof options === 'string' ? null : options.modelId;
+    this.modelId = requestedModelId?.trim() || routeGeminiModel({
       task: '',
       contextPrompt: '',
     }).modelId;
@@ -255,11 +264,22 @@ export class GeminiProvider implements AgentProvider {
   }
 
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
+    const toolScope = request.toolScope ?? createToolScopeState(request.tools);
+    const runtimeRequest = request.toolScope ? request : { ...request, toolScope };
     this.aborted = false;
+    this.partialUsage = null;
     const startedAt = Date.now();
     let inputTokens = 0;
     let cachedInputTokens = 0;
     let outputTokens = 0;
+    const snapshotPartial = (): void => {
+      this.partialUsage = {
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        durationMs: Date.now() - startedAt,
+      };
+    };
     const completedItems = new Map<string, CodexItem>();
     let liveContents: GeminiContent[] = [
       {
@@ -269,14 +289,13 @@ export class GeminiProvider implements AgentProvider {
     ];
     let rollingSummary: string | null = null;
 
-    let currentTools = [...request.tools];
-    const loadableTools = request.loadableTools;
+    let currentTools = listActiveTools(toolScope);
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
     const modelRoute = routeGeminiModel({
       task: request.task,
       contextPrompt: request.contextPrompt,
       hasAttachments: Boolean(request.attachments?.length),
-      canUseTools: request.tools.length > 0,
+      canUseTools: currentTools.length > 0,
     });
     const initialGeminiTools = buildGeminiTools(currentTools);
     const cacheKey = hashGeminiPromptPrefix({
@@ -301,6 +320,7 @@ export class GeminiProvider implements AgentProvider {
 
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
+      currentTools = listActiveTools(toolScope);
       const geminiTools = buildGeminiTools(currentTools);
 
       if (!cachedContentName && turn === 0 && geminiTools && cacheablePrefixSize >= minCacheChars) {
@@ -339,7 +359,9 @@ export class GeminiProvider implements AgentProvider {
 
       inputTokens += response.usageMetadata?.promptTokenCount || 0;
       cachedInputTokens += response.usageMetadata?.cachedContentTokenCount || 0;
-      outputTokens += response.usageMetadata?.candidatesTokenCount || 0;
+      outputTokens += (response.usageMetadata?.candidatesTokenCount || 0)
+        + (response.usageMetadata?.thoughtsTokenCount || 0);
+      snapshotPartial();
 
       const candidate = response.candidates?.[0];
       const modelContent: GeminiContent = {
@@ -367,14 +389,12 @@ export class GeminiProvider implements AgentProvider {
         request.onStatus?.(turnText.trim());
       }
 
-      const allowedToolNames = new Set(currentTools.map((tool) => tool.name));
       const toolResponses: GeminiPart[] = [];
 
       for (let index = 0; index < toolCalls.length; index++) {
         const toolCall = toolCalls[index];
         const v2ToolName = fromGeminiToolName(toolCall.name);
-
-        if (!allowedToolNames.has(v2ToolName as typeof currentTools[number]['name'])) {
+        if (!hasActiveTool(toolScope, v2ToolName as typeof currentTools[number]['name'])) {
           const message = `Tool is not available in this runtime scope: ${v2ToolName}`;
           toolResponses.push({
             functionResponse: {
@@ -388,28 +408,14 @@ export class GeminiProvider implements AgentProvider {
 
         const execution = await executeProviderToolCallWithEvents({
           providerId: GEMINI_PROVIDER_ID,
-          request,
+          request: runtimeRequest,
           toolName: v2ToolName as typeof currentTools[number]['name'],
           toolInput: toolCall.args,
-          currentToolNames: currentTools.map((tool) => tool.name),
           itemId: `gemini-tool-${turn + 1}-${index + 1}-${Date.now()}`,
         });
         completedItems.set(execution.completedItem.id, execution.completedItem);
 
         if (execution.ok) {
-          const expansion = resolveLoadedToolExpansion(request, v2ToolName as typeof currentTools[number]['name'], execution.result);
-          if (expansion) {
-            currentTools = mergeLoadedTools(currentTools, loadableTools, expansion);
-            cachedContentName = null;
-            toolResponses.push({
-              functionResponse: {
-                name: toolCall.name,
-                response: { result: `Loaded tools: ${describeLoadedToolNames(execution.result)}` },
-              },
-            });
-            continue;
-          }
-
           toolResponses.push({
             functionResponse: {
               name: toolCall.name,
@@ -463,10 +469,19 @@ export class GeminiProvider implements AgentProvider {
       });
       inputTokens += synthesis.usageMetadata?.promptTokenCount || 0;
       cachedInputTokens += synthesis.usageMetadata?.cachedContentTokenCount || 0;
-      outputTokens += synthesis.usageMetadata?.candidatesTokenCount || 0;
+      outputTokens += (synthesis.usageMetadata?.candidatesTokenCount || 0)
+        + (synthesis.usageMetadata?.thoughtsTokenCount || 0);
+      snapshotPartial();
       assertUsableCandidate(synthesis.candidates?.[0], extractGeminiText(synthesis), []);
       finalOutput = extractGeminiText(synthesis) || finalOutput;
     }
+
+    // Gemini's REST API has no delta streaming, so emit the final text as a
+    // single `onToken` call. The renderer's typewriter reveals it chunk by
+    // chunk, giving the user the same progressive-reveal experience as
+    // Haiku/Codex and keeping the "streaming → final" transition seamless
+    // (no sudden full-text pop on completion).
+    request.onToken?.(normalizeProviderFinalOutput(finalOutput));
 
     const finalItem = publishProviderFinalOutput({
       request,

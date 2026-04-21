@@ -1,5 +1,5 @@
-import type { AgentToolDefinition } from '../AgentTypes';
-import { documentAttachmentStore } from '../../attachments/DocumentAttachmentStore';
+import type { AgentToolDefinition } from '../../AgentTypes';
+import { documentAttachmentStore } from '../../../attachments/DocumentAttachmentStore';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};

@@ -11,17 +11,15 @@ import type {
   AgentProvider,
   AgentProviderRequest,
   AgentProviderResult,
-  AgentToolName,
 } from './AgentTypes';
 import {
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
   describeProviderToolCall,
-  mergeLoadedTools,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
-  resolveLoadedToolExpansion,
 } from './providerToolRuntime';
 import type { AppServerProcess } from './AppServerProcess';
+import { createToolScopeState, listActiveTools } from './toolScopeState';
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -172,6 +170,7 @@ export class AppServerProvider implements AgentProvider {
   private nextId = 1;
   private readonly contextPath: string;
   private wsPort: number | null = null;
+  private partialUsage: AgentProviderResult['usage'] | null = null;
 
   constructor(private readonly options: AppServerProviderOptions) {
     this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;
@@ -182,6 +181,10 @@ export class AppServerProvider implements AgentProvider {
   abort(): void {
     this.aborted = true;
     this.abortCurrentTurn?.();
+  }
+
+  getPartialUsage(): AgentProviderResult['usage'] | null {
+    return this.partialUsage;
   }
 
   steer(input: string, attachments?: AgentProviderRequest['attachments']): void {
@@ -262,13 +265,24 @@ export class AppServerProvider implements AgentProvider {
   }
 
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
+    const toolScope = request.toolScope ?? createToolScopeState(request.tools);
+    const runtimeRequest = request.toolScope ? request : { ...request, toolScope };
     this.aborted = false;
+    this.partialUsage = null;
     const startedAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
+    let cachedInputTokens = 0;
+    const snapshotPartial = (): void => {
+      this.partialUsage = {
+        inputTokens,
+        outputTokens,
+        cachedInputTokens,
+        durationMs: Date.now() - startedAt,
+      };
+    };
     const codexItems: CodexItem[] = [];
-    let currentTools = [...request.tools];
-    const loadableTools = request.loadableTools;
+    let currentTools = listActiveTools(toolScope);
     const maxToolTurns = normalizeProviderMaxToolTurns(
       request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS,
     );
@@ -276,7 +290,7 @@ export class AppServerProvider implements AgentProvider {
     const ws = this.ws;
     if (!ws) throw new Error('AppServerProvider: not connected');
 
-    this.writeContextFile(request);
+    this.writeContextFile(runtimeRequest);
 
     // Acquire or resume a thread
     const taskId = request.taskId ?? request.runId;
@@ -309,9 +323,8 @@ export class AppServerProvider implements AgentProvider {
           turnResult = await this.runOneTurn(activeWs, {
             threadId,
             task: turnInput,
-            request,
+            request: runtimeRequest,
             currentTools,
-            loadableTools,
           });
           break;
         } catch (error) {
@@ -333,25 +346,23 @@ export class AppServerProvider implements AgentProvider {
 
       inputTokens += turnResult.inputTokens;
       outputTokens += turnResult.outputTokens;
+      cachedInputTokens += turnResult.cachedInputTokens;
+      snapshotPartial();
       accumulatedMessage = mergeRecoveredMessage(recoveredTextPrefix, turnResult.message);
 
       for (const item of turnResult.codexItems) {
         codexItems.push(item);
       }
 
-      // Apply explicit tool loading (from runtime.load_tools)
-      if (turnResult.toolsLoaded && turnResult.expandedTools && turnResult.expansion) {
-        currentTools = mergeLoadedTools(currentTools, loadableTools, turnResult.expansion);
-        // Update context file so MCP shim exposes the loaded tool set on the next turn
-        this.writeContextFile(request, currentTools);
-      }
-
       if (turnResult.kind === 'final') {
-        // Emit the final output
+        // Emit the final output. Tokens already streamed live through the
+        // delta handler, so we skip re-emitting them to avoid doubling the
+        // response text in the chat UI's typewriter buffer.
         const finalItem = publishProviderFinalOutput({
           request,
           itemId: `${this.itemPrefix('final')}-${Date.now()}`,
           text: accumulatedMessage,
+          emitToken: false,
         });
         codexItems.push(finalItem);
 
@@ -361,19 +372,32 @@ export class AppServerProvider implements AgentProvider {
           usage: {
             inputTokens,
             outputTokens,
+            cachedInputTokens,
             durationMs: Date.now() - startedAt,
           },
         };
       }
 
-      // kind === 'tool_calls' -> next turn
+      // kind === 'tool_calls' -> next turn.
+      // Signal to the live-run UI that the descriptive text for this turn is
+      // finished so it can clear the current "status line" before the next
+      // turn's deltas start streaming. Without this, every turn's text piles
+      // up into a single concatenated paragraph and the user loses the sense
+      // that each turn is a distinct thinking step.
+      request.onStatus?.('turn-boundary');
     }
 
-    // Exhausted tool turns; synthesize final
+    // Exhausted tool turns; synthesize final. Any streamed deltas from the
+    // last turn already flowed through onToken, so only emit tokens when we
+    // fall back to the canned "Max tool turns" message (which was never part
+    // of the delta stream and needs to reach the UI through some channel).
+    const fallbackMessage = 'Max tool turns reached without a final answer.';
+    const fallbackNeeded = !accumulatedMessage.trim();
     const finalItem = publishProviderFinalOutput({
       request,
       itemId: `${this.itemPrefix('final')}-${Date.now()}`,
-      text: accumulatedMessage || 'Max tool turns reached without a final answer.',
+      text: fallbackNeeded ? fallbackMessage : accumulatedMessage,
+      emitToken: fallbackNeeded,
     });
     codexItems.push(finalItem);
 
@@ -383,6 +407,7 @@ export class AppServerProvider implements AgentProvider {
       usage: {
         inputTokens,
         outputTokens,
+        cachedInputTokens,
         durationMs: Date.now() - startedAt,
       },
     };
@@ -606,28 +631,23 @@ export class AppServerProvider implements AgentProvider {
       task: string;
       request: AgentProviderRequest;
       currentTools: AgentProviderRequest['tools'];
-      loadableTools: AgentProviderRequest['loadableTools'];
     },
   ): Promise<{
     kind: 'final' | 'tool_calls';
     message: string;
     inputTokens: number;
     outputTokens: number;
-    toolsLoaded: boolean;
-    expansion?: { tools: AgentToolName[] };
-    expandedTools?: AgentProviderRequest['tools'];
+    cachedInputTokens: number;
     codexItems: CodexItem[];
   }> {
-    const { threadId, task, request, currentTools, loadableTools } = params;
+    const { threadId, task, request, currentTools } = params;
 
     return new Promise((resolve, reject) => {
       let message = '';
       let lastInputTokens = 0;
       let lastOutputTokens = 0;
+      let lastCachedInputTokens = 0;
       let toolsCalled = false;
-      let toolsLoaded = false;
-      let expansion: { tools: AgentToolName[] } | undefined;
-      let expandedTools: AgentProviderRequest['tools'] | undefined;
       const turnCodexItems: CodexItem[] = [];
 
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -674,7 +694,16 @@ export class AppServerProvider implements AgentProvider {
           switch (method) {
             case 'item/agentMessage/delta': {
               const delta = typeof params.delta === 'string' ? params.delta : '';
-              message += delta;
+              if (delta) {
+                message += delta;
+                // Live-stream assistant text to the chat UI the same way
+                // Haiku/Gemini do. Without this, Codex shows "Thinking..."
+                // until the whole turn finishes and then dumps the final
+                // answer in one go, which reads as stalled compared to the
+                // other providers. Streaming deltas makes the typewriter in
+                // live-run.ts animate as the model generates.
+                request.onToken?.(delta);
+              }
               break;
             }
 
@@ -715,6 +744,18 @@ export class AppServerProvider implements AgentProvider {
               const item = (params.item && typeof params.item === 'object')
                 ? params.item as WsMsg
                 : null;
+              if (item?.type === 'agentMessage') {
+                // Each agentMessage item is a complete "thought" the model
+                // emits, and a single turn can contain several back-to-back.
+                // Without a separator the deltas stream end-to-end and the
+                // UI renders them as one run-on paragraph. Terminating each
+                // thought with a markdown paragraph break gives the chat a
+                // distinct line per thought; trailing whitespace on the
+                // final message is trimmed before publish (see turn/completed).
+                message += '\n\n';
+                request.onToken?.('\n\n');
+                break;
+              }
               if (item?.type === 'mcpToolCall') {
                 const rawToolName = typeof item.tool === 'string' ? item.tool : '';
                 const toolName = fromMcpName(rawToolName);
@@ -747,25 +788,6 @@ export class AppServerProvider implements AgentProvider {
                 request.onItem?.({ item: completedItem, eventType: 'item.completed' });
                 turnCodexItems.push(completedItem);
 
-                // Check for tool loading from runtime.load_tools
-                if (toolName === 'runtime.load_tools' && !error && result) {
-                  const toolResult = {
-                    summary: '',
-                    data: (typeof result === 'object' && result !== null)
-                      ? result as Record<string, unknown>
-                      : {},
-                  };
-                  const exp = resolveLoadedToolExpansion(
-                    { loadableTools },
-                    toolName as AgentToolName,
-                    toolResult,
-                  );
-                  if (exp) {
-                    toolsLoaded = true;
-                    expansion = exp;
-                    expandedTools = mergeLoadedTools(currentTools, loadableTools, exp);
-                  }
-                }
               }
               break;
             }
@@ -776,11 +798,19 @@ export class AppServerProvider implements AgentProvider {
                 ? params.tokenUsage as Record<string, unknown>
                 : null;
               const last = (tokenUsage?.last && typeof tokenUsage.last === 'object')
-                ? tokenUsage.last as { inputTokens?: number; outputTokens?: number }
+                ? tokenUsage.last as {
+                    inputTokens?: number;
+                    outputTokens?: number;
+                    cachedInputTokens?: number;
+                    reasoningOutputTokens?: number;
+                  }
                 : null;
               if (last) {
                 lastInputTokens = last.inputTokens ?? 0;
-                lastOutputTokens = last.outputTokens ?? 0;
+                // Codex app-server reports reasoning tokens separately from
+                // output; they are billed as output so include them here.
+                lastOutputTokens = (last.outputTokens ?? 0) + (last.reasoningOutputTokens ?? 0);
+                lastCachedInputTokens = last.cachedInputTokens ?? 0;
               }
               break;
             }
@@ -790,12 +820,13 @@ export class AppServerProvider implements AgentProvider {
               settled = true;
               resolve({
                 kind: toolsCalled ? 'tool_calls' : 'final',
-                message,
+                // Strip the trailing paragraph break we appended after the
+                // last agentMessage item so the published message does not
+                // carry invisible whitespace into the chat log or copy text.
+                message: message.replace(/\s+$/, ''),
                 inputTokens: lastInputTokens,
                 outputTokens: lastOutputTokens,
-                toolsLoaded,
-                expansion,
-                expandedTools,
+                cachedInputTokens: lastCachedInputTokens,
                 codexItems: turnCodexItems,
               });
               break;

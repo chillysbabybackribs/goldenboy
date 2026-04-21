@@ -22,7 +22,7 @@ export type WindowState = {
   displayId: number;
 };
 
-export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type TaskRecord = {
   id: string;
@@ -64,12 +64,18 @@ export type ExecutionSplitState = {
 export type TokenUsageCumulative = {
   inputTokens: number;
   outputTokens: number;
+  /** Provider-reported cache-read tokens (billed at discounted rate). Optional for backwards compatibility. */
+  cachedInputTokens?: number;
+  /** Anthropic-only cache-creation tokens. Optional. */
+  cacheCreationInputTokens?: number;
 };
 
 export type TaskTokenUsageProviderBreakdown = {
   inputTokens: number;
   outputTokens: number;
   apiCalls: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
 };
 
 export type TaskTokenUsage = {
@@ -79,6 +85,8 @@ export type TaskTokenUsage = {
   updatedAt: number;
   lastProviderId: ProviderId | null;
   providerBreakdown: Partial<Record<ProviderId, TaskTokenUsageProviderBreakdown>>;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
 };
 
 export type AppState = {
