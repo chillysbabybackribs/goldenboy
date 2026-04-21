@@ -714,7 +714,12 @@ export class BrowserService {
   private destroyTabEntry(entry: TabEntry): void {
     this.layoutService.detachTab(entry.id, entry.view);
     this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
-    pageKnowledgeStore.removePagesForTab(entry.id);
+    // Closing a tab used to hard-delete every page it cached, which made the
+    // common "I just closed that tab, look it up again" case impossible.
+    // Keep the chunks searchable under their original tabId and just stamp
+    // them as closed — the LRU will evict them ahead of live-tab pages once
+    // the cap is hit, and pinned pages survive indefinitely.
+    pageKnowledgeStore.markTabClosed(entry.id);
     this.lastBackgroundExtractionByTab.delete(entry.id);
     this.dialogManager.detachTab(entry.id);
     try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}

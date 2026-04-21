@@ -184,6 +184,44 @@ export class PageKnowledgeStore {
     return { pageCount: pageIds.length, chunkCount: removedChunks };
   }
 
+  /**
+   * Non-destructive variant of {@link removePagesForTab} used when a tab is
+   * closed. Pages stay indexed under their original tabId so "I just closed
+   * that tab, look it up again" still answers. The pages are merely stamped
+   * with `tabClosedAt` so the LRU prefers evicting them ahead of live-tab
+   * pages once the global cap is hit. Pinned pages (see {@link setPinned})
+   * retain their pin through the close.
+   */
+  markTabClosed(tabId: string, now: number = Date.now()): { pageCount: number } {
+    const pageIds = this.pagesByTabId.get(tabId) ?? [];
+    let touched = 0;
+    for (const pageId of pageIds) {
+      const page = this.pages.get(pageId);
+      if (!page) continue;
+      if (page.tabClosedAt) continue;
+      this.pages.set(pageId, { ...page, tabClosedAt: now });
+      touched += 1;
+    }
+    if (touched > 0) this.scheduleSave();
+    return { pageCount: touched };
+  }
+
+  /**
+   * Toggle the pinned flag on a cached page. Pinned pages are exempt from
+   * LRU eviction — used by `browser.pin_page` so the model can protect the
+   * two or three pages a task actually depends on. Returns the updated
+   * record or null when `pageId` is unknown.
+   */
+  setPinned(pageId: string, pinned: boolean): CachedPageRecord | null {
+    const page = this.pages.get(pageId);
+    if (!page) return null;
+    if ((page.pinned ?? false) === pinned) return { ...page };
+    const updated: CachedPageRecord = { ...page, pinned, updatedAt: Date.now() };
+    this.pages.set(pageId, updated);
+    this.scheduleSave();
+    return { ...updated };
+  }
+
   listPages(): CachedPageRecord[] {
     return Array.from(this.pages.values()).map(page => ({ ...page }));
   }
@@ -364,14 +402,31 @@ export class PageKnowledgeStore {
   private enforcePerTabLimit(tabId: string): void {
     const pageIds = this.pagesByTabId.get(tabId);
     if (!pageIds || pageIds.length <= MAX_PAGES_PER_TAB) return;
-    const evicted = pageIds.slice(MAX_PAGES_PER_TAB);
-    for (const pageId of evicted) {
+    // Keep the MRU head (live history) and every pinned page above the cap.
+    // Pinned pages survive the per-tab cap so the model's protection carries
+    // over regardless of how many subsequent pages it opens in the same tab.
+    const retained: string[] = [];
+    const overflow: string[] = [];
+    for (let i = 0; i < pageIds.length; i++) {
+      const pageId = pageIds[i];
+      if (i < MAX_PAGES_PER_TAB) {
+        retained.push(pageId);
+        continue;
+      }
+      const page = this.pages.get(pageId);
+      if (page?.pinned) {
+        retained.push(pageId);
+        continue;
+      }
+      overflow.push(pageId);
+    }
+    for (const pageId of overflow) {
       const page = this.pages.get(pageId);
       if (!page) continue;
       for (const chunkId of page.chunkIds) this.chunks.delete(chunkId);
       this.pages.delete(pageId);
     }
-    this.pagesByTabId.set(tabId, pageIds.slice(0, MAX_PAGES_PER_TAB));
+    this.pagesByTabId.set(tabId, retained);
   }
 
   private load(): void {
@@ -402,12 +457,25 @@ export class PageKnowledgeStore {
   }
 
   private enforceCacheLimits(): void {
-    let pages = Array.from(this.pages.values());
+    const pages = Array.from(this.pages.values());
     if (pages.length <= MAX_CACHED_PAGES && this.chunks.size <= MAX_CACHED_CHUNKS) return;
 
-    pages = pages.sort((a, b) => a.updatedAt - b.updatedAt);
-    while (pages.length > MAX_CACHED_PAGES || this.chunks.size > MAX_CACHED_CHUNKS) {
-      const oldest = pages.shift();
+    // Eviction order: closed-tab pages oldest-first, then live-tab pages
+    // oldest-first. Pinned pages are always skipped; they survive eviction
+    // until the caller unpins them. If every remaining page is pinned we
+    // accept running slightly over the nominal cap rather than silently
+    // dropping work the model asked us to protect.
+    const evictable = pages
+      .filter(page => !page.pinned)
+      .sort((a, b) => {
+        const aClosed = a.tabClosedAt ? 0 : 1;
+        const bClosed = b.tabClosedAt ? 0 : 1;
+        if (aClosed !== bClosed) return aClosed - bClosed;
+        return a.updatedAt - b.updatedAt;
+      });
+
+    while (evictable.length > 0 && (this.pages.size > MAX_CACHED_PAGES || this.chunks.size > MAX_CACHED_CHUNKS)) {
+      const oldest = evictable.shift();
       if (!oldest) break;
       for (const chunkId of oldest.chunkIds) {
         this.chunks.delete(chunkId);

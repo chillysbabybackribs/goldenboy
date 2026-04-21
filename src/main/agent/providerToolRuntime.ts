@@ -103,6 +103,11 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
       const trimmed = title.length > 60 ? `${title.slice(0, 59)}…` : title;
       return `Browser: pin finding "${trimmed}"`;
     }
+    case 'browser.pin_page': {
+      const pageId = typeof args.pageId === 'string' ? args.pageId : '';
+      const pinned = args.pinned === false ? 'Unpin' : 'Pin';
+      return `Browser cache: ${pinned.toLowerCase()} ${pageId}`.trim();
+    }
     case 'filesystem.list': return `Files: list ${args.path || 'directory'}`;
     case 'filesystem.glob': return `Files: glob ${args.pattern || '*'}`;
     case 'filesystem.search': return `Files: search "${args.query || args.pattern || ''}"`;

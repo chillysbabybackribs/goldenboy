@@ -38,6 +38,7 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `browser.hover`
 - `browser.inspect_page`
 - `browser.navigate`
+- `browser.pin_page`
 - `browser.read_cached_chunk`
 - `browser.record_finding`
 - `browser.reload`

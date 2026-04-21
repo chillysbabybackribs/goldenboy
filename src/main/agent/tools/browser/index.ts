@@ -1147,16 +1147,27 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const scope = typeof obj.scope === 'string' ? obj.scope : 'stats';
         if (scope === 'pages') {
-          const pages = pageKnowledgeStore.listPages().map(page => ({
-            id: page.id,
-            tabId: page.tabId,
-            url: page.url,
-            title: page.title,
-            tier: page.tier,
-            chunkCount: page.chunkIds.length,
-            headings: page.headings.slice(0, 20),
-            updatedAt: page.updatedAt,
-          }));
+          const pages = pageKnowledgeStore.listPages()
+            // Surface pinned pages first, then freshest; the model should
+            // see what it protected before skimming into LRU-tail pages.
+            .sort((a, b) => {
+              const aPinned = a.pinned ? 1 : 0;
+              const bPinned = b.pinned ? 1 : 0;
+              if (aPinned !== bPinned) return bPinned - aPinned;
+              return b.updatedAt - a.updatedAt;
+            })
+            .map(page => ({
+              id: page.id,
+              tabId: page.tabId,
+              url: page.url,
+              title: page.title,
+              tier: page.tier,
+              chunkCount: page.chunkIds.length,
+              headings: page.headings.slice(0, 20),
+              updatedAt: page.updatedAt,
+              pinned: page.pinned === true,
+              tabClosedAt: page.tabClosedAt ?? null,
+            }));
           return { summary: `Listed ${pages.length} cached pages`, data: { pages } };
         }
         if (scope === 'sections') {
@@ -1221,6 +1232,39 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             evidenceCount: finding.evidence.length,
             activeTabId: browserService.getState().activeTabId,
             tabs: compactTabInventory(),
+          },
+        };
+      },
+    },
+    {
+      name: 'browser.pin_page',
+      description: 'Protect a cached page from LRU eviction. Call with a pageId from `browser.cache_inventory` (scope="pages") or from a recent `browser.search_page_cache` result. Use this on the 2–3 pages a task depends on so they survive even after the tab is closed. Pass `pinned: false` to unpin.',
+      inputSchema: {
+        type: 'object',
+        required: ['pageId'],
+        properties: {
+          pageId: { type: 'string', description: 'Cached page id (e.g. `page_...`) from `browser.cache_inventory` or a page_cache search result.' },
+          pinned: { type: 'boolean', description: 'Default true. Pass `false` to unpin a previously pinned page.' },
+        },
+      },
+      async execute(input) {
+        const obj = objectInput(input);
+        const pageId = requireString(obj, 'pageId');
+        const pinned = typeof obj.pinned === 'boolean' ? obj.pinned : true;
+        const page = pageKnowledgeStore.setPinned(pageId, pinned);
+        if (!page) {
+          throw new Error(`Unknown cached pageId: ${pageId}`);
+        }
+        logBrowserCache(`${pinned ? 'Pinned' : 'Unpinned'} cached page ${pageId} (${page.url})`);
+        return {
+          summary: `${pinned ? 'Pinned' : 'Unpinned'} cached page: ${page.title || page.url}`,
+          data: {
+            pageId: page.id,
+            tabId: page.tabId,
+            url: page.url,
+            title: page.title,
+            pinned: page.pinned === true,
+            tabClosedAt: page.tabClosedAt ?? null,
           },
         };
       },

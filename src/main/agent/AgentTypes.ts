@@ -44,6 +44,7 @@ export type AgentToolName =
   | 'browser.read_cached_chunk'
   | 'browser.cache_inventory'
   | 'browser.record_finding'
+  | 'browser.pin_page'
   | 'filesystem.list'
   | 'filesystem.glob'
   | 'filesystem.search'
@@ -188,6 +189,7 @@ export type AgentRuntimeConfig = {
   allowedTools?: 'all' | AgentToolName[];
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
+  maxTokensOverride?: number;
   attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
   onStatus?: (status: string) => void;
@@ -204,6 +206,7 @@ export type AgentProviderRequest = {
   contextPrompt?: string | null;
   priorTurns?: AgentPriorTurn[];
   maxToolTurns?: number;
+  maxTokensOverride?: number;
   toolScope: AgentToolScopeState;
   tools: AgentToolSchemaSummary[];
   attachments?: InvocationAttachment[];
@@ -216,6 +219,11 @@ export type AgentProviderResult = {
   runId?: string;
   output: string;
   codexItems?: CodexItem[];
+  completion?: {
+    completed: boolean;
+    reason?: 'max_tokens' | 'budget_exhausted' | 'stalled' | 'unknown';
+    canContinue?: boolean;
+  };
   usage?: {
     inputTokens: number;
     /** Provider-reported cache-read tokens (billed at discounted rate). */

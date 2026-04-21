@@ -83,7 +83,7 @@ export function buildBrowserContextBlock(
   }
   lines.push('');
   lines.push(
-    'Use `browser.search_page_cache` against the cached pages above before re-extracting a tab, and `browser.record_finding` to pin answers into task memory instead of re-reading pages next turn.',
+    'Use `browser.search_page_cache` against the cached pages above before re-extracting a tab, `browser.record_finding` to pin answers into task memory, and `browser.pin_page` to protect a cached page (📌) from LRU eviction. Pages marked (closed) outlived their tab — still searchable.',
   );
   return lines.join('\n');
 }
@@ -101,10 +101,23 @@ function formatCachedPageLines(
   limit: number,
   maxLabelChars: number,
 ): string[] {
-  const sorted = [...pages].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+  // Pinned pages bubble to the top so the "protected working set" is
+  // immediately visible; then we fall back to freshest-first. Pages whose
+  // owning tab was closed are still listed (they are still searchable) but
+  // tagged so the model knows they won't echo on browser tool calls.
+  const sorted = [...pages]
+    .sort((a, b) => {
+      const aPinned = a.pinned ? 1 : 0;
+      const bPinned = b.pinned ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+      return b.updatedAt - a.updatedAt;
+    })
+    .slice(0, limit);
   return sorted.map((page) => {
     const title = truncate((page.title || '').trim(), maxLabelChars) || truncate(page.url, maxLabelChars);
-    return `- ${page.id} (tab ${page.tabId}, ${page.chunkIds.length} chunks) — ${title}`;
+    const pin = page.pinned ? ' 📌' : '';
+    const closed = page.tabClosedAt ? ' (closed)' : '';
+    return `- ${page.id} (tab ${page.tabId}${closed}, ${page.chunkIds.length} chunks)${pin} — ${title}`;
   });
 }
 

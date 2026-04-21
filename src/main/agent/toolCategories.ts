@@ -54,6 +54,7 @@ export const TOOL_CATEGORIES: Record<ToolCategoryId, ToolCategoryDescriptor> = {
       'browser.read_cached_chunk',
       'browser.cache_inventory',
       'browser.record_finding',
+      'browser.pin_page',
     ],
     rules: [
       'The V2 browser is an app-owned multi-tab workspace.',
@@ -61,6 +62,8 @@ export const TOOL_CATEGORIES: Record<ToolCategoryId, ToolCategoryDescriptor> = {
       '- `browser.navigate` changes the active tab; set `normalize: true` for bare domains (e.g. "example" -> "example.com"). Use `browser.create_tab` for new tabs.',
       '- `browser.research_search` is the web-search entry point; mode="open" opens a search page without reading results. When evidence is judged sufficient, the finding is auto-pinned to task memory.',
       '- `browser.record_finding` pins a key fact, answer, or caveat to task memory so it survives into later turns without re-reading the page.',
+      '- `browser.pin_page` protects a cached page (by `pageId` from `browser.cache_inventory` / `browser.search_page_cache`) from LRU eviction. Use it on the 2–3 pages this task actually depends on; pinned pages survive tab close and the global cache cap.',
+      '- Closed tabs no longer wipe their cache: chunks stay searchable via `browser.search_page_cache` and are evicted only after live-tab pages once the cap is hit.',
       '- To reset, close tabs with `browser.close_tab` and navigate the survivor to a default URL.',
       '- Extract before answering: prefer `browser.extract_page` / `browser.summarize_page` / `browser.cache_current_page` over guessing page content.',
       '- Ground every factual claim in an observed tool result. Do not answer from model memory or provider-native search.',

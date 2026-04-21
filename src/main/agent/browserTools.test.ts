@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { executeBrowserOperation, recordTabFinding } = vi.hoisted(() => ({
+const { executeBrowserOperation, recordTabFinding, setPinned, listPages } = vi.hoisted(() => ({
   executeBrowserOperation: vi.fn(),
   recordTabFinding: vi.fn(),
+  setPinned: vi.fn(),
+  listPages: vi.fn(() => []),
 }));
 
 vi.mock('../browser/BrowserService', () => ({
@@ -43,6 +45,33 @@ const EXPECTED_TAB_ECHO = {
 
 vi.mock('../browser/browserOperations', () => ({ executeBrowserOperation }));
 
+vi.mock('../browserKnowledge/PageKnowledgeStore', () => ({
+  pageKnowledgeStore: {
+    setPinned,
+    listPages,
+    listSections: vi.fn(() => []),
+    listPagesForTab: vi.fn(() => []),
+    search: vi.fn(() => []),
+    readChunk: vi.fn(() => null),
+    answerFromCache: vi.fn(() => ({ question: '', answerable: false, matches: [], suggestedChunkIds: [], tokenEstimate: 0 })),
+    getStats: vi.fn(() => ({
+      pageCount: 0,
+      chunkCount: 0,
+      totalTokenEstimate: 0,
+      lastCachedPage: null,
+      searchCount: 0,
+      searchHitCount: 0,
+      searchMissCount: 0,
+      chunkReadCount: 0,
+    })),
+    cachePage: vi.fn(),
+    clearAll: vi.fn(() => ({ pageCount: 0, chunkCount: 0 })),
+    removePagesForTab: vi.fn(() => ({ pageCount: 0, chunkCount: 0 })),
+    markTabClosed: vi.fn(() => ({ pageCount: 0 })),
+    flushPendingSaves: vi.fn(),
+  },
+}));
+
 import { buildWaitForTextExpression, createBrowserToolDefinitions } from './tools/browser';
 
 describe('buildWaitForTextExpression', () => {
@@ -60,6 +89,9 @@ describe('createBrowserToolDefinitions', () => {
   beforeEach(() => {
     executeBrowserOperation.mockReset();
     recordTabFinding.mockReset();
+    setPinned.mockReset();
+    listPages.mockReset();
+    listPages.mockReturnValue([]);
   });
 
   it('routes browser.navigate through the browser operation layer', async () => {
@@ -308,5 +340,72 @@ describe('createBrowserToolDefinitions', () => {
       { runId: 'run_f', agentId: 'agent_f', mode: 'unrestricted-dev', taskId: 'task_8' },
     );
     expect(recordTabFinding).toHaveBeenCalledWith(expect.objectContaining({ severity: 'info' }));
+  });
+
+  it('browser.pin_page protects a cached page from LRU eviction', async () => {
+    setPinned.mockReturnValue({
+      id: 'page_abc',
+      tabId: 'tab_1',
+      url: 'https://example.com/a',
+      title: 'Page A',
+      tier: 'readability',
+      contentHash: 'abc',
+      chunkIds: ['c1', 'c2'],
+      headings: [],
+      createdAt: 1,
+      updatedAt: 2,
+      pinned: true,
+    });
+
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.pin_page');
+    expect(tool).toBeTruthy();
+
+    const result = await tool!.execute(
+      { pageId: 'page_abc' },
+      { runId: 'run_pin', agentId: 'agent_pin', mode: 'unrestricted-dev' },
+    );
+
+    expect(setPinned).toHaveBeenCalledWith('page_abc', true);
+    expect(result.summary).toContain('Pinned cached page');
+    expect(result.data).toMatchObject({
+      pageId: 'page_abc',
+      pinned: true,
+      url: 'https://example.com/a',
+    });
+  });
+
+  it('browser.pin_page accepts pinned=false to unpin', async () => {
+    setPinned.mockReturnValue({
+      id: 'page_abc',
+      tabId: 'tab_1',
+      url: 'https://example.com/a',
+      title: 'Page A',
+      tier: 'readability',
+      contentHash: 'abc',
+      chunkIds: [],
+      headings: [],
+      createdAt: 1,
+      updatedAt: 2,
+      pinned: false,
+    });
+
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.pin_page');
+    await tool!.execute(
+      { pageId: 'page_abc', pinned: false },
+      { runId: 'run_unpin', agentId: 'agent_unpin', mode: 'unrestricted-dev' },
+    );
+
+    expect(setPinned).toHaveBeenCalledWith('page_abc', false);
+  });
+
+  it('browser.pin_page rejects unknown pageIds', async () => {
+    setPinned.mockReturnValue(null);
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.pin_page');
+    await expect(
+      tool!.execute(
+        { pageId: 'page_missing' },
+        { runId: 'run_x', agentId: 'agent_x', mode: 'unrestricted-dev' },
+      ),
+    ).rejects.toThrow(/unknown cached pageid/i);
   });
 });
