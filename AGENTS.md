@@ -5,7 +5,7 @@ V2 Workspace is a local Electron application with two primary windows:
 - `command`: task control, logs, model conversation, and run status.
 - `execution`: browser and terminal surfaces used to complete work.
 
-The application workspace root is `/home/dp/Desktop/v2workspace`. Resolve relative repository paths from that root unless a tool result explicitly reports a different cwd.
+The application workspace root is `/home/dp/Documents/goldenboy`. Resolve relative repository paths from that root unless a tool result explicitly reports a different cwd.
 
 The model is not the application. The model is a planner and operator that asks V2 to run typed tools. V2 owns execution, logging, cancellation, state, file access, browser state, terminal state, and sub-agent lifecycle.
 
@@ -117,7 +117,7 @@ Never promote an INCOMPLETE or INVALID result to VALID based on probabilistic co
 
 ### Runtime Enforcement
 
-The V2 runtime enforces this structurally through `ConstraintValidator`, which runs after every tool execution and before results return to the model.
+The Goldenboy runtime enforces this structurally through `ConstraintValidator`, which runs after every tool execution and before results return to the model.
 
 Enforcement path:
 
@@ -200,41 +200,25 @@ The runtime should load only skills relevant to the current task. Do not inject 
 
 Skill files define how the model should use tools for a task class. They do not execute code.
 
+### Available Skills
+
+| Skill | Load when |
+|---|---|
+| `browser-operation` | task requires navigation, search, page inspection, or browser interaction |
+| `filesystem-operation` | task requires reading, searching, or writing files |
+| `local-debug` | task requires running builds, checking startup, or diagnosing runtime failures |
+| `subagent-coordination` | task benefits from parallel or delegated work |
+| `code-edit` | task requires patching or writing source files |
+| `typescript-typecheck` | task involves TypeScript errors, type changes, or interface modifications |
+| `test-driven-fix` | task involves a failing test or regression to verify |
+
 ## Tool Naming
 
-Use stable dotted tool names:
+Use stable dotted tool names.
 
-- `browser.navigate`
-- `browser.search_web`
-- `browser.research_search`
-- `browser.click`
-- `browser.type`
-- `browser.drag`
-- `browser.hover`
-- `browser.hit_test`
-- `browser.get_console_events`
-- `browser.get_network_events`
-- `browser.get_dialogs`
-- `browser.accept_dialog`
-- `browser.dismiss_dialog`
-- `browser.run_intent_program`
-- `browser.extract_page`
-- `browser.answer_from_cache`
-- `browser.search_page_cache`
-- `browser.read_cached_chunk`
-- `filesystem.index_workspace`
-- `filesystem.answer_from_cache`
-- `filesystem.search_file_cache`
-- `filesystem.read_file_chunk`
-- `filesystem.read`
-- `filesystem.search`
-- `filesystem.patch`
-- `terminal.exec`
-- `subagent.spawn`
-- `subagent.wait`
-- `subagent.cancel`
+The canonical tool inventory lives in `docs/agent/contracts/tool-names.md`.
 
-Tool names should remain stable even if implementation files move.
+Keep that file updated when adding, removing, or renaming agent-facing tools. Tool names should remain stable even if implementation files move.
 
 ## Response Style
 

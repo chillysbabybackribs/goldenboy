@@ -14,6 +14,20 @@ export type CachedFileChunk = {
   text?: string;
 };
 
+export type FileSymbolSummary = {
+  exports: string[];
+  imports: string[];
+  registrations: string[];
+};
+
+export type FileUsageStats = {
+  readCount: number;
+  searchHitCount: number;
+  patchCount: number;
+  lastAccessedAt: number | null;
+  heatScore: number;
+};
+
 export type CachedFileRecord = {
   id: string;
   path: string;
@@ -24,6 +38,9 @@ export type CachedFileRecord = {
   mtimeMs: number;
   chunkIds: string[];
   indexedAt: number;
+  summary: string;
+  symbols: FileSymbolSummary;
+  usage: FileUsageStats;
 };
 
 export type FileSearchResult = {
@@ -37,6 +54,11 @@ export type FileSearchResult = {
   snippet: string;
   score: number;
   tokenEstimate: number;
+  summary: string;
+  symbols: FileSymbolSummary;
+  usage: FileUsageStats;
+  contentHash: string;
+  freshness: 'fresh' | 'stale';
 };
 
 export type FileCacheAnswer = {
@@ -44,6 +66,16 @@ export type FileCacheAnswer = {
   answer: string;
   sources: FileSearchResult[];
   tokenEstimate: number;
+};
+
+export type DirectoryHeatRecord = {
+  path: string;
+  fileCount: number;
+  readCount: number;
+  searchHitCount: number;
+  patchCount: number;
+  lastAccessedAt: number | null;
+  heatScore: number;
 };
 
 export type FileCacheStats = {
@@ -55,4 +87,11 @@ export type FileCacheStats = {
   searchHitCount: number;
   searchMissCount: number;
   chunkReadCount: number;
+  directoryCount: number;
+  hottestDirectories: DirectoryHeatRecord[];
+  hottestFiles: Array<{
+    path: string;
+    heatScore: number;
+    lastAccessedAt: number | null;
+  }>;
 };

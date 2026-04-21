@@ -9,4 +9,4 @@ export const SURFACE_ROLES = ['browser', 'terminal'] as const;
 export type SurfaceRole = typeof SURFACE_ROLES[number];
 
 // Log sources can be a surface role, 'system', or a model provider
-export type LogSourceRole = SurfaceRole | 'system' | ProviderId;
+export type LogSourceRole = SurfaceRole | 'system' | ProviderId | 'session-memory';

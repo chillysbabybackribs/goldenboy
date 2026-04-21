@@ -35,9 +35,13 @@ function createTextOnlyStream(text: string, usage = { input_tokens: 10, output_t
   return {
     on(event: string, callback: (value: string) => void) {
       handlers.set(event, [...(handlers.get(event) || []), callback]);
+      return this;
     },
     abort: vi.fn(),
     async finalMessage() {
+      for (const callback of handlers.get('streamEvent') || []) {
+        callback({ type: 'content_block_delta' }, { content: [{ type: 'text', text }] });
+      }
       for (const callback of handlers.get('text') || []) {
         callback(text);
       }
@@ -47,6 +51,62 @@ function createTextOnlyStream(text: string, usage = { input_tokens: 10, output_t
       };
     },
   };
+}
+
+function createRecoverableFailureStream(partialText: string, error: Error) {
+  const handlers = new Map<string, Array<(value: unknown) => void>>();
+  const stream = {
+    currentMessage: { content: [{ type: 'text', text: partialText }] },
+    on(event: string, callback: (value: unknown) => void) {
+      handlers.set(event, [...(handlers.get(event) || []), callback]);
+      return stream;
+    },
+    abort: vi.fn(),
+    async finalMessage() {
+      for (const callback of handlers.get('streamEvent') || []) {
+        callback({ type: 'content_block_delta' });
+      }
+      for (const callback of handlers.get('text') || []) {
+        callback(partialText);
+      }
+      for (const callback of handlers.get('error') || []) {
+        callback(error);
+      }
+      throw error;
+    },
+  };
+  return stream;
+}
+
+function createNonResumableFailureStream(error: Error) {
+  const handlers = new Map<string, Array<(value: unknown) => void>>();
+  const stream = {
+    currentMessage: {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'toolu_1',
+          name: 'filesystem__read',
+          input: { path: 'x' },
+        },
+      ],
+    },
+    on(event: string, callback: (value: unknown) => void) {
+      handlers.set(event, [...(handlers.get(event) || []), callback]);
+      return stream;
+    },
+    abort: vi.fn(),
+    async finalMessage() {
+      for (const callback of handlers.get('streamEvent') || []) {
+        callback({ type: 'content_block_delta' });
+      }
+      for (const callback of handlers.get('error') || []) {
+        callback(error);
+      }
+      throw error;
+    },
+  };
+  return stream;
 }
 
 describe('HaikuProvider', () => {
@@ -96,5 +156,47 @@ describe('HaikuProvider', () => {
         durationMs: expect.any(Number),
       },
     });
+  });
+
+  it('recovers interrupted text-only Haiku streams by prefilling the partial assistant text', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    const interruption = new Error('connection lost');
+    interruption.name = 'APIConnectionError';
+
+    streamMock
+      .mockReturnValueOnce(createRecoverableFailureStream('Partial answer', interruption))
+      .mockReturnValueOnce(createTextOnlyStream(' continued.'));
+
+    const statuses: string[] = [];
+    const provider = new HaikuProvider();
+    const result = await provider.invoke(buildRequest({
+      onStatus: (status) => {
+        statuses.push(status);
+      },
+    }));
+
+    expect(streamMock).toHaveBeenCalledTimes(2);
+    expect(streamMock.mock.calls[1]?.[0]?.messages).toEqual([
+      { role: 'user', content: 'Summarize the result.' },
+      { role: 'assistant', content: 'Partial answer' },
+    ]);
+    expect(statuses).toContain('stream-recover:1 resumed after interruption (14 chars)');
+    expect(result.output).toBe('Partial answer continued.');
+  });
+
+  it('does not retry non-text partial streams because tool/thinking blocks are not resumable', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    process.env.ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001';
+
+    const interruption = new Error('connection lost');
+    interruption.name = 'APIConnectionError';
+
+    streamMock.mockReturnValue(createNonResumableFailureStream(interruption));
+
+    const provider = new HaikuProvider();
+    await expect(provider.invoke(buildRequest())).rejects.toThrow('connection lost');
+    expect(streamMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -86,9 +86,12 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
     win.show();
     appStateStore.dispatch({ type: ActionType.SET_WINDOW_VISIBLE, role, isVisible: true });
 
-    // Initialize browser surface when execution window is ready
+    // The embedded browser belongs to the execution window. Do not host it
+    // inside the command window during startup and then hand it off later.
     if (role === 'execution' && !browserService.isCreated()) {
-      browserService.createSurface(win);
+      browserService.createSurface(win, role);
+    } else if (role === 'execution') {
+      browserService.attachSurface(win, role);
     }
   });
 

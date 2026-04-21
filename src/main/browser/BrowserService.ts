@@ -5,14 +5,14 @@
 // Manages multiple tabs (each a WebContentsView), bookmarks, extensions,
 // settings, zoom, find-in-page, downloads, and permissions.
 
-import { BrowserWindow, WebContentsView, session, shell, Event as ElectronEvent, Menu, MenuItem, clipboard, WebContents } from 'electron';
+import { BrowserWindow, WebContentsView, session, Event as ElectronEvent, Menu, MenuItem, clipboard, WebContents } from 'electron';
 import * as path from 'path';
 import {
   BrowserState, BrowserNavigationState, BrowserSurfaceStatus,
   BrowserHistoryEntry, BrowserDownloadState, BrowserPermissionRequest,
   BrowserErrorInfo, BrowserProfile, TabInfo, BookmarkEntry, ExtensionInfo,
   FindInPageState, BrowserSettings, BrowserAuthDiagnostics,
-  BrowserJavaScriptDialog, createDefaultSettings,
+  BrowserJavaScriptDialog,
 } from '../../shared/types/browser';
 import {
   BrowserActionableElement,
@@ -31,8 +31,7 @@ import { eventBus } from '../events/eventBus';
 import { AppEventType } from '../../shared/types/events';
 import { generateId } from '../../shared/utils/ids';
 import {
-  loadBrowserHistory, loadLastUrls, loadActiveTabIndex, saveBrowserHistory,
-  loadBookmarks, saveBookmarks, loadSettings, saveSettings, flushAll,
+  flushAll,
 } from './browserSessionStore';
 import { resolvePermission, classifyPermission } from './browserPermissions';
 import { importChromeCookies, isChromeAvailable, promptCookieImport } from './chromeCookieImporter';
@@ -44,10 +43,14 @@ import { BrowserSiteStrategyStore } from './BrowserSiteStrategies';
 import { appendSurfaceFixture } from './BrowserIntelligenceStore';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { BrowserPageInteraction } from './BrowserPageInteraction';
-import type { BrowserPointerHitTestResult } from './BrowserPageInteraction';
+import type { BrowserElementState, BrowserPointerHitTestResult } from './BrowserPageInteraction';
 import { BrowserPageAnalysis } from './BrowserPageAnalysis';
 import type { SearchResultCandidate, PageEvidence } from './BrowserPageAnalysis';
 import { BrowserOverlayManager } from './BrowserOverlayManager';
+import { BrowserSettingsService } from './BrowserSettingsService';
+import { BrowserAuthService } from './BrowserAuthService';
+import { BrowserPersistenceService } from './BrowserPersistenceService';
+import { BrowserLayoutService } from './BrowserLayoutService';
 import { PageExtractor } from '../context/pageExtractor';
 import type { DiskCache } from '../context/diskCache';
 import { pageKnowledgeStore } from '../browserKnowledge/PageKnowledgeStore';
@@ -59,10 +62,10 @@ import type {
   BrowserOperationNetworkCapture,
   BrowserOperationNetworkScope,
 } from './browserNetworkSupport';
+import type { PhysicalWindowRole } from '../../shared/types/windowRoles';
 
 const PROFILE_ID = 'workspace-browser';
 const PARTITION = 'persist:workspace-browser';
-const MAX_HISTORY = 2000;
 const MAX_RECENT_PERMISSIONS = 50;
 const HISTORY_PERSIST_DEBOUNCE = 2000;
 const BROWSER_STATE_SYNC_DEBOUNCE = 48;
@@ -70,31 +73,51 @@ const ENABLE_BACKGROUND_PAGE_EXTRACTION = false;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5.0;
-const GOOGLE_AUTH_MISMATCH_PATH = '/CookieMismatch';
-const GOOGLE_AUTH_START_URL = 'https://accounts.google.com/';
-const GOOGLE_COOKIE_DOMAIN_SUFFIXES = [
-  'google.com',
-  'youtube.com',
-  'googleusercontent.com',
-];
-
-/** Paths on accounts.google.com that indicate an OAuth / sign-in flow. */
-const GOOGLE_OAUTH_PATH_PATTERNS = [
-  '/o/oauth2/',
-  '/signin/oauth',
-  '/AccountChooser',
-  '/ServiceLogin',
-  '/v3/signin/',
-  '/signin/v2/',
-];
-
-/** How long to keep the local OAuth relay server alive (ms). */
-const OAUTH_RELAY_TIMEOUT_MS = 5 * 60 * 1000;
 const ALLOWED_POPUP_PROTOCOLS = new Set(['http:', 'https:']);
 const ALLOWED_NAVIGATION_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
 const BROWSER_SURFACE_BACKGROUND = '#000000';
-type ViewBounds = { x: number; y: number; width: number; height: number };
-
+const NOISY_THIRD_PARTY_HOST_SUFFIXES = [
+  'googlesyndication.com',
+  'doubleclick.net',
+  'googletagservices.com',
+  'sharethrough.com',
+  'loopme.me',
+  '3lift.com',
+  'mgid.com',
+  'smaato.net',
+  'adform.net',
+  'media.net',
+  'omnitagjs.com',
+  'vistarsagency.com',
+  'prebid.org',
+];
+const TRACKING_PATH_PATTERNS: RegExp[] = [
+  /\/setuid\b/i,
+  /\/sync\b/i,
+  /\/user-sync\b/i,
+  /\/cookie[_-]?sync\b/i,
+  /\/checksync\b/i,
+];
+const NOISY_BLOCKABLE_RESOURCE_TYPES = new Set([
+  'script',
+  'image',
+  'subFrame',
+  'xhr',
+  'fetch',
+  'ping',
+  'media',
+  'object',
+]);
+const NOISY_CONSOLE_MESSAGE_PATTERNS: RegExp[] = [
+  /allow-scripts and allow-same-origin/i,
+  /failed to execute 'write' on 'document'/i,
+  /slot\.setsafeframeconfig is deprecated/i,
+  /\badgb - not initialized\b/i,
+  /\byenabler is not defined\b/i,
+  /preloaded using link preload but not used/i,
+  /yDestinationContentUUIDList.+exceeded the max length/i,
+  /videojs\.mergeoptions is deprecated/i,
+];
 function isSafeExternalUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(rawUrl);
@@ -152,13 +175,44 @@ function isGoogleOrYouTubeRequest(rawUrl: string): boolean {
   }
 }
 
-function isGoogleCookieDomain(domain: string): boolean {
-  const normalized = domain.replace(/^\./, '').toLowerCase();
-  return GOOGLE_COOKIE_DOMAIN_SUFFIXES.some(suffix => normalized === suffix || normalized.endsWith(`.${suffix}`));
+function shouldBlockNoisyThirdPartyRequest(rawUrl: string, resourceType: string): boolean {
+  if (!NOISY_BLOCKABLE_RESOURCE_TYPES.has(resourceType)) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    if (NOISY_THIRD_PARTY_HOST_SUFFIXES.some(suffix => hostname === suffix || hostname.endsWith(`.${suffix}`))) {
+      return true;
+    }
+    return TRACKING_PATH_PATTERNS.some(pattern => pattern.test(parsed.pathname));
+  } catch {
+    return false;
+  }
 }
 
-function areViewBoundsEqual(a: ViewBounds, b: ViewBounds): boolean {
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+function isNoisyThirdPartyHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return NOISY_THIRD_PARTY_HOST_SUFFIXES.some(suffix => normalized === suffix || normalized.endsWith(`.${suffix}`));
+}
+
+function extractHostname(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function shouldSuppressConsoleNoise(event: BrowserConsoleEvent): boolean {
+  const message = String(event.message || '').trim();
+  if (!message) return false;
+  const patternMatch = NOISY_CONSOLE_MESSAGE_PATTERNS.some(pattern => pattern.test(message));
+  if (!patternMatch) return false;
+  const sourceId = String(event.sourceId || '');
+  if (sourceId === 'console-api' || sourceId === 'inline') return true;
+  const host = extractHostname(sourceId);
+  return host ? isNoisyThirdPartyHost(host) : false;
 }
 
 export class BrowserService {
@@ -166,10 +220,7 @@ export class BrowserService {
   private activeTabId: string = '';
   private splitLeftTabId: string | null = null;
   private splitRightTabId: string | null = null;
-  private hostWindow: BrowserWindow | null = null;
   private profile: BrowserProfile;
-  private history: BrowserHistoryEntry[] = [];
-  private bookmarks: BookmarkEntry[] = [];
   private recentPermissions: BrowserPermissionRequest[] = [];
   private extensions: ExtensionInfo[] = [];
   private findState: FindInPageState = { active: false, query: '', activeMatch: 0, totalMatches: 0 };
@@ -178,12 +229,13 @@ export class BrowserService {
   private createdAt: number | null = null;
   private disposed = false;
   private historyPersistTimer: ReturnType<typeof setTimeout> | null = null;
-  private currentBounds: ViewBounds = { x: 0, y: 0, width: 0, height: 0 };
-  private attachedTabIds = new Set<string>();
-  private appliedBoundsByTabId = new Map<string, ViewBounds>();
   private sessionInstance: Electron.Session | null = null;
-  private lastGoogleCookieMismatchAt: number | null = null;
-  private oauthRelayTimer: ReturnType<typeof setTimeout> | null = null;
+  private settingsService = new BrowserSettingsService();
+  private persistenceService = new BrowserPersistenceService();
+  private layoutService = new BrowserLayoutService();
+  private authService = new BrowserAuthService({
+    emitLog: (level, message) => this.emitLog(level, message),
+  });
   private instrumentation: BrowserInstrumentation;
   private downloadManager = new BrowserDownloadManager({
     resolveTabIdByWebContentsId: (webContentsId) => this.resolveTabIdByWebContentsId(webContentsId),
@@ -224,7 +276,7 @@ export class BrowserService {
 
   constructor(private readonly contextId: string = DEFAULT_BROWSER_CONTEXT_ID) {
     this.profile = { id: PROFILE_ID, partition: PARTITION, persistent: true, userAgent: null };
-    this.settings = createDefaultSettings();
+    this.settings = this.settingsService.get();
     this.instrumentation = new BrowserInstrumentation(contextId);
     this.instrumentation.registerNetworkInterceptionPolicy({
       id: 'sanitize-google-user-agent',
@@ -239,6 +291,14 @@ export class BrowserService {
           },
         };
       },
+    });
+    this.instrumentation.registerNetworkInterceptionPolicy({
+      id: 'suppress-noisy-third-party-trackers',
+      matches: ({ url, resourceType }) => (
+        this.settings.contentMode === 'strict-clean'
+        && shouldBlockNoisyThirdPartyRequest(url, resourceType)
+      ),
+      onBeforeRequest: () => ({ cancel: true }),
     });
   }
 
@@ -299,13 +359,12 @@ export class BrowserService {
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────
 
-  createSurface(hostWindow: BrowserWindow): void {
+  createSurface(hostWindow: BrowserWindow, hostRole: PhysicalWindowRole = 'command'): void {
     if (this.tabs.size > 0) return;
-    this.hostWindow = hostWindow;
+    this.layoutService.setHostWindow(hostWindow, hostRole);
 
-    this.history = loadBrowserHistory();
-    this.bookmarks = loadBookmarks();
-    this.settings = loadSettings();
+    const restoreState = this.persistenceService.load();
+    this.settings = this.settingsService.load();
 
     const ses = session.fromPartition(PARTITION);
     this.sessionInstance = ses;
@@ -322,8 +381,7 @@ export class BrowserService {
     this.handleChromeSessionImport(ses, hostWindow);
 
     // Restore tabs from last session or create a single default tab
-    const lastUrls = loadLastUrls();
-    const activeIdx = loadActiveTabIndex();
+    const { lastUrls, activeTabIndex: activeIdx } = restoreState;
     if (lastUrls.length > 0) {
       const tabIds: string[] = [];
       for (const url of lastUrls) {
@@ -340,6 +398,17 @@ export class BrowserService {
     this.syncState();
   }
 
+  attachSurface(hostWindow: BrowserWindow, hostRole: PhysicalWindowRole = 'execution'): void {
+    if (this.tabs.size === 0) {
+      this.createSurface(hostWindow, hostRole);
+      return;
+    }
+
+    this.layoutService.rehostWindow(hostWindow, hostRole, this.tabs);
+    this.applyTabLayout();
+    this.syncState();
+  }
+
   async reimportChromeCookies(): Promise<{ imported: number; failed: number; domains: string[] }> {
     if (!this.sessionInstance) throw new Error('Browser not initialized');
     if (!isChromeAvailable()) throw new Error('Chrome not available');
@@ -353,8 +422,7 @@ export class BrowserService {
 
     if (this.settings.importChromeCookies === null) {
       const optIn = await promptCookieImport(hostWindow);
-      this.settings.importChromeCookies = optIn;
-      saveSettings(this.settings);
+      this.settings = this.settingsService.update({ importChromeCookies: optIn });
       if (!optIn) return;
     }
 
@@ -408,7 +476,7 @@ export class BrowserService {
   }
 
   private createTabInternal(url: string, notify: boolean, insertAfterTabId?: string): TabEntry {
-    if (!this.hostWindow || !this.sessionInstance) throw new Error('Browser not initialized');
+    if (!this.layoutService.hasHostWindow() || !this.sessionInstance) throw new Error('Browser not initialized');
     const view = this.createBrowserTabView();
     const entry = this.registerTab(view, notify, insertAfterTabId);
     if (url && url !== 'about:blank') {
@@ -521,7 +589,7 @@ export class BrowserService {
 
   private activateTabInternal(tabId: string): void {
     const entry = this.tabs.get(tabId);
-    if (!entry || !this.hostWindow) return;
+    if (!entry || !this.layoutService.hasHostWindow()) return;
     this.activeTabId = tabId;
     this.applyTabLayout();
 
@@ -617,11 +685,7 @@ export class BrowserService {
   }
 
   private destroyTabEntry(entry: TabEntry): void {
-    if (this.hostWindow && !this.hostWindow.isDestroyed()) {
-      try { this.hostWindow.contentView.removeChildView(entry.view); } catch {}
-    }
-    this.attachedTabIds.delete(entry.id);
-    this.appliedBoundsByTabId.delete(entry.id);
+    this.layoutService.detachTab(entry.id, entry.view);
     this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
     pageKnowledgeStore.removePagesForTab(entry.id);
     this.dialogManager.detachTab(entry.id);
@@ -629,60 +693,16 @@ export class BrowserService {
   }
 
   private applyTabLayout(): void {
-    if (!this.hostWindow || this.hostWindow.isDestroyed()) return;
+    if (!this.layoutService.hasHostWindow()) return;
     if (this.tabs.size === 0) return;
 
     this.normalizeSplitState();
-
-    const x = Math.round(this.currentBounds.x);
-    const y = Math.round(this.currentBounds.y);
-    const width = Math.max(1, Math.round(this.currentBounds.width));
-    const height = Math.max(1, Math.round(this.currentBounds.height));
-    const nextVisibleEntries: Array<{ entry: TabEntry; bounds: ViewBounds }> = [];
-
-    if (this.splitLeftTabId && this.splitRightTabId) {
-      const leftEntry = this.tabs.get(this.splitLeftTabId);
-      const rightEntry = this.tabs.get(this.splitRightTabId);
-      if (leftEntry && rightEntry) {
-        const dividerWidth = width >= 220 ? 2 : 0;
-        const availableWidth = Math.max(1, width - dividerWidth);
-        const leftWidth = Math.max(1, Math.floor(availableWidth / 2));
-        const rightWidth = Math.max(1, availableWidth - leftWidth);
-        nextVisibleEntries.push(
-          { entry: leftEntry, bounds: { x, y, width: leftWidth, height } },
-          { entry: rightEntry, bounds: { x: x + leftWidth + dividerWidth, y, width: rightWidth, height } },
-        );
-      }
-    } else {
-      const entry = this.getActiveEntry();
-      if (!entry) return;
-      nextVisibleEntries.push({ entry, bounds: { x, y, width, height } });
-    }
-
-    if (nextVisibleEntries.length === 0) return;
-
-    const nextAttachedIds = new Set(nextVisibleEntries.map(({ entry }) => entry.id));
-    for (const tabId of this.attachedTabIds) {
-      if (nextAttachedIds.has(tabId)) continue;
-      const staleEntry = this.tabs.get(tabId);
-      if (staleEntry) {
-        try { this.hostWindow.contentView.removeChildView(staleEntry.view); } catch {}
-      }
-      this.appliedBoundsByTabId.delete(tabId);
-    }
-
-    for (const { entry, bounds } of nextVisibleEntries) {
-      if (!this.attachedTabIds.has(entry.id)) {
-        this.hostWindow.contentView.addChildView(entry.view);
-      }
-      const previousBounds = this.appliedBoundsByTabId.get(entry.id);
-      if (!previousBounds || !areViewBoundsEqual(previousBounds, bounds)) {
-        entry.view.setBounds(bounds);
-        this.appliedBoundsByTabId.set(entry.id, bounds);
-      }
-    }
-
-    this.attachedTabIds = nextAttachedIds;
+    this.layoutService.applyLayout({
+      tabs: this.tabs,
+      activeTabId: this.activeTabId,
+      splitLeftTabId: this.splitLeftTabId,
+      splitRightTabId: this.splitRightTabId,
+    });
   }
 
   private getActiveEntry(): TabEntry | undefined {
@@ -734,10 +754,10 @@ export class BrowserService {
         return;
       }
 
-      if (this.isGoogleOAuthUrl(url)) {
+      if (this.authService.isGoogleOAuthUrl(url) && this.sessionInstance) {
         e.preventDefault();
         this.emitLog('info', `Intercepted Google sign-in — opening in system browser`);
-        void this.openGoogleSignInExternally(entry, url);
+        void this.authService.openGoogleSignInExternally(this.sessionInstance, entry.view.webContents, url);
       }
     });
 
@@ -749,13 +769,15 @@ export class BrowserService {
       nav.lastNavigationAt = Date.now();
       this.addHistoryEntry(url, nav.title, nav.favicon);
       this.syncTabAndMaybeNavigation(entry);
-      void this.handleGoogleAuthNavigation(entry, url);
+      if (this.sessionInstance) {
+        void this.authService.handleGoogleAuthNavigation(this.sessionInstance, entry.view.webContents, url);
+      }
 
       // Fallback: catch Google OAuth URLs that arrived via server-side
       // redirects (302) which bypass will-navigate.
-      if (this.isGoogleOAuthUrl(url)) {
+      if (this.authService.isGoogleOAuthUrl(url) && this.sessionInstance) {
         this.emitLog('info', `Intercepted Google sign-in (redirect) — opening in system browser`);
-        void this.openGoogleSignInExternally(entry, url);
+        void this.authService.openGoogleSignInExternally(this.sessionInstance, entry.view.webContents, url);
       }
     });
 
@@ -769,8 +791,7 @@ export class BrowserService {
 
     wc.on('page-title-updated', (_e: ElectronEvent, title: string) => {
       nav.title = title;
-      const recent = this.history[this.history.length - 1];
-      if (recent && recent.url === nav.url) recent.title = title;
+      this.persistenceService.updateLatestHistoryEntry(nav.url, { title });
       this.syncTabAndMaybeNavigation(entry);
       if (entry.id === this.activeTabId) {
         eventBus.emit(AppEventType.BROWSER_TITLE_UPDATED, { title, url: nav.url });
@@ -780,8 +801,7 @@ export class BrowserService {
     wc.on('page-favicon-updated', (_e: ElectronEvent, favicons: string[]) => {
       if (favicons.length > 0) {
         nav.favicon = favicons[0];
-        const recent = this.history[this.history.length - 1];
-        if (recent && recent.url === nav.url) recent.favicon = favicons[0];
+        this.persistenceService.updateLatestHistoryEntry(nav.url, { favicon: favicons[0] });
         this.syncTabAndMaybeNavigation(entry);
       }
     });
@@ -953,178 +973,6 @@ export class BrowserService {
     this.syncState();
   }
 
-  private async handleGoogleAuthNavigation(entry: TabEntry, rawUrl: string): Promise<void> {
-    if (!this.sessionInstance) return;
-
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      return;
-    }
-
-    if (parsed.hostname !== 'accounts.google.com' || parsed.pathname !== GOOGLE_AUTH_MISMATCH_PATH) {
-      return;
-    }
-
-    this.lastGoogleCookieMismatchAt = Date.now();
-    const cleared = await this.clearGoogleAuthCookies();
-    this.emitLog(
-      'warn',
-      `Detected Google CookieMismatch; cleared ${cleared} Google-family cookies and restarted auth flow`,
-    );
-
-    if (!entry.view.webContents.isDestroyed()) {
-      entry.view.webContents.loadURL(GOOGLE_AUTH_START_URL);
-    }
-  }
-
-  private async clearGoogleAuthCookies(): Promise<number> {
-    if (!this.sessionInstance) return 0;
-
-    const cookies = await this.sessionInstance.cookies.get({});
-    let cleared = 0;
-
-    for (const cookie of cookies) {
-      if (!cookie.domain || !cookie.name || !isGoogleCookieDomain(cookie.domain)) {
-        continue;
-      }
-
-      const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.replace(/^\./, '')}${cookie.path}`;
-      try {
-        await this.sessionInstance.cookies.remove(url, cookie.name);
-        cleared++;
-      } catch {
-        // Ignore individual removal failures and continue clearing the jar.
-      }
-    }
-
-    return cleared;
-  }
-
-  // ─── Google OAuth System-Browser Relay ────────────────────────────────────
-
-  /**
-   * Returns true if the URL is a Google sign-in / OAuth page that should be
-   * opened in the system browser instead of the embedded one.
-   */
-  private isGoogleOAuthUrl(rawUrl: string): boolean {
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      return false;
-    }
-    if (parsed.hostname !== 'accounts.google.com') return false;
-    return GOOGLE_OAUTH_PATH_PATTERNS.some(p => parsed.pathname.startsWith(p));
-  }
-
-  /**
-   * Intercepts a Google OAuth navigation, opens it in the system browser,
-   * and polls for the resulting cookies to appear in Chrome's cookie store.
-   * Once detected, imports them into the Electron session so the embedded
-   * browser ends up authenticated.
-   */
-  private async openGoogleSignInExternally(entry: TabEntry, oauthUrl: string): Promise<void> {
-    if (!this.sessionInstance) return;
-
-    // Prevent duplicate relays
-    this.stopOAuthRelay();
-
-    const ses = this.sessionInstance;
-    const tabWc = entry.view.webContents;
-
-    // Extract the original destination the user was trying to reach
-    let continueUrl: string | null = null;
-    try {
-      const parsed = new URL(oauthUrl);
-      continueUrl = parsed.searchParams.get('continue')
-        || parsed.searchParams.get('redirect_uri')
-        || null;
-    } catch { /* ignore */ }
-
-    // Show a placeholder in the embedded tab while the user authenticates
-    if (!tabWc.isDestroyed()) {
-      tabWc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
-        `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;
-justify-content:center;height:100vh;margin:0;background:#0a0a0a;color:#ccc}
-.card{text-align:center;padding:40px}
-h2{margin-bottom:8px;color:#fff}
-p{color:#888;max-width:340px;line-height:1.6}
-.spinner{width:24px;height:24px;border:2px solid #333;border-top-color:#aaa;
-border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
-@keyframes spin{to{transform:rotate(360deg)}}
-</style></head><body><div class="card">
-<h2>Sign in with Google</h2>
-<p>Your system browser has been opened. Complete sign-in there, then return here — this page will update automatically.</p>
-<div class="spinner"></div>
-</div></body></html>`,
-      )}`);
-    }
-
-    if (!isSafeExternalUrl(oauthUrl)) {
-      this.emitLog('warn', `Blocked unsafe OAuth URL for external launch: ${oauthUrl}`);
-      return;
-    }
-
-    // Open the original OAuth URL in the system browser
-    void shell.openExternal(oauthUrl);
-
-    // Poll Chrome's cookie database for fresh Google session cookies.
-    // Once they appear, import them and navigate to the destination.
-    const POLL_INTERVAL = 3000;
-    let elapsed = 0;
-
-    const poll = async () => {
-      elapsed += POLL_INTERVAL;
-      if (elapsed > OAUTH_RELAY_TIMEOUT_MS) {
-        this.stopOAuthRelay();
-        this.emitLog('warn', 'Google sign-in polling timed out after 5 minutes');
-        return;
-      }
-
-      try {
-        const result = await importChromeCookies(ses, true);
-        // Check if we got any Google cookies this round
-        const hasGoogleCookies = result.domains.some(d => {
-          const norm = d.replace(/^\./, '').toLowerCase();
-          return GOOGLE_COOKIE_DOMAIN_SUFFIXES.some(s => norm === s || norm.endsWith(`.${s}`));
-        });
-
-        if (hasGoogleCookies && result.imported > 0) {
-          this.emitLog('info', `Google sign-in complete: imported ${result.imported} cookies (${result.domains.length} domains)`);
-          this.stopOAuthRelay();
-
-          // Navigate to the original destination
-          const destination = (continueUrl && isSafeNavigationUrl(continueUrl))
-            ? continueUrl
-            : 'https://myaccount.google.com/';
-          if (!tabWc.isDestroyed()) {
-            tabWc.loadURL(destination);
-          }
-          return;
-        }
-      } catch (err) {
-        this.emitLog('warn', `OAuth poll: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      // Keep polling
-      this.oauthRelayTimer = setTimeout(() => void poll(), POLL_INTERVAL);
-    };
-
-    // Start polling after initial delay to let the system browser load
-    this.oauthRelayTimer = setTimeout(() => void poll(), POLL_INTERVAL);
-  }
-
-  private stopOAuthRelay(): void {
-    if (this.oauthRelayTimer) {
-      clearTimeout(this.oauthRelayTimer);
-      this.oauthRelayTimer = null;
-    }
-  }
-
   // ─── Navigation ──────────────────────────────────────────────────────────
 
   navigate(url: string): void {
@@ -1238,7 +1086,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
 
   private broadcastFind(): void {
     // Broadcast via dedicated channel handled in eventRouter
-    if (this.hostWindow && !this.hostWindow.isDestroyed()) {
+    if (this.layoutService.hasHostWindow()) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed() && win.webContents) {
           win.webContents.send('browser:find-update', {
@@ -1384,42 +1232,38 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     if (active && active.info.navigation.url === url) {
       entry.favicon = active.info.navigation.favicon;
     }
-    this.bookmarks.push(entry);
-    saveBookmarks(this.bookmarks);
-    eventBus.emit(AppEventType.BROWSER_BOOKMARK_ADDED, { bookmark: { ...entry } });
+    const saved = this.persistenceService.addBookmark(entry);
+    eventBus.emit(AppEventType.BROWSER_BOOKMARK_ADDED, { bookmark: saved });
     this.emitLog('info', `Bookmark added: ${title}`);
     this.syncState();
-    return { ...entry };
+    return saved;
   }
 
   removeBookmark(bookmarkId: string): void {
-    this.bookmarks = this.bookmarks.filter(b => b.id !== bookmarkId);
-    saveBookmarks(this.bookmarks);
+    const removed = this.persistenceService.removeBookmark(bookmarkId);
+    if (!removed) return;
     eventBus.emit(AppEventType.BROWSER_BOOKMARK_REMOVED, { bookmarkId });
     this.syncState();
   }
 
   getBookmarks(): BookmarkEntry[] {
-    return [...this.bookmarks];
+    return this.persistenceService.getBookmarks();
   }
 
   // ─── History ──────────────────────────────────────────────────────────────
 
   private addHistoryEntry(url: string, title: string, favicon: string): void {
-    if (!url || url === 'about:blank' || url.startsWith('devtools://')) return;
-    const last = this.history[this.history.length - 1];
-    if (last && last.url === url) return;
-    this.history.push({ url, title: title || url, visitedAt: Date.now(), favicon: favicon || '' });
-    if (this.history.length > MAX_HISTORY) this.history = this.history.slice(-MAX_HISTORY);
+    const added = this.persistenceService.recordHistoryEntry(url, title, favicon);
+    if (!added) return;
     this.scheduleHistoryPersist();
     eventBus.emit(AppEventType.BROWSER_HISTORY_UPDATED, { entries: this.getRecentHistory() });
   }
 
-  getHistory(): BrowserHistoryEntry[] { return [...this.history]; }
-  getRecentHistory(count: number = 50): BrowserHistoryEntry[] { return this.history.slice(-count); }
+  getHistory(): BrowserHistoryEntry[] { return this.persistenceService.getHistory(); }
+  getRecentHistory(count: number = 50): BrowserHistoryEntry[] { return this.persistenceService.getRecentHistory(count); }
 
   clearHistory(): void {
-    this.history = [];
+    this.persistenceService.clearHistory();
     this.persistNow();
     eventBus.emit(AppEventType.BROWSER_HISTORY_UPDATED, { entries: [] });
     this.emitLog('info', 'Browser history cleared');
@@ -1512,7 +1356,10 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     const lastUrls = Array.from(this.tabs.values()).map(e => e.info.navigation.url).filter(u => u && u !== 'about:blank');
     const tabIds = Array.from(this.tabs.keys());
     const activeIdx = tabIds.indexOf(this.activeTabId);
-    saveBrowserHistory(this.history, lastUrls, Math.max(0, activeIdx));
+    this.persistenceService.persistHistorySnapshot({
+      lastUrls,
+      activeTabIndex: Math.max(0, activeIdx),
+    });
   }
 
   // ─── Settings ────────────────────────────────────────────────────────────
@@ -1520,32 +1367,29 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
   getSettings(): BrowserSettings { return { ...this.settings }; }
 
   updateSettings(partial: Partial<BrowserSettings>): void {
-    this.settings = { ...this.settings, ...partial };
-    saveSettings(this.settings);
+    this.settings = this.settingsService.update(partial);
     this.emitLog('info', 'Browser settings updated');
     this.syncState();
   }
 
   async getAuthDiagnostics(): Promise<BrowserAuthDiagnostics> {
-    const cookies = this.sessionInstance ? await this.sessionInstance.cookies.get({}) : [];
     const activeEntry = this.getActiveEntry();
     const activeTabUserAgent = activeEntry && !activeEntry.view.webContents.isDestroyed()
       ? activeEntry.view.webContents.getUserAgent()
       : '';
 
-    return {
-      totalCookies: cookies.length,
-      googleCookieCount: cookies.filter(cookie => cookie.domain && isGoogleCookieDomain(cookie.domain)).length,
-      importChromeCookies: this.settings.importChromeCookies,
-      googleAuthCompatibilityActive: true,
-      lastGoogleCookieMismatchAt: this.lastGoogleCookieMismatchAt,
+    return this.authService.getAuthDiagnostics(
+      this.sessionInstance,
       activeTabUserAgent,
-      activeTabHasElectronUA: /Electron\/[\d.]+/i.test(activeTabUserAgent),
-    };
+      this.settings.importChromeCookies,
+    );
   }
 
   async clearGoogleAuthState(): Promise<{ cleared: number }> {
-    const cleared = await this.clearGoogleAuthCookies();
+    if (!this.sessionInstance) {
+      return { cleared: 0 };
+    }
+    const cleared = await this.authService.clearGoogleAuthCookies(this.sessionInstance);
     this.emitLog('info', `Cleared ${cleared} Google-family cookies from the app session`);
     return { cleared };
   }
@@ -1698,9 +1542,12 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
 
   // ─── Bounds ──────────────────────────────────────────────────────────────
 
-  setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
-    if (areViewBoundsEqual(this.currentBounds, bounds)) return;
-    this.currentBounds = bounds;
+  setBounds(
+    bounds: { x: number; y: number; width: number; height: number },
+    sourceRole?: PhysicalWindowRole,
+  ): void {
+    const changed = this.layoutService.setBounds(bounds, sourceRole);
+    if (!changed) return;
     this.applyTabLayout();
   }
 
@@ -1715,6 +1562,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     const status = active ? active.info.status : 'idle' as BrowserSurfaceStatus;
     return {
       surfaceStatus: status,
+      hostWindowRole: this.layoutService.getHostRole(),
       navigation: nav,
       profile: { ...this.profile },
       tabs: this.getTabs(),
@@ -1722,7 +1570,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
       splitLeftTabId: this.splitLeftTabId,
       splitRightTabId: this.splitRightTabId,
       history: this.getRecentHistory(),
-      bookmarks: [...this.bookmarks],
+      bookmarks: this.getBookmarks(),
       activeDownloads: this.downloadManager.getActiveDownloads(),
       completedDownloads: this.downloadManager.getCompletedDownloads(),
       recentPermissions: [...this.recentPermissions],
@@ -1867,6 +1715,27 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     const entry = this.resolveEntry(tabId);
     if (entry) this.dialogManager.ensureDebugger(entry);
     return this.pageInteraction.typeInElement(selector, text, tabId);
+  }
+
+  async getElementState(selector: string, tabId?: string): Promise<BrowserElementState> {
+    return this.pageInteraction.getElementState(selector, tabId);
+  }
+
+  async selectOption(
+    selector: string,
+    target: { value?: string; label?: string; index?: number },
+    tabId?: string,
+  ): Promise<{
+    selected: boolean;
+    error: string | null;
+    selector: string;
+    selectedIndex: number | null;
+    selectedValue: string | null;
+    selectedLabel: string | null;
+  }> {
+    const entry = this.resolveEntry(tabId);
+    if (entry) this.dialogManager.ensureDebugger(entry);
+    return this.pageInteraction.selectOption(selector, target, tabId);
   }
 
   async uploadFileToElement(
@@ -2080,7 +1949,9 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
   }
 
   getConsoleEvents(tabId?: string, since?: number): BrowserConsoleEvent[] {
-    return this.instrumentation.getConsoleEvents(tabId, since);
+    const events = this.instrumentation.getConsoleEvents(tabId, since);
+    if (this.settings.contentMode !== 'strict-clean') return events;
+    return events.filter(event => !shouldSuppressConsoleNoise(event));
   }
 
   getNetworkEvents(tabId?: string, since?: number): BrowserNetworkEvent[] {
@@ -2164,7 +2035,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     if (this.disposed) return;
     this.disposed = true;
 
-    this.stopOAuthRelay();
+    this.authService.stopOAuthRelay();
     if (this.stateSyncTimer) {
       clearTimeout(this.stateSyncTimer);
       this.stateSyncTimer = null;
@@ -2181,7 +2052,7 @@ border-radius:50%;animation:spin 0.8s linear infinite;margin:16px auto 0}
     this.splitLeftTabId = null;
     this.splitRightTabId = null;
     this.tabs.clear();
-    this.hostWindow = null;
+    this.layoutService.clear();
   }
 
   private emitLog(level: 'info' | 'warn' | 'error', message: string): void {

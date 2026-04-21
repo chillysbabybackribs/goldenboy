@@ -3,7 +3,6 @@ import type { AnyProviderId, CodexItem } from '../../shared/types/model';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import type { AgentProviderRequest, AgentToolName, AgentToolResult } from './AgentTypes';
-import { resolveRequestedToolPack } from './toolPacks';
 
 export const DEFAULT_PROVIDER_MAX_TOOL_TURNS = 20;
 export const MAX_PROVIDER_TOOL_TURNS = 40;
@@ -19,6 +18,7 @@ type ExecuteProviderToolCallInput = {
   request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus'>;
   toolName: AgentToolName;
   toolInput: unknown;
+  currentToolNames?: AgentToolName[];
 };
 
 type ProviderToolCallSuccess = {
@@ -61,10 +61,13 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
   const args = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
   switch (toolName) {
     case 'browser.navigate': return `Browser: navigate ${args.url || 'page'}`;
+    case 'browser.navigate_to': return `Browser: navigate to ${args.url || 'site'}`;
     case 'browser.search_web': return `Browser: search "${args.query || ''}"`;
     case 'browser.research_search': return `Browser: research "${args.query || ''}"`;
     case 'browser.click': return `Browser: click ${args.selector || args.text || 'element'}`;
     case 'browser.type': return `Browser: type ${args.selector || 'field'}`;
+    case 'browser.get_element_state': return `Browser: inspect element ${args.selector || 'element'}`;
+    case 'browser.select_option': return `Browser: select option ${args.selector || 'field'}`;
     case 'browser.back': return 'Browser: back';
     case 'browser.forward': return 'Browser: forward';
     case 'browser.reload': return 'Browser: reload';
@@ -73,6 +76,7 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'browser.get_tabs': return 'Browser: list tabs';
     case 'browser.create_tab': return `Browser: create tab ${args.url ? `(${args.url})` : ''}`.trim();
     case 'browser.close_tab': return 'Browser: close tab';
+    case 'browser.close_all_tabs': return 'Browser: close all tabs';
     case 'browser.activate_tab': return 'Browser: activate tab';
     case 'browser.hover': return `Browser: hover ${args.selector || 'element'}`;
     case 'browser.drag': return 'Browser: drag';
@@ -126,9 +130,12 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'subagent.wait': return 'Subagent: wait';
     case 'subagent.cancel': return 'Subagent: cancel';
     case 'subagent.list': return 'Subagent: list';
-    case 'runtime.request_tool_pack': return `Runtime: load tool pack ${args.pack || ''}`.trim();
-    case 'runtime.list_tool_packs': return 'Runtime: list tool packs';
-    case 'runtime.haiku_browser_session': return `Runtime: Haiku browser session ${args.prompt || 'prompt'}`;
+    case 'runtime.search_tools': return `Runtime: search tools "${args.query || ''}"`;
+    case 'runtime.load_tools': {
+      const tools = Array.isArray(args.tools) ? args.tools.join(', ') : '';
+      return `Runtime: load tools ${tools}`.trim();
+    }
+    case 'runtime.list_loaded_tools': return 'Runtime: list loaded tools';
     default: {
       const short = toolName.replace(/^(browser|filesystem|terminal|subagent|chat)\./, '');
       return short.replace(/_/g, ' ');
@@ -136,15 +143,51 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
   }
 }
 
-export function resolveToolPackExpansion(
-  request: Pick<AgentProviderRequest, 'toolCatalog'>,
+export function resolveLoadedToolExpansion(
+  request: Pick<AgentProviderRequest, 'loadableTools'>,
   toolName: AgentToolName,
   result: AgentToolResult,
-): { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | null {
-  if (toolName !== 'runtime.request_tool_pack') return null;
-  const pack = typeof result.data.pack === 'string' ? result.data.pack : null;
-  if (!pack || !request.toolCatalog?.length) return null;
-  return resolveRequestedToolPack(pack, request.toolCatalog);
+) : { tools: AgentToolName[] } | null {
+  if (toolName !== 'runtime.load_tools') return null;
+  const requested = Array.isArray(result.data.tools)
+    ? result.data.tools.filter((value): value is AgentToolName => typeof value === 'string')
+    : [];
+  if (requested.length === 0 || !request.loadableTools?.length) return null;
+  const available = new Set(request.loadableTools.map((tool) => tool.name));
+  const tools = requested.filter((name) => available.has(name));
+  if (tools.length === 0) return null;
+  return { tools };
+}
+
+function currentToolNames(input: ExecuteProviderToolCallInput): AgentToolName[] | undefined {
+  if (!input.currentToolNames?.length) return undefined;
+  return [...input.currentToolNames];
+}
+
+export function mergeLoadedTools(
+  currentTools: Array<Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'>>,
+  loadableTools: Array<Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'>>,
+  expansion: { tools: AgentToolName[] },
+): Array<Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'>> {
+  const currentNames = new Set(currentTools.map((tool) => tool.name));
+  const loadableByName = new Map(loadableTools.map((tool) => [tool.name, tool]));
+  const added = expansion.tools
+    .map((name) => loadableByName.get(name))
+    .filter((tool): tool is Pick<AgentProviderRequest['tools'][number], 'name' | 'description' | 'inputSchema'> => Boolean(tool))
+    .filter((tool) => !currentNames.has(tool.name));
+
+  return [...currentTools, ...added];
+}
+
+export function loadedToolNamesFromResult(result: AgentToolResult): AgentToolName[] {
+  return Array.isArray(result.data.tools)
+    ? result.data.tools.filter((value): value is AgentToolName => typeof value === 'string')
+    : [];
+}
+
+export function describeLoadedToolNames(result: AgentToolResult): string {
+  const tools = loadedToolNamesFromResult(result);
+  return tools.length > 0 ? tools.join(', ') : 'none';
 }
 
 export function encodeToolInput(value: unknown): string {
@@ -185,6 +228,7 @@ export async function executeProviderToolCall(
       agentId: input.request.agentId,
       mode: input.request.mode,
       taskId: input.request.taskId,
+      toolNames: currentToolNames(input),
       onProgress: input.request.onStatus,
     });
 
@@ -258,8 +302,7 @@ function recordToolMemory(
     serializeToolMemory({
       toolName: input.toolName,
       toolInput: input.toolInput,
-      result: outcome.result,
-      error: outcome.error,
+      ...outcome,
     }),
     input.providerId,
     input.request.runId,

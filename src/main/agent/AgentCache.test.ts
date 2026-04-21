@@ -15,8 +15,9 @@ describe('AgentCache', () => {
     const relativePath = path.relative(process.cwd(), TEMP_FILE);
     const firstKey = makeToolCacheKey('filesystem.read', { path: relativePath });
 
-    await new Promise(resolve => setTimeout(resolve, 20));
     fs.writeFileSync(TEMP_FILE, 'second revision', 'utf-8');
+    const nextMtime = new Date(Date.now() + 1000);
+    fs.utimesSync(TEMP_FILE, nextMtime, nextMtime);
     const secondKey = makeToolCacheKey('filesystem.read', { path: relativePath });
 
     expect(secondKey).not.toBe(firstKey);

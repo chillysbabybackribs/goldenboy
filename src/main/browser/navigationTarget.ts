@@ -26,6 +26,43 @@ export type NormalizedNavigationTarget = {
   kind: NavigationTargetKind;
 };
 
+export function normalizeWebsiteTarget(rawInput: string): string | null {
+  const trimmed = rawInput.trim();
+  if (!trimmed || /\s/.test(trimmed)) return null;
+
+  if (URL_SCHEME_RE.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const protocol = parsed.protocol.toLowerCase();
+      if (protocol === 'http:' || protocol === 'https:') return trimmed;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  const host = hostToken(trimmed);
+  const remainder = trimmed.slice(host.length);
+
+  if (LOCALHOST_WITH_PORT_RE.test(host) || BRACKETED_IPV6_WITH_PORT_RE.test(host) || isIpv4WithOptionalPort(host)) {
+    return `http://${trimmed}`;
+  }
+
+  if (/^www\.[a-z0-9-]+$/i.test(host)) {
+    return `https://${host}.com${remainder}`;
+  }
+
+  if (DOMAIN_WITH_PORT_RE.test(host)) {
+    return `https://${trimmed}`;
+  }
+
+  if (/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(host)) {
+    return `https://${host}.com${remainder}`;
+  }
+
+  return null;
+}
+
 export function normalizeNavigationTarget(
   rawInput: string,
   input: {

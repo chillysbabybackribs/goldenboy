@@ -66,6 +66,7 @@ async function completeTurn(
 }
 
 function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProviderRequest {
+  const resolvedTools = overrides.tools ?? [];
   return {
     runId: 'run-1',
     agentId: PRIMARY_PROVIDER_ID,
@@ -74,7 +75,8 @@ function buildRequest(overrides: Partial<AgentProviderRequest> = {}): AgentProvi
     systemPrompt: 'You are a helpful assistant.',
     task: 'What is 2 + 2?',
     contextPrompt: '',
-    tools: [],
+    tools: resolvedTools,
+    loadableTools: overrides.loadableTools ?? resolvedTools,
     maxToolTurns: 2,
     ...overrides,
   };
@@ -102,6 +104,10 @@ describe('CodexProvider', () => {
     spawnMock
       .mockReturnValueOnce(toolTurn)
       .mockReturnValueOnce(finalTurn);
+    let firstPrompt = '';
+    toolTurn.stdin?.on('data', (chunk) => {
+      firstPrompt += chunk.toString();
+    });
 
     executeMock.mockResolvedValue({
       summary: 'Listed 3 files',
@@ -179,11 +185,18 @@ describe('CodexProvider', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
       }),
     );
+    expect(firstPrompt).toContain('# Available Tools');
+    expect(firstPrompt).toContain('filesystem.list');
+    expect(firstPrompt).not.toContain('tool-runtime.html');
+    expect(firstPrompt).not.toContain('window.runTool');
+    expect(firstPrompt).not.toContain('## Tool Catalog');
     expect(executeMock).toHaveBeenCalledWith('filesystem.list', { path: '.' }, {
       runId: 'run-1',
       agentId: PRIMARY_PROVIDER_ID,
       mode: 'unrestricted-dev',
       taskId: 'task-1',
+      toolNames: ['filesystem.list'],
+      onProgress: undefined,
     });
     expect(recordToolMessageMock).toHaveBeenCalledTimes(1);
     expect(tokens).toEqual(['Found the files.']);
@@ -268,7 +281,7 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('expands the active tool scope after requesting a tool pack', async () => {
+  it('expands the active tool scope after loading exact tools', async () => {
     const expandTurn = createMockChildProcess();
     const workTurn = createMockChildProcess();
     const finalTurn = createMockChildProcess();
@@ -276,16 +289,20 @@ describe('CodexProvider', () => {
       .mockReturnValueOnce(expandTurn)
       .mockReturnValueOnce(workTurn)
       .mockReturnValueOnce(finalTurn);
+    let firstPrompt = '';
+    let secondPrompt = '';
+    expandTurn.stdin?.on('data', (chunk) => {
+      firstPrompt += chunk.toString();
+    });
+    workTurn.stdin?.on('data', (chunk) => {
+      secondPrompt += chunk.toString();
+    });
 
     executeMock
       .mockResolvedValueOnce({
-        summary: 'Requested tool pack: implementation',
+        summary: 'Loaded 1 tool',
         data: {
-          pack: 'implementation',
-          description: 'Local code reading, editing, and build execution.',
           tools: ['filesystem.list'],
-          scope: 'named',
-          relatedPackIds: ['file-edit'],
         },
       })
       .mockResolvedValueOnce({
@@ -298,25 +315,25 @@ describe('CodexProvider', () => {
       task: 'Load the needed tools, inspect the workspace, and answer.',
       tools: [
         {
-          name: 'runtime.request_tool_pack',
-          description: 'Request a tool pack.',
+          name: 'runtime.load_tools',
+          description: 'Load exact tools.',
           inputSchema: {
             type: 'object',
             additionalProperties: false,
-            properties: { pack: { type: 'string' } },
-            required: ['pack'],
+            properties: { tools: { type: 'array', items: { type: 'string' } } },
+            required: ['tools'],
           },
         },
       ],
-      toolCatalog: [
+      loadableTools: [
         {
-          name: 'runtime.request_tool_pack',
-          description: 'Request a tool pack.',
+          name: 'runtime.load_tools',
+          description: 'Load exact tools.',
           inputSchema: {
             type: 'object',
             additionalProperties: false,
-            properties: { pack: { type: 'string' } },
-            required: ['pack'],
+            properties: { tools: { type: 'array', items: { type: 'string' } } },
+            required: ['tools'],
           },
         },
         {
@@ -338,11 +355,11 @@ describe('CodexProvider', () => {
         kind: 'tool_calls',
         tool_calls: [
           {
-            name: 'runtime.request_tool_pack',
-            arguments_json: '{"pack":"implementation"}',
+            name: 'runtime.load_tools',
+            arguments_json: '{"tools":["filesystem.list"]}',
           },
         ],
-        message: 'Need the implementation pack.',
+        message: 'Need filesystem listing first.',
       }),
     );
     await completeTurn(
@@ -369,117 +386,12 @@ describe('CodexProvider', () => {
 
     const result = await resultPromise;
 
-    expect(executeMock).toHaveBeenNthCalledWith(1, 'runtime.request_tool_pack', { pack: 'implementation' }, expect.any(Object));
+    expect(executeMock).toHaveBeenNthCalledWith(1, 'runtime.load_tools', { tools: ['filesystem.list'] }, expect.any(Object));
     expect(executeMock).toHaveBeenNthCalledWith(2, 'filesystem.list', { path: '.' }, expect.any(Object));
+    expect(firstPrompt).toContain('runtime.load_tools');
+    expect(firstPrompt).not.toContain('filesystem.list');
+    expect(secondPrompt).toContain('filesystem.list');
     expect(result.output).toBe('Expansion worked.');
-  });
-
-  it('auto-expands a related tool pack when the model says the current scope is missing browser tools', async () => {
-    const blockedTurn = createMockChildProcess();
-    const workTurn = createMockChildProcess();
-    const finalTurn = createMockChildProcess();
-    spawnMock
-      .mockReturnValueOnce(blockedTurn)
-      .mockReturnValueOnce(workTurn)
-      .mockReturnValueOnce(finalTurn);
-
-    executeMock.mockResolvedValueOnce({
-      summary: 'Read browser tabs',
-      data: { tabs: [{ id: 'tab-1' }, { id: 'tab-2' }] },
-    });
-
-    const provider = new CodexProvider({ providerId: PRIMARY_PROVIDER_ID, modelId: PRIMARY_PROVIDER_ID });
-    const resultPromise = provider.invoke(buildRequest({
-      task: 'Close the extra browser tabs and tell me what remains open.',
-      maxToolTurns: 3,
-      tools: [
-        {
-          name: 'runtime.request_tool_pack',
-          description: 'Request a tool pack.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { pack: { type: 'string' } },
-            required: ['pack'],
-          },
-        },
-        {
-          name: 'runtime.list_tool_packs',
-          description: 'List tool packs.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {},
-          },
-        },
-      ],
-      toolCatalog: [
-        {
-          name: 'runtime.request_tool_pack',
-          description: 'Request a tool pack.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { pack: { type: 'string' } },
-            required: ['pack'],
-          },
-        },
-        {
-          name: 'runtime.list_tool_packs',
-          description: 'List tool packs.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {},
-          },
-        },
-        {
-          name: 'browser.get_tabs',
-          description: 'Return open browser tabs.',
-          inputSchema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {},
-          },
-        },
-      ],
-    }));
-
-    await completeTurn(
-      blockedTurn,
-      JSON.stringify({
-        kind: 'final',
-        tool_calls: [],
-        message: 'I cannot continue because the current scope does not have browser tab tools.',
-      }),
-    );
-    await completeTurn(
-      workTurn,
-      JSON.stringify({
-        kind: 'tool_calls',
-        tool_calls: [
-          {
-            name: 'browser.get_tabs',
-            arguments_json: '{}',
-          },
-        ],
-        message: 'Now checking the current browser tabs.',
-      }),
-    );
-    await completeTurn(
-      finalTurn,
-      JSON.stringify({
-        kind: 'final',
-        tool_calls: [],
-        message: 'Two tabs remain open.',
-      }),
-    );
-
-    const result = await resultPromise;
-
-    expect(executeMock).toHaveBeenCalledTimes(1);
-    expect(executeMock).toHaveBeenCalledWith('browser.get_tabs', {}, expect.any(Object));
-    expect(result.output).toBe('Two tabs remain open.');
   });
 
   it('aborts an active Codex process', () => {

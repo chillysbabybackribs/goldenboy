@@ -3,7 +3,7 @@ import * as path from 'path';
 import { app } from 'electron';
 import { AppState, createDefaultAppState, ExecutionSplitState, TaskRecord } from '../../shared/types/appState';
 import { PhysicalWindowRole } from '../../shared/types/windowRoles';
-import { isProviderId } from '../../shared/types/model';
+import { isProviderId, ProviderId } from '../../shared/types/model';
 
 const STATE_FILE = 'workspace-state.json';
 
@@ -26,7 +26,48 @@ type PersistedState = {
   tasks?: PersistedTaskRecord[];
   activeTaskId?: string | null;
   tokenUsage?: { inputTokens: number; outputTokens: number };
+  taskTokenUsage?: AppState['taskTokenUsage'];
 };
+
+function normalizeTaskTokenUsage(value: unknown): AppState['taskTokenUsage'] {
+  if (!value || typeof value !== 'object') return {};
+  const result: AppState['taskTokenUsage'] = {};
+  for (const [taskId, rawUsage] of Object.entries(value as Record<string, unknown>)) {
+    if (!rawUsage || typeof rawUsage !== 'object') continue;
+    const usage = rawUsage as Record<string, unknown>;
+    const inputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+    const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+    const apiCalls = typeof usage.apiCalls === 'number' ? usage.apiCalls : 0;
+    const updatedAt = typeof usage.updatedAt === 'number' ? usage.updatedAt : Date.now();
+    const lastProviderId = (typeof usage.lastProviderId === 'string' && isProviderId(usage.lastProviderId))
+      ? usage.lastProviderId
+      : null;
+
+    const providerBreakdown: Partial<Record<ProviderId, { inputTokens: number; outputTokens: number; apiCalls: number }>> = {};
+    const rawBreakdown = (usage.providerBreakdown && typeof usage.providerBreakdown === 'object')
+      ? usage.providerBreakdown as Record<string, unknown>
+      : {};
+    for (const [providerId, rawProviderUsage] of Object.entries(rawBreakdown)) {
+      if (!isProviderId(providerId) || !rawProviderUsage || typeof rawProviderUsage !== 'object') continue;
+      const providerUsage = rawProviderUsage as Record<string, unknown>;
+      providerBreakdown[providerId] = {
+        inputTokens: typeof providerUsage.inputTokens === 'number' ? providerUsage.inputTokens : 0,
+        outputTokens: typeof providerUsage.outputTokens === 'number' ? providerUsage.outputTokens : 0,
+        apiCalls: typeof providerUsage.apiCalls === 'number' ? providerUsage.apiCalls : 0,
+      };
+    }
+
+    result[taskId] = {
+      inputTokens,
+      outputTokens,
+      apiCalls,
+      updatedAt,
+      lastProviderId,
+      providerBreakdown,
+    };
+  }
+  return result;
+}
 
 export function loadPersistedState(): Partial<PersistedState> {
   try {
@@ -82,6 +123,7 @@ export function savePersistedState(state: AppState): void {
       })),
       activeTaskId: state.activeTaskId,
       tokenUsage: state.tokenUsage,
+      taskTokenUsage: state.taskTokenUsage,
     };
     const filePath = getStatePath();
     fs.writeFileSync(filePath, JSON.stringify(persisted, null, 2), 'utf-8');
@@ -138,6 +180,7 @@ export function buildInitialState(): AppState {
     typeof persisted.tokenUsage.outputTokens === 'number')
     ? persisted.tokenUsage
     : defaults.tokenUsage;
+  const taskTokenUsage = normalizeTaskTokenUsage(persisted.taskTokenUsage);
 
   return {
     ...defaults,
@@ -146,5 +189,6 @@ export function buildInitialState(): AppState {
     tasks,
     activeTaskId,
     tokenUsage,
+    taskTokenUsage,
   };
 }

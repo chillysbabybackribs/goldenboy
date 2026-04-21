@@ -52,6 +52,7 @@ const IPC_CHANNELS = {
   BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
   BROWSER_SPLIT_TAB: 'browser:split-tab',
   BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
+  BROWSER_ATTACH_SURFACE: 'browser:attach-surface',
   BROWSER_ZOOM_IN: 'browser:zoom-in',
   BROWSER_ZOOM_OUT: 'browser:zoom-out',
   BROWSER_ZOOM_RESET: 'browser:zoom-reset',
@@ -254,6 +255,7 @@ const api = {
     getExtensions() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_EXTENSIONS); },
     splitTab(tabId?: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SPLIT_TAB, tabId); },
     clearSplitView() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_SPLIT_VIEW); },
+    attachSurface(role: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_ATTACH_SURFACE, role); },
     // Downloads
     getDownloads() { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_DOWNLOADS); },
     cancelDownload(downloadId: string) { return ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CANCEL_DOWNLOAD, downloadId); },

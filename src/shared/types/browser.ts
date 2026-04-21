@@ -123,6 +123,7 @@ export type FindInPageState = {
 // ─── Settings ───────────────────────────────────────────────────────────────
 
 export type BrowserSettings = {
+  contentMode: 'strict-clean' | 'compatibility';
   homepage: string;
   searchEngine: 'google' | 'duckduckgo' | 'bing';
   defaultZoom: number;
@@ -170,6 +171,7 @@ export type BrowserErrorInfo = {
 
 export type BrowserState = {
   surfaceStatus: BrowserSurfaceStatus;
+  hostWindowRole: import('./windowRoles').PhysicalWindowRole | null;
   navigation: BrowserNavigationState;
   profile: BrowserProfile;
   tabs: TabInfo[];
@@ -191,6 +193,7 @@ export type BrowserState = {
 
 export function createDefaultSettings(): BrowserSettings {
   return {
+    contentMode: 'strict-clean',
     homepage: 'https://www.google.com',
     searchEngine: 'google',
     defaultZoom: 1.0,
@@ -204,6 +207,7 @@ export function createDefaultSettings(): BrowserSettings {
 export function createDefaultBrowserState(): BrowserState {
   return {
     surfaceStatus: 'idle',
+    hostWindowRole: null,
     navigation: {
       url: '',
       title: '',

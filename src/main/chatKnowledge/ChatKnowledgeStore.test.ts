@@ -38,4 +38,18 @@ describe('ChatKnowledgeStore', () => {
     expect(context).toContain('### Recent Prior Messages');
     expect(context).toContain('Previous answer with the earlier plan.');
   });
+
+  it('can omit the live user turn when the prompt already carries it', () => {
+    const store = new ChatKnowledgeStore();
+    const taskId = 'task-chat-context-no-echo';
+
+    store.recordAssistantMessage(taskId, 'Previous answer with the earlier plan.');
+    const current = store.recordUserMessage(taskId, 'Follow the same plan but include tests.');
+
+    const context = store.buildInvocationContext(taskId, current.id, { includeCurrentMessage: false });
+
+    expect(context).not.toContain('### Current User Message');
+    expect(context).toContain('### Recent Prior Messages');
+    expect(context).toContain('Previous answer with the earlier plan.');
+  });
 });

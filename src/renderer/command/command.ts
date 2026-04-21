@@ -1,5 +1,6 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
 import {
+  GEMINI_PROVIDER_ID,
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   ProviderId,
@@ -20,6 +21,7 @@ import {
   replaceWithError as replaceWithErrorInternal,
   replaceWithResult as replaceWithResultInternal,
 } from './live-run.js';
+import { attachmentIconSvg, getAttachmentFileKind } from './attachmentIcons.js';
 
 const getWorkspaceAPI = () => (window as any).workspaceAPI as WorkspaceAPI | null;
 const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
@@ -51,6 +53,7 @@ const chatNewBtn = document.getElementById('chatNewBtn') as HTMLButtonElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
 const modelBtnPrimary = document.getElementById('modelBtnPrimary') as HTMLButtonElement;
 const modelBtnHaiku = document.getElementById('modelBtnHaiku') as HTMLButtonElement;
+const modelBtnGemini = document.getElementById('modelBtnGemini') as HTMLButtonElement;
 const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
 const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
 const chatZoomInBtn = document.getElementById('chatZoomInBtn') as HTMLButtonElement;
@@ -65,6 +68,8 @@ const commandBrowserStatus = document.getElementById('commandBrowserStatus') as 
 const commandBrowserAttachBtn = document.getElementById('commandBrowserAttachBtn') as HTMLButtonElement;
 
 // Agent tabs
+const agentTabsShell = document.getElementById('agentTabsShell') as HTMLDivElement;
+const agentSidebarToggleBtn = document.getElementById('agentSidebarToggleBtn') as HTMLButtonElement;
 const agentTabs = document.getElementById('agentTabs') as HTMLDivElement;
 const agentTabsList = document.getElementById('agentTabsList') as HTMLDivElement;
 const agentTabNewBtn = document.getElementById('agentTabNewBtn') as HTMLButtonElement;
@@ -95,7 +100,9 @@ const imgFileInput = document.getElementById('imgFileInput') as HTMLInputElement
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-type SelectableOwner = typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID;
+let activeTurnWrapper: HTMLElement | null = null;
+
+type SelectableOwner = typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID | typeof GEMINI_PROVIDER_ID;
 type ExplicitSelectableOwner = SelectableOwner;
 type ProviderRuntimeView = {
   status?: string;
@@ -104,11 +111,13 @@ type ProviderRuntimeView = {
   errorDetail?: string | null;
 };
 
-const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID];
 const SELECTED_OWNER_STORAGE_KEY = 'command-center-selected-owner';
+const AGENT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'command-center-agent-sidebar-collapsed';
 const OWNER_LABELS: Record<SelectableOwner, string> = {
   [PRIMARY_PROVIDER_ID]: 'Codex',
   [HAIKU_PROVIDER_ID]: 'Haiku 4.5',
+  [GEMINI_PROVIDER_ID]: 'Gemini',
 };
 
 function getOwnerDisplayLabel(owner: SelectableOwner): string {
@@ -130,6 +139,7 @@ let chatScrollControlsIdleTimer: number | null = null;
 let lastAgentResponseText = '';
 let chatCopyFeedbackTimer: number | null = null;
 let chatZoom = 1;
+let agentSidebarCollapsed = true;
 const runningTaskIds = new Set<string>();
 let completedExpanded = false;
 let lastTaskListSignature = '';
@@ -149,7 +159,7 @@ function isSelectableOwner(value: string): value is SelectableOwner {
 }
 
 function isExplicitSelectableOwner(value: string): value is ExplicitSelectableOwner {
-  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
+  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
 }
 
 function getProviderRuntime(state: any, owner: ExplicitSelectableOwner): ProviderRuntimeView | null {
@@ -180,6 +190,25 @@ function persistSelectedOwner(): void {
   }
 }
 
+function getStoredAgentSidebarCollapsed(): boolean {
+  try {
+    const stored = window.localStorage.getItem(AGENT_SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (stored === 'false') return false;
+    if (stored === 'true') return true;
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+  return true;
+}
+
+function persistAgentSidebarCollapsed(): void {
+  try {
+    window.localStorage.setItem(AGENT_SIDEBAR_COLLAPSED_STORAGE_KEY, String(agentSidebarCollapsed));
+  } catch {
+    // Ignore storage failures in restricted renderer environments.
+  }
+}
+
 function getFallbackSelectableOwner(state: any, preferredOwner: SelectableOwner = PRIMARY_PROVIDER_ID): SelectableOwner {
   if (canSelectOwner(state, preferredOwner)) return preferredOwner;
   return SELECTABLE_OWNERS.find((owner) => canSelectOwner(state, owner)) ?? preferredOwner;
@@ -189,6 +218,42 @@ function normalizeSelectedOwner(nextOwner: SelectableOwner, state: any): Selecta
   return canSelectOwner(state, nextOwner) ? nextOwner : getFallbackSelectableOwner(state, nextOwner);
 }
 
+function getLastUsedOwnerForTask(task: any | null, state: any): SelectableOwner | null {
+  if (task?.owner && isExplicitSelectableOwner(task.owner)) return task.owner;
+
+  const lastProviderId = task?.id
+    ? state?.taskTokenUsage?.[task.id]?.lastProviderId
+    : null;
+
+  return typeof lastProviderId === 'string' && isExplicitSelectableOwner(lastProviderId)
+    ? lastProviderId
+    : null;
+}
+
+function syncSelectedOwnerForActiveTask(state: any): void {
+  const activeTaskId: string | null = state?.activeTaskId ?? null;
+  const activeTask = activeTaskId
+    ? state?.tasks?.find((task: any) => task.id === activeTaskId) ?? null
+    : null;
+  const taskScopedOwner = getLastUsedOwnerForTask(activeTask, state);
+
+  if (taskScopedOwner) {
+    if (selectedOwner !== taskScopedOwner) {
+      selectedOwner = taskScopedOwner;
+      persistSelectedOwner();
+    }
+    return;
+  }
+
+  const normalizedOwner = normalizeSelectedOwner(selectedOwner, state);
+  if (normalizedOwner !== selectedOwner) {
+    selectedOwner = normalizedOwner;
+    persistSelectedOwner();
+    return;
+  }
+  selectedOwner = normalizedOwner;
+}
+
 function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as any).__lastState): void {
   selectedOwner = normalizeSelectedOwner(nextOwner, state);
   persistSelectedOwner();
@@ -196,7 +261,9 @@ function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as an
 }
 
 function getModelBtn(owner: ExplicitSelectableOwner): HTMLButtonElement {
-  return owner === PRIMARY_PROVIDER_ID ? modelBtnPrimary : modelBtnHaiku;
+  if (owner === PRIMARY_PROVIDER_ID) return modelBtnPrimary;
+  if (owner === HAIKU_PROVIDER_ID) return modelBtnHaiku;
+  return modelBtnGemini;
 }
 
 function isActiveTabRunning(): boolean {
@@ -206,7 +273,7 @@ function isActiveTabRunning(): boolean {
 
 function syncModelToggleState(state: any = (window as any).__lastState): void {
   const busy = isActiveTabRunning();
-  for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
+  for (const owner of SELECTABLE_OWNERS as ExplicitSelectableOwner[]) {
     const btn = getModelBtn(owner);
     const runtime = getProviderRuntime(state, owner);
     const status = runtime?.status ?? 'unavailable';
@@ -226,7 +293,7 @@ function syncModelToggleState(state: any = (window as any).__lastState): void {
 function initializeModelToggle(): void {
   selectedOwner = getStoredSelectedOwner();
 
-  for (const owner of [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as ExplicitSelectableOwner[]) {
+  for (const owner of SELECTABLE_OWNERS as ExplicitSelectableOwner[]) {
     getModelBtn(owner).addEventListener('click', () => {
       if (isActiveTabRunning()) return;
       setSelectedOwner(owner, (window as any).__lastState);
@@ -548,6 +615,11 @@ function updateChatScrollControls(): void {
   chatScrollBottomBtn.hidden = !inUpperHalf;
 }
 
+function updateChatLayoutState(): void {
+  // Short-thread centering is no longer wanted — each turn anchors to the top.
+  chatInner.classList.remove('cc-chat-inner-short-thread');
+}
+
 function performChatScrollToBottom(): void {
   suppressChatScrollEvent = true;
   chatThread.scrollTop = chatThread.scrollHeight;
@@ -576,6 +648,10 @@ function scheduleChatScrollToBottom(force = false, frames = 3): void {
   chatScrollRaf = window.requestAnimationFrame(tick);
 }
 
+function hasActiveTurn(): boolean {
+  return Boolean(chatInner.querySelector('.chat-turn-active'));
+}
+
 chatThread.addEventListener('scroll', () => {
   if (suppressChatScrollEvent) return;
   if (suppressNextChatScrollActivation) {
@@ -583,7 +659,10 @@ chatThread.addEventListener('scroll', () => {
   } else {
     activateChatScrollControls();
   }
-  chatAutoPinned = isChatNearBottom();
+  // While a turn is active (user message pinned at top), never auto-pin to bottom.
+  if (!hasActiveTurn()) {
+    chatAutoPinned = isChatNearBottom();
+  }
   updateChatScrollControls();
 });
 
@@ -605,17 +684,20 @@ chatThread.addEventListener('wheel', (e: WheelEvent) => {
 
 chatThread.addEventListener('toggle', (event: Event) => {
   const target = event.target as HTMLElement | null;
-  if (!target?.classList.contains('chat-tool-details')) return;
-  scheduleChatScrollToBottom(true, 6);
+  if (!target?.classList.contains('chat-process-details')) return;
+  // Don't auto-scroll when a user expands the tool disclosure — they opened
+  // it to read; leave the viewport where it is.
 }, true);
 
 const chatResizeObserver = new ResizeObserver(() => {
   if (chatEmptyState.parentNode) return;
+  updateChatLayoutState();
   scheduleChatScrollToBottom(false, 4);
 });
 chatResizeObserver.observe(chatThread);
 
 const chatMutationObserver = new MutationObserver(() => {
+  updateChatLayoutState();
   if (chatEmptyState.parentNode) return;
   scheduleChatScrollToBottom(false, 1);
   updateChatScrollControls();
@@ -660,40 +742,51 @@ function renderMarkdown(text: string): string {
   let paragraph: string[] = [];
   let listItems: string[] = [];
   let listOrdered = false;
+  /** Tracks whether the previous non-empty block was a list item — lets us merge
+   *  lists separated by blank lines into a single <ol>/<ul>. */
+  let lastBlockWasList = false;
 
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
     parts.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
     paragraph = [];
+    lastBlockWasList = false;
   };
 
   const flushList = () => {
     if (listItems.length === 0) return;
     const tag = listOrdered ? 'ol' : 'ul';
+    // Use CSS-driven numbering: ignore whatever numbers the model emitted —
+    // sequential output is what the reader wants.
     parts.push(`<${tag}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
     listItems = [];
     listOrdered = false;
+    lastBlockWasList = true;
   };
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
+      // Blank line: flush paragraph but DON'T flush the list yet — a following
+      // list item of the same kind should extend the current list.
       flushParagraph();
-      flushList();
       continue;
     }
 
-    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       flushParagraph();
       flushList();
-      const level = Math.min(3, heading[1].length);
+      const level = Math.min(4, heading[1].length);
       parts.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      lastBlockWasList = false;
       continue;
     }
 
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      // If we were building an ordered list, flush it first
+    const isUnordered = trimmed.startsWith('- ') || trimmed.startsWith('* ');
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+
+    if (isUnordered) {
       if (listItems.length > 0 && listOrdered) flushList();
       flushParagraph();
       listOrdered = false;
@@ -701,9 +794,7 @@ function renderMarkdown(text: string): string {
       continue;
     }
 
-    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
     if (orderedMatch) {
-      // If we were building an unordered list, flush it first
       if (listItems.length > 0 && !listOrdered) flushList();
       flushParagraph();
       listOrdered = true;
@@ -711,12 +802,14 @@ function renderMarkdown(text: string): string {
       continue;
     }
 
+    // Non-list content after a list — flush the list now.
     flushList();
     paragraph.push(trimmed);
   }
 
   flushParagraph();
   flushList();
+  void lastBlockWasList;
   return parts.join('');
 }
 
@@ -750,14 +843,7 @@ function formatAttachmentSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function appendUserTextMessage(text: string): void {
-  const bubble = document.createElement('div');
-  bubble.className = 'chat-msg chat-msg-user';
-  bubble.textContent = text;
-  chatInner.appendChild(bubble);
-}
-
-function appendUserAttachmentMessage(imageDataUrls: string[], documents: DocumentAttachmentPreview[]): void {
+function appendUserAttachmentMessageTo(container: HTMLElement, imageDataUrls: string[], documents: DocumentAttachmentPreview[]): void {
   if (imageDataUrls.length === 0 && documents.length === 0) return;
 
   const el = document.createElement('div');
@@ -780,22 +866,19 @@ function appendUserAttachmentMessage(imageDataUrls: string[], documents: Documen
     const docContainer = document.createElement('div');
     docContainer.className = 'chat-msg-documents';
     for (const docAttachment of documents) {
+      const kind = getAttachmentFileKind(docAttachment.name, docAttachment.mediaType);
       const card = document.createElement('div');
-      card.className = 'chat-msg-document';
+      card.className = 'chat-msg-document chat-msg-document-tile';
+      card.dataset.fileKind = kind;
 
-      const header = document.createElement('div');
-      header.className = 'chat-msg-document-header';
+      const iconWrap = document.createElement('div');
+      iconWrap.className = 'chat-msg-document-icon-wrap';
+      iconWrap.innerHTML = attachmentIconSvg(kind);
 
-      const icon = document.createElement('span');
-      icon.className = 'chat-msg-document-icon';
-      icon.innerHTML =
-        '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-      const title = document.createElement('span');
+      const title = document.createElement('div');
       title.className = 'chat-msg-document-name';
       title.textContent = docAttachment.name;
-
-      header.append(icon, title);
+      title.title = docAttachment.name;
 
       const meta = document.createElement('div');
       meta.className = 'chat-msg-document-meta';
@@ -807,7 +890,7 @@ function appendUserAttachmentMessage(imageDataUrls: string[], documents: Documen
       ].filter((part): part is string => Boolean(part));
       meta.textContent = metaParts.join(' • ');
 
-      card.append(header, meta);
+      card.append(iconWrap, title, meta);
 
       if (docAttachment.excerpt?.trim()) {
         const excerpt = document.createElement('div');
@@ -826,15 +909,39 @@ function appendUserAttachmentMessage(imageDataUrls: string[], documents: Documen
     el.appendChild(docContainer);
   }
 
-  chatInner.appendChild(el);
+  container.appendChild(el);
 }
 
 function appendUserMessage(text: string, imageDataUrls: string[] = [], documents: DocumentAttachmentPreview[] = []): void {
   if (chatEmptyState.parentNode) chatEmptyState.remove();
+
+  // Hide all previous turns — each new turn takes over the chat viewport.
+  // Prior conversation is preserved via task history.
+  chatInner.querySelectorAll<HTMLElement>('.chat-turn').forEach(el => {
+    el.classList.add('chat-turn-hidden');
+    el.classList.remove('chat-turn-active');
+  });
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'chat-turn chat-turn-active';
+  chatInner.appendChild(wrapper);
+  activeTurnWrapper = wrapper;
+
   const hasText = Boolean(text.trim());
-  if (hasText) appendUserTextMessage(text);
-  appendUserAttachmentMessage(imageDataUrls, documents);
-  scheduleChatScrollToBottom(true);
+  if (hasText) {
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-msg chat-msg-user';
+    bubble.textContent = text;
+    wrapper.appendChild(bubble);
+  }
+  if (imageDataUrls.length > 0 || documents.length > 0) {
+    appendUserAttachmentMessageTo(wrapper, imageDataUrls, documents);
+  }
+
+  chatAutoPinned = false;
+  suppressChatScrollEvent = true;
+  chatThread.scrollTop = 0;
+  queueMicrotask(() => { suppressChatScrollEvent = false; });
 }
 
 function getAttachmentImageDataUrls(attachments?: InvocationAttachment[]): string[] {
@@ -872,6 +979,7 @@ function getTaskMemoryAttachments(entry: TaskMemoryEntry): InvocationAttachment[
 function clearChatThread(): void {
   chatInner.innerHTML = '';
   chatInner.appendChild(chatEmptyState);
+  updateChatLayoutState();
   updateLastAgentResponseText('');
 }
 
@@ -932,7 +1040,11 @@ async function copyLastAgentResponse(): Promise<void> {
 }
 
 function createLiveRunCard(taskId: string, _provider: string, prompt?: string): void {
-  createLiveRunCardInternal(taskId, _provider, chatInner, {
+  const container = activeTurnWrapper ?? chatInner;
+  // Keep activeTurnWrapper set until the turn completes (flushFinalResult/flushError
+  // removes the chat-turn-active class on the wrapper). This tells the scroll handler
+  // to leave chatAutoPinned alone during streaming.
+  createLiveRunCardInternal(taskId, _provider, container, {
     renderMarkdown,
     updateLastAgentResponseText,
     scheduleChatScrollToBottom,
@@ -942,6 +1054,15 @@ function createLiveRunCard(taskId: string, _provider: string, prompt?: string): 
     },
   }, prompt);
   flushPendingLiveProgress(taskId);
+}
+
+function shouldRenderLiveStatusText(text: string): boolean {
+  if (!text || /^Turn completed/.test(text)) return false;
+  return text !== 'Starting task...'
+    && text !== 'Routing web search for fast browser-first execution.'
+    && text !== 'Opening a dedicated search tab while the first tool call is prepared.'
+    && text !== 'Browser search will open on the first tool call.'
+    && text !== 'Preparing the browser workflow.';
 }
 
 function enqueuePendingLiveProgress(taskId: string, progress: any): void {
@@ -970,7 +1091,7 @@ function handleLiveProgress(progress: any): void {
       appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
     } else if (text.startsWith('Tool result: ')) {
       appendToolActivity(progress.taskId, 'result', text.slice('Tool result: '.length));
-    } else if (text && !/^Turn completed/.test(text)) {
+    } else if (shouldRenderLiveStatusText(text)) {
       appendThought(progress.taskId, text);
     }
   }
@@ -1018,7 +1139,11 @@ function appendModelMemoryEntry(entry: TaskMemoryEntry): void {
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-model chat-msg-done';
   el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
-  chatInner.appendChild(el);
+
+  const container = activeTurnWrapper ?? chatInner;
+  activeTurnWrapper = null;
+  container.appendChild(el);
+  container.classList.remove('chat-turn-active');
   scheduleChatScrollToBottom(true);
 }
 
@@ -1253,7 +1378,7 @@ async function submitChat(): Promise<void> {
     runningTaskIds.add(taskId);
     syncStopBtn();
     syncModelToggleState();
-    createLiveRunCard(taskId, resolvedOwner, prompt || undefined);
+    createLiveRunCard(taskId, resolvedOwner);
 
     const result = await modelApi.invoke(taskId, effectivePrompt, resolvedOwner, invokeOptions);
     replaceWithResult(taskId, result, result?.providerId || resolvedOwner);
@@ -1333,7 +1458,9 @@ chatInput.addEventListener('keydown', (e: KeyboardEvent) => {
 
 // Idle-state suggestion chips — fill input on click
 chatEmptyState.addEventListener('click', (e: MouseEvent) => {
-  const chip = (e.target as HTMLElement).closest('.cc-idle-chip') as HTMLElement | null;
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const chip = target.closest('.cc-idle-chip') as HTMLElement | null;
   if (!chip) return;
   const prompt = chip.dataset.prompt;
   if (!prompt) return;
@@ -1536,6 +1663,30 @@ function updateTokenUsageDisplay(state: any): void {
 
 const COMPLETED_PREVIEW_COUNT = 3;
 
+function syncAgentSidebarUi(hasVisibleTasks: boolean): void {
+  agentTabsShell.hidden = !hasVisibleTasks;
+  agentTabsShell.classList.toggle('is-collapsed', agentSidebarCollapsed);
+  agentSidebarToggleBtn.setAttribute('aria-expanded', String(!agentSidebarCollapsed));
+  const label = agentSidebarCollapsed ? 'Expand agent sidebar' : 'Collapse agent sidebar';
+  agentSidebarToggleBtn.title = label;
+  agentSidebarToggleBtn.setAttribute('aria-label', label);
+}
+
+function setAgentSidebarCollapsed(nextCollapsed: boolean): void {
+  agentSidebarCollapsed = nextCollapsed;
+  persistAgentSidebarCollapsed();
+
+  const state = (window as any).__lastState;
+  const tasks: any[] = state?.tasks ?? [];
+  const activeId: string | null = state?.activeTaskId ?? null;
+  const hasVisibleTasks = tasks.some((task) =>
+    (task.status === 'running' && task.id !== activeId) ||
+    task.status === 'completed' ||
+    task.status === 'failed');
+
+  syncAgentSidebarUi(hasVisibleTasks);
+}
+
 function syncAgentTabs(state: any): void {
   const tasks: any[] = state?.tasks ?? [];
   const activeId: string | null = state?.activeTaskId ?? null;
@@ -1549,10 +1700,10 @@ function syncAgentTabs(state: any): void {
 
   // Sidebar only appears when there are backgrounded running OR completed tasks
   if (runningTasks.length === 0 && completedTasks.length === 0) {
-    agentTabs.hidden = true;
+    syncAgentSidebarUi(false);
     return;
   }
-  agentTabs.hidden = false;
+  syncAgentSidebarUi(true);
 
   // Reset expansion state only when tasks are added or removed
   const signature = completedTasks.map(t => t.id).join(',');
@@ -1632,19 +1783,17 @@ function buildAgentTab(task: any, activeId: string | null): HTMLButtonElement {
   return tab;
 }
 
+agentSidebarToggleBtn.addEventListener('click', () => {
+  setAgentSidebarCollapsed(!agentSidebarCollapsed);
+});
+
 agentTabNewBtn.addEventListener('click', () => { void startNewChat(); });
 
 // ─── Full State Render ─────────────────────────────────────────────────────
 
 function renderState(state: any): void {
   (window as any).__lastState = state;
-  const normalizedOwner = normalizeSelectedOwner(selectedOwner, state);
-  if (normalizedOwner !== selectedOwner) {
-    selectedOwner = normalizedOwner;
-    persistSelectedOwner();
-  } else {
-    selectedOwner = normalizedOwner;
-  }
+  syncSelectedOwnerForActiveTask(state);
   syncModelToggleState(state);
   syncAgentTabs(state);
   syncStopBtn();
@@ -1728,9 +1877,11 @@ function syncAttachmentPreview(): void {
         `<span class="cc-preview-name">${escapeHtml(entry.file.name)}</span>` +
         `<button class="cc-preview-remove" data-index="${i}" title="Remove" aria-label="Remove ${escapeHtml(entry.file.name)}">&times;</button>`;
     } else {
+      item.classList.add('cc-attach-preview-item--doc');
+      const kind = getAttachmentFileKind(entry.file.name, entry.file.type);
       item.innerHTML =
-        `<div class="cc-attach-preview-doc">` +
-        `<svg viewBox="0 0 16 16"><path d="M9 1.5H4.5a2 2 0 00-2 2v9a2 2 0 002 2h7a2 2 0 002-2V6L9 1.5z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 1.5V6h4.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
+        `<div class="cc-attach-preview-doc" data-file-kind="${kind}">` +
+        `<div class="cc-attach-preview-icon-wrap">${attachmentIconSvg(kind)}</div>` +
         `<span class="cc-preview-doc-name">${escapeHtml(entry.file.name)}</span>` +
         `</div>` +
         `<button class="cc-preview-remove" data-index="${i}" title="Remove" aria-label="Remove ${escapeHtml(entry.file.name)}">&times;</button>`;
@@ -1800,6 +1951,8 @@ attachPreviewList.addEventListener('click', (e: MouseEvent) => {
 // ─── Init ──────────────────────────────────────────────────────────────────
 
 setLogsOpen(false);
+agentSidebarCollapsed = getStoredAgentSidebarCollapsed();
+syncAgentSidebarUi(false);
 initializeChatZoom();
 initializeModelToggle();
 

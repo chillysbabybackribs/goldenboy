@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { normalizeNavigationTarget } from './navigationTarget';
+import { normalizeNavigationTarget, normalizeWebsiteTarget } from './navigationTarget';
 
 describe('normalizeNavigationTarget', () => {
   it('preserves explicit URLs', () => {
@@ -67,5 +67,23 @@ describe('normalizeNavigationTarget', () => {
     expect(result.kind).toBe('search');
     expect(result.url).toContain('https://www.google.com/search?q=');
     expect(result.url).toContain('best%20coffee%20beans%20for%20espresso');
+  });
+});
+
+describe('normalizeWebsiteTarget', () => {
+  it('adds .com for a bare domain token', () => {
+    expect(normalizeWebsiteTarget('example')).toBe('https://example.com');
+  });
+
+  it('adds .com for a bare www host', () => {
+    expect(normalizeWebsiteTarget('www.google')).toBe('https://www.google.com');
+  });
+
+  it('preserves explicit https URLs', () => {
+    expect(normalizeWebsiteTarget('https://openai.com/docs')).toBe('https://openai.com/docs');
+  });
+
+  it('rejects free-form search text', () => {
+    expect(normalizeWebsiteTarget('best coffee beans')).toBeNull();
   });
 });

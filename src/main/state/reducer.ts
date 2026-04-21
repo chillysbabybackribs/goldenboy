@@ -58,6 +58,9 @@ export function appReducer(state: AppState, action: Action): AppState {
         activeTaskId,
         logs: state.logs.filter((log) => log.taskId !== action.taskId),
         surfaceActions: state.surfaceActions.filter((actionRecord) => actionRecord.taskId !== action.taskId),
+        taskTokenUsage: Object.fromEntries(
+          Object.entries(state.taskTokenUsage).filter(([taskId]) => taskId !== action.taskId),
+        ),
       };
     }
 
@@ -121,6 +124,61 @@ export function appReducer(state: AppState, action: Action): AppState {
         },
       };
 
+    case ActionType.ENSURE_TASK_TOKEN_USAGE: {
+      if (state.taskTokenUsage[action.taskId]) return state;
+      return {
+        ...state,
+        taskTokenUsage: {
+          ...state.taskTokenUsage,
+          [action.taskId]: {
+            inputTokens: 0,
+            outputTokens: 0,
+            apiCalls: 0,
+            updatedAt: Date.now(),
+            lastProviderId: null,
+            providerBreakdown: {},
+          },
+        },
+      };
+    }
+
+    case ActionType.ACCUMULATE_TASK_TOKEN_USAGE: {
+      const current = state.taskTokenUsage[action.taskId] || {
+        inputTokens: 0,
+        outputTokens: 0,
+        apiCalls: 0,
+        updatedAt: Date.now(),
+        lastProviderId: null,
+        providerBreakdown: {},
+      };
+      const providerCurrent = current.providerBreakdown[action.providerId] || {
+        inputTokens: 0,
+        outputTokens: 0,
+        apiCalls: 0,
+      };
+      return {
+        ...state,
+        taskTokenUsage: {
+          ...state.taskTokenUsage,
+          [action.taskId]: {
+            inputTokens: current.inputTokens + action.inputTokens,
+            outputTokens: current.outputTokens + action.outputTokens,
+            apiCalls: current.apiCalls + action.apiCalls,
+            updatedAt: Date.now(),
+            lastProviderId: action.providerId,
+            providerBreakdown: {
+              ...current.providerBreakdown,
+              [action.providerId]: {
+                inputTokens: providerCurrent.inputTokens + action.inputTokens,
+                outputTokens: providerCurrent.outputTokens + action.outputTokens,
+                apiCalls: providerCurrent.apiCalls + action.apiCalls,
+              },
+            },
+          },
+        },
+      };
+    }
+
     case ActionType.ACCUMULATE_TOKEN_USAGE:
       return {
         ...state,
@@ -134,6 +192,7 @@ export function appReducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         tokenUsage: { inputTokens: 0, outputTokens: 0 },
+        taskTokenUsage: {},
       };
 
     case ActionType.REPLACE_STATE:

@@ -194,6 +194,10 @@ function hashFile(filePath: string): Promise<string> {
   });
 }
 
+function hashBuffer(buffer: Buffer): string {
+  return crypto.createHash('sha1').update(buffer).digest('hex');
+}
+
 function excerptFor(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, MAX_EXCERPT_CHARS);
 }
@@ -280,13 +284,28 @@ export class DocumentAttachmentStore {
     const imported: DocumentInvocationAttachment[] = [];
 
     for (const input of documents) {
-      const sourcePath = path.resolve(input.path);
-      const stat = fs.statSync(sourcePath);
-      if (!stat.isFile()) {
-        throw new Error(`Not a file: ${sourcePath}`);
+      let resolvedPath: string | null = null;
+      let inlineBuffer: Buffer | null = null;
+      let statSize = 0;
+      let sourceMtimeMs = Date.now();
+
+      if (input.path) {
+        resolvedPath = path.resolve(input.path);
+        const stat = fs.statSync(resolvedPath);
+        if (!stat.isFile()) {
+          throw new Error(`Not a file: ${resolvedPath}`);
+        }
+        statSize = stat.size;
+        sourceMtimeMs = stat.mtimeMs;
+      } else if (input.dataBase64) {
+        inlineBuffer = Buffer.from(input.dataBase64, 'base64');
+        statSize = inlineBuffer.length;
+        sourceMtimeMs = Date.now();
+      } else {
+        throw new Error('Document import requires path or dataBase64');
       }
 
-      const contentHash = await hashFile(sourcePath);
+      const contentHash = resolvedPath ? await hashFile(resolvedPath) : hashBuffer(inlineBuffer!);
       const existing = this.findByTaskAndHash(taskId, contentHash);
       if (existing) {
         imported.push(this.toInvocationAttachment(existing));
@@ -294,13 +313,22 @@ export class DocumentAttachmentStore {
       }
 
       const importedAt = Date.now();
-      const name = (input.name && input.name.trim()) || path.basename(sourcePath);
-      const mediaType = normalizeMediaType(sourcePath, input.mediaType);
+      const name =
+        (input.name && input.name.trim())
+        || (resolvedPath ? path.basename(resolvedPath) : 'document');
+      const mediaType = normalizeMediaType(name, input.mediaType);
       const id = `doc_${crypto.createHash('sha1').update(`${taskId}:${contentHash}:${name}`).digest('hex').slice(0, 16)}`;
       const taskDir = path.join(filesRoot(), safeSegment(taskId));
       fs.mkdirSync(taskDir, { recursive: true });
       const storagePath = path.join(taskDir, `${id}_${safeSegment(name)}`);
-      fs.copyFileSync(sourcePath, storagePath);
+
+      if (resolvedPath) {
+        fs.copyFileSync(resolvedPath, storagePath);
+      } else {
+        fs.writeFileSync(storagePath, inlineBuffer!);
+      }
+
+      const recordSourcePath = resolvedPath ?? `inline:${name}`;
 
       let status: DocumentAttachmentStatus = 'stored';
       let statusDetail: string | null = null;
@@ -311,13 +339,13 @@ export class DocumentAttachmentStore {
       const language = languageForPath(name);
       let builtChunks: StoredDocumentChunk[] = [];
 
-      if (isTextExtractable(sourcePath, mediaType)) {
-        if (stat.size > MAX_TEXT_EXTRACT_BYTES) {
+      if (isTextExtractable(name, mediaType)) {
+        if (statSize > MAX_TEXT_EXTRACT_BYTES) {
           status = 'stored';
           statusDetail = `Text extraction not attempted because the file exceeds ${MAX_TEXT_EXTRACT_BYTES} bytes.`;
         } else {
           try {
-            const text = fs.readFileSync(sourcePath, 'utf-8').replace(/\u0000/g, '');
+            const text = fs.readFileSync(storagePath, 'utf-8').replace(/\u0000/g, '');
             excerpt = excerptFor(text);
             tokenEstimate = estimateTokens(text);
             charCount = text.length;
@@ -339,9 +367,9 @@ export class DocumentAttachmentStore {
         taskId,
         name,
         mediaType,
-        sourcePath,
+        sourcePath: recordSourcePath,
         storagePath,
-        sizeBytes: input.sizeBytes ?? stat.size,
+        sizeBytes: input.sizeBytes ?? statSize,
         contentHash,
         status,
         statusDetail,
@@ -352,7 +380,7 @@ export class DocumentAttachmentStore {
         charCount,
         lineCount,
         importedAt,
-        lastModifiedMs: input.lastModifiedMs ?? stat.mtimeMs,
+        lastModifiedMs: input.lastModifiedMs ?? sourceMtimeMs,
       };
 
       this.documents.set(record.id, record);

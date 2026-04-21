@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentProviderRequest, AgentToolDefinition } from './AgentTypes';
 import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 
-const { dispatchMock, recordToolMessageMock } = vi.hoisted(() => ({
+const { dispatchMock, recordToolMessageMock, getPreviousSessionContextMock, buildContextInjectionStringMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   recordToolMessageMock: vi.fn(),
+  getPreviousSessionContextMock: vi.fn(() => []),
+  buildContextInjectionStringMock: vi.fn(() => ''),
 }));
 
 vi.mock('../state/appStateStore', () => ({
@@ -17,6 +19,13 @@ vi.mock('../chatKnowledge/ChatKnowledgeStore', () => ({
   chatKnowledgeStore: {
     recordToolMessage: recordToolMessageMock,
   },
+}));
+
+vi.mock('../chatKnowledge/ChatSessionMemory', () => ({
+  getChatSessionMemory: () => ({
+    getPreviousSessionContext: getPreviousSessionContextMock,
+    buildContextInjectionString: buildContextInjectionStringMock,
+  }),
 }));
 
 import { AgentRuntime, assertInitialBrowserScope } from './AgentRuntime';
@@ -76,6 +85,10 @@ describe('AgentRuntime', () => {
   beforeEach(() => {
     dispatchMock.mockReset();
     recordToolMessageMock.mockReset();
+    getPreviousSessionContextMock.mockReset();
+    buildContextInjectionStringMock.mockReset();
+    getPreviousSessionContextMock.mockReturnValue([]);
+    buildContextInjectionStringMock.mockReturnValue('');
     agentCache.clear();
   });
 
@@ -137,6 +150,7 @@ describe('AgentRuntime', () => {
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0].maxToolTurns).toBe(4);
     expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(['terminal.exec']);
+    expect(provider.requests[0].loadableTools.map(toolDef => toolDef.name)).toEqual(['terminal.exec']);
     expect(result.runId).toBeTruthy();
     expect(result.output).toContain('"summary":"Ran echo ok"');
     expect(result.output).toContain('STATUS: VALID');
@@ -175,6 +189,95 @@ describe('AgentRuntime', () => {
         message: expect.stringContaining('toolPayloadTokens='),
       }),
     }));
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ADD_LOG',
+      log: expect.objectContaining({
+        message: expect.stringContaining('scopedToolNames=terminal.exec'),
+      }),
+    }));
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ADD_LOG',
+      log: expect.objectContaining({
+        message: expect.stringContaining('loadableToolNames=terminal.exec'),
+      }),
+    }));
+  });
+
+  it('derives scoped tools and loadable tools from the same executor registry', async () => {
+    const runtimeLoadTools: AgentToolDefinition = {
+      name: 'runtime.load_tools',
+      description: 'Load exact tools',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+        },
+        required: ['tools'],
+      },
+      execute: async () => ({
+        summary: 'Loaded',
+        data: {
+          tools: ['filesystem.list'],
+        },
+      }),
+    };
+    const filesystemList: AgentToolDefinition = {
+      name: 'filesystem.list',
+      description: 'List a directory',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          path: { type: 'string' },
+        },
+        required: ['path'],
+      },
+      execute: async () => ({
+        summary: 'Listed',
+        data: {
+          entries: [],
+        },
+      }),
+    };
+
+    agentToolExecutor.register(runtimeLoadTools);
+    agentToolExecutor.register(filesystemList);
+
+    const provider = {
+      requests: [] as AgentProviderRequest[],
+      async invoke(request: AgentProviderRequest) {
+        this.requests.push(request);
+        return {
+          output: 'ok',
+          usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            durationMs: 1,
+          },
+        };
+      },
+    };
+
+    const runtime = new AgentRuntime(provider);
+    await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: 'Load a tool and continue.',
+      taskId: 'task-runtime-scope-registry',
+      allowedTools: ['runtime.load_tools'],
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].tools.map((tool) => tool.name)).toEqual(['runtime.load_tools']);
+    expect(provider.requests[0].loadableTools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      'runtime.load_tools',
+      'filesystem.list',
+    ]));
   });
 
   it('marks the runtime run as failed when the provider surfaces a tool failure', async () => {
@@ -230,110 +333,7 @@ describe('AgentRuntime', () => {
     });
   });
 
-  it('preflight-expands the tool scope before the first provider turn when the task clearly needs adjacent tools', async () => {
-    const browserTabsTool: AgentToolDefinition = {
-      name: 'browser.get_tabs',
-      description: 'Return open browser tabs',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {},
-      },
-      execute: async () => ({
-        summary: 'Read browser tabs',
-        data: { tabs: [{ id: 'tab-1' }] },
-      }),
-    };
-
-    agentToolExecutor.register(browserTabsTool);
-
-    const provider = {
-      requests: [] as AgentProviderRequest[],
-      async invoke(request: AgentProviderRequest) {
-        this.requests.push(request);
-        return {
-          output: 'ok',
-          usage: {
-            inputTokens: 1,
-            outputTokens: 1,
-            durationMs: 1,
-          },
-        };
-      },
-    };
-    const runtime = new AgentRuntime(provider);
-    await runtime.run({
-      mode: 'unrestricted-dev',
-      agentId: PRIMARY_PROVIDER_ID,
-      role: 'primary',
-      task: 'Close the extra browser tabs and report what remains open.',
-      taskId: 'task-runtime-preflight-browser',
-      allowedTools: ['runtime.request_tool_pack', 'runtime.list_tool_packs'],
-      canSpawnSubagents: false,
-      maxToolTurns: 4,
-    });
-
-    expect(provider.requests).toHaveLength(1);
-    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
-      'browser.get_tabs',
-    ]));
-  });
-
-  it('preflight-adds browser.create_tab for explicit multi-tab requests even when the baseline scope only has navigate', async () => {
-    const browserTools: AgentToolDefinition[] = [
-      {
-        name: 'browser.get_state',
-        description: 'Return current browser state',
-        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-        execute: async () => ({ summary: 'state', data: {} }),
-      },
-      {
-        name: 'browser.get_tabs',
-        description: 'Return open browser tabs',
-        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-        execute: async () => ({ summary: 'tabs', data: { tabs: [] } }),
-      },
-      {
-        name: 'browser.navigate',
-        description: 'Navigate the active tab',
-        inputSchema: {
-          type: 'object',
-          additionalProperties: false,
-          properties: { url: { type: 'string' } },
-          required: ['url'],
-        },
-        execute: async () => ({ summary: 'navigated', data: {} }),
-      },
-      {
-        name: 'browser.close_tab',
-        description: 'Close a tab',
-        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-        execute: async () => ({ summary: 'closed', data: {} }),
-      },
-      {
-        name: 'browser.click',
-        description: 'Click an element',
-        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-        execute: async () => ({ summary: 'clicked', data: {} }),
-      },
-      {
-        name: 'browser.type',
-        description: 'Type into an element',
-        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-        execute: async () => ({ summary: 'typed', data: {} }),
-      },
-      {
-        name: 'browser.create_tab',
-        description: 'Create a new browser tab',
-        inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-        execute: async () => ({ summary: 'created', data: {} }),
-      },
-    ];
-
-    for (const tool of browserTools) {
-      agentToolExecutor.register(tool);
-    }
-
+  it('applies one shared context cap after merging session and task context', async () => {
     const provider = {
       requests: [] as AgentProviderRequest[],
       async invoke(request: AgentProviderRequest) {
@@ -349,35 +349,73 @@ describe('AgentRuntime', () => {
       },
     };
 
+    getPreviousSessionContextMock.mockReturnValue([{ id: 'session-1' }]);
+    buildContextInjectionStringMock.mockReturnValue('S'.repeat(500));
+
     const runtime = new AgentRuntime(provider);
     await runtime.run({
       mode: 'unrestricted-dev',
       agentId: PRIMARY_PROVIDER_ID,
       role: 'primary',
-      task: 'Open three new tabs one for yahoo one for reddit and one for gmail.',
-      taskId: 'task-runtime-preflight-create-tab',
-      allowedTools: [
-        'browser.get_state',
-        'browser.get_tabs',
-        'browser.close_tab',
-        'browser.navigate',
-        'browser.click',
-        'browser.type',
-      ],
+      task: 'Preserve the main context while respecting a shared cap.',
+      taskId: 'task-runtime-context-cap',
+      allowedTools: [],
       canSpawnSubagents: false,
-      maxToolTurns: 4,
+      contextPrompt: 'C'.repeat(3900),
     });
 
     expect(provider.requests).toHaveLength(1);
-    expect(provider.requests[0].tools.map(toolDef => toolDef.name)).toEqual(expect.arrayContaining([
-      'browser.create_tab',
-    ]));
+    expect(provider.requests[0].contextPrompt).toBeTruthy();
+    expect(provider.requests[0].contextPrompt!.length).toBeLessThanOrEqual(4000);
+    expect(provider.requests[0].contextPrompt).toContain('C'.repeat(50));
   });
 
   it('hard-fails browser tasks when the initial tool scope exposes no browser tools', () => {
     expect(() => assertInitialBrowserScope(
       'Search the web for the latest browser tool issue and summarize it.',
-      ['runtime.request_tool_pack', 'runtime.list_tool_packs', 'filesystem.read'],
+      ['runtime.search_tools', 'runtime.load_tools', 'runtime.list_loaded_tools', 'filesystem.read'],
     )).toThrow('Browser task blocked: initial MCP tool scope for research did not expose any browser.* tools.');
+  });
+
+  it('reduces tool payload size for Haiku by using underscore-separated names', async () => {
+    const tool: AgentToolDefinition = {
+      name: 'browser.extract_page',
+      description: 'Extract and structure page content using an optional CSS selector or extraction strategy.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          strategy: { type: 'string' },
+        },
+      },
+      execute: async () => ({ summary: 'extracted', data: {} }),
+    };
+
+    agentToolExecutor.register(tool);
+
+    let capturedPayload = '';
+    const haikuProvider = {
+      async invoke(request: AgentProviderRequest) {
+        capturedPayload = JSON.stringify(request.tools);
+        return {
+          output: 'ok',
+          usage: { inputTokens: 1, outputTokens: 1, durationMs: 1 },
+        };
+      },
+    };
+
+    const runtime = new AgentRuntime(haikuProvider);
+    await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: 'haiku',
+      role: 'primary',
+      task: 'Verify tool payload optimization for Haiku.',
+      taskId: 'task-haiku-optimization',
+      allowedTools: ['browser.extract_page'],
+    });
+
+    // Verify that Haiku format uses underscores instead of dots
+    expect(capturedPayload).toContain('browser__extract_page');
+    expect(capturedPayload).not.toContain('browser.extract_page');
   });
 });

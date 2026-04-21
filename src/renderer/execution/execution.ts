@@ -6,6 +6,7 @@ declare const FitAddon: any;
 
 // ─── DOM ────────────────────────────────────────────────────────────────────
 const browserPane = document.getElementById('browserPane')!;
+const executionShell = document.querySelector('.execution-shell') as HTMLElement;
 const tabBar = document.getElementById('tabBar')!;
 const tabList = document.getElementById('tabList')!;
 const tabScrollLeft = document.getElementById('tabScrollLeft') as HTMLButtonElement;
@@ -20,6 +21,7 @@ const btnForward = document.getElementById('btnForward') as HTMLButtonElement;
 const btnReload = document.getElementById('btnReload') as HTMLButtonElement;
 const btnStop = document.getElementById('btnStop') as HTMLButtonElement;
 const btnBookmark = document.getElementById('btnBookmark') as HTMLButtonElement;
+const btnAttachBrowserHere = document.getElementById('btnAttachBrowserHere') as HTMLButtonElement;
 const btnZoomIn = document.getElementById('btnZoomIn') as HTMLButtonElement;
 const btnZoomOut = document.getElementById('btnZoomOut') as HTMLButtonElement;
 const zoomLabel = document.getElementById('zoomLabel')!;
@@ -61,6 +63,7 @@ let activePanel: string | null = null;
 let lastBrowserState: BrowserState | null = null;
 let lastAuthDiagnostics: BrowserAuthDiagnostics | null = null;
 let activeContextTabId = '';
+let browserAttachedToExecution = false;
 let lastDiagnosticsData: {
   consoleEvents: any[];
   networkEvents: any[];
@@ -128,6 +131,7 @@ function reportBrowserBounds(): void {
   if (boundsTimer) clearTimeout(boundsTimer);
   boundsTimer = setTimeout(() => {
     if (!workspaceAPI) return;
+    if (!browserAttachedToExecution) return;
     const rect = browserSurfaceArea.getBoundingClientRect();
     workspaceAPI.browser.reportBounds({
       x: Math.round(rect.left), y: Math.round(rect.top),
@@ -135,6 +139,23 @@ function reportBrowserBounds(): void {
     });
     boundsTimer = null;
   }, 50);
+}
+
+function setExecutionBrowserAttached(attached: boolean): void {
+  browserAttachedToExecution = attached;
+  executionShell.classList.toggle('browser-detached', !attached);
+  (browserPane as HTMLElement).hidden = !attached;
+  splitter.hidden = !attached;
+  btnAttachBrowserHere.disabled = false;
+  btnAttachBrowserHere.textContent = attached ? 'Move to Command' : 'Attach Browser';
+  btnAttachBrowserHere.title = attached ? 'Move browser to command window' : 'Move browser back to execution window';
+  if (attached) {
+    applySplitRatio(currentRatio);
+  } else {
+    terminalPane.style.width = '100%';
+    browserPane.style.width = '0px';
+    requestAnimationFrame(() => fitTerminal());
+  }
 }
 
 // ─── Tabs ───────────────────────────────────────────────────────────────────
@@ -449,6 +470,10 @@ btnBookmark.addEventListener('click', () => {
   const nav = lastBrowserState.navigation;
   if (nav.url) workspaceAPI?.browser.addBookmark(nav.url, nav.title || nav.url);
 });
+btnAttachBrowserHere.addEventListener('click', () => {
+  const targetRole = lastBrowserState?.hostWindowRole === 'execution' ? 'command' : 'execution';
+  void workspaceAPI?.browser.attachSurface(targetRole);
+});
 
 // Zoom
 btnZoomIn.addEventListener('click', () => workspaceAPI?.browser.zoomIn());
@@ -676,6 +701,10 @@ function renderPanel(panel: string): void {
       </div>
       <div class="settings-group">
         <div class="settings-label">Content</div>
+        <div class="settings-row"><label>Mode</label><select id="settingsContentMode">
+          <option value="strict-clean" ${s.contentMode === 'strict-clean' ? 'selected' : ''}>Strict clean (Recommended)</option>
+          <option value="compatibility" ${s.contentMode === 'compatibility' ? 'selected' : ''}>Compatibility</option>
+        </select></div>
         <div class="settings-row"><label>JavaScript</label><button class="settings-toggle ${s.javascript ? 'on' : ''}" data-setting="javascript"></button></div>
         <div class="settings-row"><label>Images</label><button class="settings-toggle ${s.images ? 'on' : ''}" data-setting="images"></button></div>
         <div class="settings-row"><label>Pop-ups</label><button class="settings-toggle ${s.popups ? 'on' : ''}" data-setting="popups"></button></div>
@@ -797,11 +826,15 @@ dropdownContent.addEventListener('change', (e: Event) => {
   if (target.id === 'settingsSearchEngine') {
     workspaceAPI?.browser.updateSettings({ searchEngine: (target as HTMLSelectElement).value as any });
   }
+  if (target.id === 'settingsContentMode') {
+    workspaceAPI?.browser.updateSettings({ contentMode: (target as HTMLSelectElement).value as 'strict-clean' | 'compatibility' });
+  }
 });
 
 // ─── Browser State Updates ──────────────────────────────────────────────────
 function updateBrowserState(state: BrowserState): void {
   lastBrowserState = state;
+  setExecutionBrowserAttached(state.hostWindowRole === 'execution');
   renderTabs(
     state.tabs,
     state.activeTabId,
@@ -856,6 +889,7 @@ workspaceAPI?.browser.onStateUpdate((state: BrowserState) => { updateBrowserStat
 
 // ─── Split Management ──────────────────────────────────────────────────────
 function applySplitRatio(ratio: number): void {
+  if (!browserAttachedToExecution) return;
   currentRatio = Math.max(0.15, Math.min(0.85, ratio));
   const shell = browserPane.parentElement!;
   const shellWidth = Math.max(
@@ -886,6 +920,7 @@ function applySplitRatio(ratio: number): void {
 }
 
 function applyTerminalCollapsedLayout(): void {
+  if (!browserAttachedToExecution) return;
   const shell = browserPane.parentElement!;
   const totalWidth = Math.max(
     1,

@@ -4,7 +4,16 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { app } from 'electron';
 import { chunkFile, estimateTokens, languageForPath } from './FileChunker';
-import { CachedFileChunk, CachedFileRecord, FileCacheAnswer, FileCacheStats, FileSearchResult } from './FileCacheTypes';
+import {
+  CachedFileChunk,
+  CachedFileRecord,
+  DirectoryHeatRecord,
+  FileCacheAnswer,
+  FileCacheStats,
+  FileSearchResult,
+  FileSymbolSummary,
+  FileUsageStats,
+} from './FileCacheTypes';
 import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 
 type CacheFile = {
@@ -30,6 +39,7 @@ const MAX_FILES = 2000;
 const MAX_SNIPPET_CHARS = 360;
 const MAX_RG_BUFFER = 8 * 1024 * 1024;
 const MAX_RG_ARG_CHARS = 12_000;
+const HEAT_DECAY_WINDOW_MS = 1000 * 60 * 60 * 24 * 7;
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', '.cache']);
 const INDEX_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.css', '.html', '.yml', '.yaml', '.txt',
@@ -98,6 +108,104 @@ function readLinesFromDisk(filePath: string, startLine: number, endLine: number,
   };
 }
 
+function createEmptyUsageStats(): FileUsageStats {
+  return {
+    readCount: 0,
+    searchHitCount: 0,
+    patchCount: 0,
+    lastAccessedAt: null,
+    heatScore: 0,
+  };
+}
+
+function normalizeUsageStats(value: Partial<FileUsageStats> | undefined): FileUsageStats {
+  return {
+    readCount: value?.readCount ?? 0,
+    searchHitCount: value?.searchHitCount ?? 0,
+    patchCount: value?.patchCount ?? 0,
+    lastAccessedAt: value?.lastAccessedAt ?? null,
+    heatScore: value?.heatScore ?? 0,
+  };
+}
+
+function createEmptySymbols(): FileSymbolSummary {
+  return { exports: [], imports: [], registrations: [] };
+}
+
+function normalizeSymbols(value: Partial<FileSymbolSummary> | undefined): FileSymbolSummary {
+  return {
+    exports: Array.isArray(value?.exports) ? value!.exports.filter(item => typeof item === 'string') : [],
+    imports: Array.isArray(value?.imports) ? value!.imports.filter(item => typeof item === 'string') : [],
+    registrations: Array.isArray(value?.registrations) ? value!.registrations.filter(item => typeof item === 'string') : [],
+  };
+}
+
+function summarizeContent(relativePath: string, language: string, content: string, symbols: FileSymbolSummary): string {
+  const topExports = symbols.exports.slice(0, 3).join(', ');
+  const topImports = symbols.imports.slice(0, 2).join(', ');
+  const topRegistrations = symbols.registrations.slice(0, 2).join(', ');
+  const parts = [`${relativePath} (${language})`];
+  if (topExports) parts.push(`exports ${topExports}`);
+  if (topRegistrations) parts.push(`registers ${topRegistrations}`);
+  if (topImports) parts.push(`imports ${topImports}`);
+  if (parts.length === 1) {
+    const firstMeaningfulLine = content
+      .split('\n')
+      .map(line => line.trim())
+      .find(line => line.length > 0 && !line.startsWith('//') && !line.startsWith('*'));
+    if (firstMeaningfulLine) parts.push(firstMeaningfulLine.slice(0, 120));
+  }
+  return parts.join(' | ');
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function extractSymbols(content: string): FileSymbolSummary {
+  const exports = Array.from(content.matchAll(/export\s+(?:async\s+)?(?:const|function|class|type|interface|enum)\s+([A-Za-z0-9_]+)/g)).map(match => match[1]);
+  const namedExports = Array.from(content.matchAll(/export\s*{\s*([^}]+)\s*}/g))
+    .flatMap(match => match[1].split(',').map(part => part.trim().split(/\s+as\s+/i)[0]?.trim() || ''));
+  const imports = Array.from(content.matchAll(/import[\s\S]*?from\s+['"]([^'"]+)['"]/g)).map(match => match[1]);
+  const registrations = Array.from(content.matchAll(/name:\s*['"]([a-z0-9_.-]+)['"]/gi)).map(match => match[1]);
+  return {
+    exports: uniqueSorted([...exports, ...namedExports]),
+    imports: uniqueSorted(imports),
+    registrations: uniqueSorted(registrations),
+  };
+}
+
+function decayedHeatScore(usage: FileUsageStats, now: number): number {
+  if (!usage.lastAccessedAt) return usage.heatScore;
+  const age = Math.max(0, now - usage.lastAccessedAt);
+  const decay = Math.exp(-age / HEAT_DECAY_WINDOW_MS);
+  return usage.heatScore * decay;
+}
+
+function updateUsageStats(
+  usage: FileUsageStats,
+  input: { readCount?: number; searchHitCount?: number; patchCount?: number; timestamp: number },
+): FileUsageStats {
+  const current = normalizeUsageStats(usage);
+  const baseline = decayedHeatScore(current, input.timestamp);
+  const readInc = input.readCount ?? 0;
+  const searchInc = input.searchHitCount ?? 0;
+  const patchInc = input.patchCount ?? 0;
+  const nextHeat = baseline + readInc * 1 + searchInc * 2 + patchInc * 3;
+  return {
+    readCount: current.readCount + readInc,
+    searchHitCount: current.searchHitCount + searchInc,
+    patchCount: current.patchCount + patchInc,
+    lastAccessedAt: readInc > 0 || searchInc > 0 || patchInc > 0 ? input.timestamp : current.lastAccessedAt,
+    heatScore: Number(nextHeat.toFixed(3)),
+  };
+}
+
+function directoryPathFor(relativePath: string): string {
+  const dir = path.dirname(relativePath);
+  return dir === '.' ? '' : dir;
+}
+
 export class FileKnowledgeStore {
   private files = new Map<string, CachedFileRecord>();
   private chunks = new Map<string, CachedFileChunk>();
@@ -148,7 +256,7 @@ export class FileKnowledgeStore {
           }
         }
 
-        const built = this.buildRecord(filePath, root, stat, indexedAt);
+        const built = this.buildRecord(filePath, root, stat, indexedAt, existing || null);
         if (!built) {
           skippedFiles++;
           continue;
@@ -174,9 +282,19 @@ export class FileKnowledgeStore {
 
   listFiles(input?: { limit?: number }): CachedFileRecord[] {
     return Array.from(this.files.values())
-      .sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+      .sort((a, b) => {
+        const heatDiff = decayedHeatScore(b.usage, Date.now()) - decayedHeatScore(a.usage, Date.now());
+        return heatDiff !== 0 ? heatDiff : a.relativePath.localeCompare(b.relativePath);
+      })
       .slice(0, input?.limit || 200)
-      .map(file => ({ ...file }));
+      .map(file => ({
+        ...file,
+        symbols: normalizeSymbols(file.symbols),
+        usage: {
+          ...normalizeUsageStats(file.usage),
+          heatScore: Number(decayedHeatScore(file.usage, Date.now()).toFixed(3)),
+        },
+      }));
   }
 
   search(query: string, input?: { pathPrefix?: string; language?: string; limit?: number }): FileSearchResult[] {
@@ -222,6 +340,11 @@ export class FileKnowledgeStore {
         snippet,
         score,
         tokenEstimate: Math.min(chunk.tokenEstimate, estimateTokens(snippet)),
+        summary: record.summary,
+        symbols: normalizeSymbols(record.symbols),
+        usage: normalizeUsageStats(record.usage),
+        contentHash: record.contentHash,
+        freshness: 'fresh',
       };
       if (!existing || next.score > existing.score) {
         byChunk.set(chunk.id, next);
@@ -233,8 +356,10 @@ export class FileKnowledgeStore {
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
-    if (results.length > 0) this.searchHitCount++;
-    else this.searchMissCount++;
+    if (results.length > 0) {
+      this.searchHitCount++;
+      this.noteSearchHits(results.map(result => result.path));
+    } else this.searchMissCount++;
     return results;
   }
 
@@ -259,6 +384,7 @@ export class FileKnowledgeStore {
     const chunk = this.resolveFreshChunk(chunkId);
     if (!chunk) return null;
     this.chunkReadCount++;
+    this.noteReadAccess(chunk.path);
     const window = readLinesFromDisk(chunk.path, chunk.startLine, chunk.endLine, clampReadChars(maxChars));
     return {
       ...chunk,
@@ -270,6 +396,7 @@ export class FileKnowledgeStore {
   readWindowForPath(filePath: string, input?: { startLine?: number; endLine?: number; maxChars?: number }): ReadWindowResult | null {
     const record = this.findFreshRecordByPath(filePath) || this.refreshFile(filePath)?.record || null;
     if (!record) return null;
+    this.noteReadAccess(record.path);
 
     const maxChars = clampReadChars(input?.maxChars ?? 6_000);
     const startLine = Math.max(input?.startLine || 1, 1);
@@ -337,7 +464,7 @@ export class FileKnowledgeStore {
         }
       }
 
-      const built = this.buildRecord(normalizedPath, root, stat, Date.now());
+      const built = this.buildRecord(normalizedPath, root, stat, Date.now(), existing || null);
       if (!built) {
         this.removeFile(normalizedPath);
         return null;
@@ -380,6 +507,7 @@ export class FileKnowledgeStore {
 
   getStats(): FileCacheStats {
     const chunks = Array.from(this.chunks.values());
+    const directoryHeat = this.computeDirectoryHeat();
     return {
       fileCount: this.files.size,
       chunkCount: this.chunks.size,
@@ -389,7 +517,23 @@ export class FileKnowledgeStore {
       searchHitCount: this.searchHitCount,
       searchMissCount: this.searchMissCount,
       chunkReadCount: this.chunkReadCount,
+      directoryCount: directoryHeat.length,
+      hottestDirectories: directoryHeat
+        .sort((a, b) => b.heatScore - a.heatScore)
+        .slice(0, 10),
+      hottestFiles: Array.from(this.files.values())
+        .map(file => ({
+          path: file.relativePath,
+          heatScore: Number(decayedHeatScore(file.usage, Date.now()).toFixed(3)),
+          lastAccessedAt: file.usage.lastAccessedAt,
+        }))
+        .sort((a, b) => b.heatScore - a.heatScore)
+        .slice(0, 10),
     };
+  }
+
+  notePatch(filePath: string): void {
+    this.touchRecordUsage(filePath, { patchCount: 1 });
   }
 
   private load(): void {
@@ -398,7 +542,14 @@ export class FileKnowledgeStore {
       if (!fs.existsSync(filePath)) return;
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as CacheFile;
       this.indexedAt = parsed.indexedAt || null;
-      for (const file of parsed.files || []) this.files.set(file.id, file);
+      for (const file of parsed.files || []) {
+        this.files.set(file.id, {
+          ...file,
+          summary: typeof file.summary === 'string' ? file.summary : `${file.relativePath} (${file.language})`,
+          symbols: normalizeSymbols(file.symbols),
+          usage: normalizeUsageStats(file.usage),
+        });
+      }
       for (const chunk of parsed.chunks || []) this.chunks.set(chunk.id, chunk);
     } catch {
       this.files.clear();
@@ -421,11 +572,63 @@ export class FileKnowledgeStore {
     fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
   }
 
+  private noteReadAccess(filePath: string): void {
+    this.touchRecordUsage(filePath, { readCount: 1 });
+  }
+
+  private noteSearchHits(filePaths: string[]): void {
+    const uniquePaths = Array.from(new Set(filePaths.map(item => normalizePathKey(item))));
+    for (const filePath of uniquePaths) {
+      this.touchRecordUsage(filePath, { searchHitCount: 1 }, false);
+    }
+    if (uniquePaths.length > 0) this.save();
+  }
+
+  private touchRecordUsage(
+    filePath: string,
+    updates: { readCount?: number; searchHitCount?: number; patchCount?: number },
+    persist = true,
+  ): void {
+    const record = this.findRecordByPath(filePath);
+    if (!record) return;
+    record.usage = updateUsageStats(record.usage, { ...updates, timestamp: Date.now() });
+    if (persist) this.save();
+  }
+
+  private computeDirectoryHeat(): DirectoryHeatRecord[] {
+    const now = Date.now();
+    const directories = new Map<string, DirectoryHeatRecord>();
+    for (const record of this.files.values()) {
+      const dirPath = directoryPathFor(record.relativePath);
+      const current = directories.get(dirPath) || {
+        path: dirPath,
+        fileCount: 0,
+        readCount: 0,
+        searchHitCount: 0,
+        patchCount: 0,
+        lastAccessedAt: null,
+        heatScore: 0,
+      };
+      const usage = normalizeUsageStats(record.usage);
+      current.fileCount += 1;
+      current.readCount += usage.readCount;
+      current.searchHitCount += usage.searchHitCount;
+      current.patchCount += usage.patchCount;
+      current.lastAccessedAt = current.lastAccessedAt && usage.lastAccessedAt
+        ? Math.max(current.lastAccessedAt, usage.lastAccessedAt)
+        : current.lastAccessedAt ?? usage.lastAccessedAt;
+      current.heatScore = Number((current.heatScore + decayedHeatScore(usage, now)).toFixed(3));
+      directories.set(dirPath, current);
+    }
+    return Array.from(directories.values());
+  }
+
   private buildRecord(
     filePath: string,
     root: string,
     stat: fs.Stats,
     indexedAt: number,
+    previous?: CachedFileRecord | null,
   ): { record: CachedFileRecord; chunks: CachedFileChunk[] } | null {
     if (!isIndexableFile(filePath)) return null;
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -433,6 +636,7 @@ export class FileKnowledgeStore {
     const relativePath = path.relative(root, filePath);
     const fileId = fileIdFor(relativePath, contentHash);
     const language = languageForPath(filePath);
+    const symbols = extractSymbols(content);
     const chunks = chunkFile({
       fileId,
       path: filePath,
@@ -452,6 +656,9 @@ export class FileKnowledgeStore {
       mtimeMs: stat.mtimeMs,
       chunkIds: chunks.map(chunk => chunk.id),
       indexedAt,
+      summary: summarizeContent(relativePath, language, content, symbols),
+      symbols,
+      usage: normalizeUsageStats(previous?.usage),
     };
     return { record, chunks };
   }
@@ -476,6 +683,8 @@ export class FileKnowledgeStore {
         path: input.path,
         relativePath: input.relativePath,
         indexedAt: input.indexedAt,
+        usage: normalizeUsageStats(existing.usage),
+        symbols: normalizeSymbols(existing.symbols),
       },
       chunks,
     };
@@ -564,13 +773,20 @@ export class FileKnowledgeStore {
 
   private scoreMatch(record: CachedFileRecord, lineText: string, terms: string[]): number {
     const haystack = lineText.toLowerCase();
+    const symbols = normalizeSymbols(record.symbols);
+    const summary = record.summary.toLowerCase();
+    const usage = normalizeUsageStats(record.usage);
     let score = 0;
     for (const term of terms) {
       const matches = haystack.split(term).length - 1;
       score += matches;
       if (record.relativePath.toLowerCase().includes(term)) score += 4;
+      if (summary.includes(term)) score += 3;
+      if (symbols.exports.some(item => item.toLowerCase() === term)) score += 6;
+      if (symbols.registrations.some(item => item.toLowerCase() === term)) score += 5;
+      if (symbols.imports.some(item => item.toLowerCase().includes(term))) score += 2;
     }
-    return score;
+    return score + Math.min(8, decayedHeatScore(usage, Date.now()));
   }
 
   private runSearch(terms: string[], candidatePaths: string[]): Array<{ path: string; lineNumber: number; lineText: string }> {

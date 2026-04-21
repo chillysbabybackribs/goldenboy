@@ -8,6 +8,7 @@ import { generateId } from '../../../shared/utils/ids';
 import { geminiSidecar } from '../GeminiSidecar';
 import { WebIntentInstruction, WebIntentVM } from '../../browser/WebIntentVM';
 import { agentCache } from '../AgentCache';
+import { normalizeWebsiteTarget } from '../../browser/navigationTarget';
 import {
   BrowserOperationKind,
   BrowserOperationPayloadMap,
@@ -17,6 +18,7 @@ import {
 
 const SIDECAR_RANK_TIMEOUT_MS = 1200;
 const SIDECAR_JUDGE_TIMEOUT_MS = 1200;
+const GOOGLE_HOME_URL = 'https://www.google.com/';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -202,6 +204,14 @@ async function waitForBrowserSettled(timeoutMs = 7000): Promise<void> {
   }
 }
 
+function requireWebsiteTarget(input: string): string {
+  const normalized = normalizeWebsiteTarget(input);
+  if (!normalized) {
+    throw new Error('Expected a website address or domain, for example "example.com" or "example".');
+  }
+  return normalized;
+}
+
 async function cachePageForTab(pageExtractor: PageExtractor, tabId: string): Promise<{
   id: string;
   tabId: string;
@@ -340,7 +350,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
   return [
     {
       name: 'browser.get_state',
-      description: 'Return current browser state.',
+      description: 'Return the authoritative browser state for the active tab, including the active tab id and current navigation details. Use this before tab-sensitive actions when the current tab context matters.',
       inputSchema: { type: 'object' },
       async execute() {
         return runBrowserOperation('browser.get-state', {});
@@ -348,7 +358,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.get_tabs',
-      description: 'Return open browser tabs.',
+      description: 'Return the full set of currently open browser tabs with their ids. Use this before activating or closing tabs when tab ids are unknown.',
       inputSchema: { type: 'object' },
       async execute() {
         return runBrowserOperation('browser.get-tabs', {});
@@ -357,11 +367,39 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     {
       name: 'browser.navigate',
       description: 'Navigate the active browser tab to a URL or direct address. This does not open a new tab; use browser.create_tab when the user asks for a new, separate, or additional tab. For user requests phrased as "search ..." use browser.search_web instead.',
-      inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } } },
+      inputSchema: {
+        type: 'object',
+        required: ['url'],
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The destination URL or direct address to load in the current active tab.',
+          },
+        },
+      },
       async execute(input) {
         requireBrowserCreated();
         const url = requireString(objectInput(input), 'url');
         return runBrowserOperation('browser.navigate', { url }, { invalidateCache: true });
+      },
+    },
+    {
+      name: 'browser.navigate_to',
+      description: 'Navigate directly to a website. This tool treats the input as a site/domain, adds `.com` when the user omits it for simple domains like `example`, and verifies the final navigation target.',
+      inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } } },
+      async execute(input) {
+        requireBrowserCreated();
+        const rawUrl = requireString(objectInput(input), 'url');
+        const normalizedUrl = requireWebsiteTarget(rawUrl);
+        const result = await runBrowserOperation('browser.navigate', { url: normalizedUrl }, { invalidateCache: true });
+        return {
+          summary: result.summary,
+          data: {
+            ...result.data,
+            inputUrl: rawUrl,
+            normalizedUrl,
+          },
+        };
       },
     },
     {
@@ -389,7 +427,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         type: 'object',
         required: ['query'],
         properties: {
-          query: { type: 'string' },
+          query: { type: 'string', description: 'The exact research query to search for in the owned browser.' },
           maxPages: { type: 'number' },
           openTopResults: { type: 'number' },
           resultLimit: { type: 'number' },
@@ -619,7 +657,15 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     {
       name: 'browser.create_tab',
       description: 'Create a new browser tab, optionally with a starting URL. Use this when the user asks to open something in a new, separate, or additional tab.',
-      inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'Optional starting URL for the new tab. Omit to open a blank/default tab.',
+          },
+        },
+      },
       async execute(input) {
         requireBrowserCreated();
         const url = optionalString(objectInput(input), 'url');
@@ -641,8 +687,15 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       inputSchema: {
         type: 'object',
         properties: {
-          tabId: { type: 'string' },
-          tabIds: { type: 'array', items: { type: 'string' } },
+          tabId: {
+            type: 'string',
+            description: 'Single browser tab id to close.',
+          },
+          tabIds: {
+            type: 'array',
+            description: 'Optional list of browser tab ids to close in one request.',
+            items: { type: 'string' },
+          },
         },
       },
       async execute(input) {
@@ -667,9 +720,58 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
+      name: 'browser.close_all_tabs',
+      description: 'Close all browser tabs down to a single Google homepage tab, then verify the remaining browser state before returning.',
+      inputSchema: { type: 'object' },
+      async execute() {
+        requireBrowserCreated();
+        const existingTabs = browserService.getTabs();
+        let survivorTabId = browserService.getState().activeTabId || existingTabs[0]?.id || '';
+
+        if (!survivorTabId) {
+          const created = await runBrowserOperation('browser.create-tab', { url: GOOGLE_HOME_URL }, { invalidateCache: true });
+          survivorTabId = typeof created.data.tabId === 'string' ? created.data.tabId : '';
+        }
+
+        const tabsToClose = browserService.getTabs()
+          .map(tab => tab.id)
+          .filter(tabId => tabId !== survivorTabId);
+
+        for (const tabId of tabsToClose) {
+          await runBrowserOperation('browser.close-tab', { tabId }, { invalidateCache: true });
+        }
+
+        await runBrowserOperation('browser.activate-tab', { tabId: survivorTabId }, { invalidateCache: true });
+        const navigation = await runBrowserOperation('browser.navigate', { url: GOOGLE_HOME_URL }, { invalidateCache: true });
+        await waitForBrowserSettled();
+
+        const finalState = browserService.getState();
+        return {
+          summary: `Closed ${tabsToClose.length} tab${tabsToClose.length === 1 ? '' : 's'} and reset the browser to Google`,
+          data: {
+            tabIds: tabsToClose,
+            activeTabId: finalState.activeTabId,
+            tabs: browserService.getTabs(),
+            url: typeof navigation.data.url === 'string' ? navigation.data.url : finalState.navigation.url,
+            title: typeof navigation.data.title === 'string' ? navigation.data.title : finalState.navigation.title,
+            homepageUrl: GOOGLE_HOME_URL,
+          },
+        };
+      },
+    },
+    {
       name: 'browser.activate_tab',
       description: 'Activate a browser tab.',
-      inputSchema: { type: 'object', required: ['tabId'], properties: { tabId: { type: 'string' } } },
+      inputSchema: {
+        type: 'object',
+        required: ['tabId'],
+        properties: {
+          tabId: {
+            type: 'string',
+            description: 'The exact id of the existing browser tab to make active.',
+          },
+        },
+      },
       async execute(input) {
         requireBrowserCreated();
         const tabId = requireString(objectInput(input), 'tabId');
@@ -711,6 +813,57 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         return runBrowserOperation(
           'browser.type',
           { selector, text, tabId: optionalString(obj, 'tabId') },
+          { invalidateCache: true },
+        );
+      },
+    },
+    {
+      name: 'browser.get_element_state',
+      description: 'Return deterministic state for an exact page selector, including presence, visibility, text, value, checked/disabled state, and select metadata when applicable.',
+      inputSchema: { type: 'object', required: ['selector'], properties: { selector: { type: 'string' }, tabId: { type: 'string' } } },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const selector = requireString(obj, 'selector');
+        return runBrowserOperation(
+          'browser.get-element-state',
+          { selector, tabId: optionalString(obj, 'tabId') },
+        );
+      },
+    },
+    {
+      name: 'browser.select_option',
+      description: 'Select an option in a native select element by exact selector and value, label, or index. Returns the final selected state after dispatching input and change events.',
+      inputSchema: {
+        type: 'object',
+        required: ['selector'],
+        properties: {
+          selector: { type: 'string' },
+          value: { type: 'string' },
+          label: { type: 'string' },
+          index: { type: 'number' },
+          tabId: { type: 'string' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const selector = requireString(obj, 'selector');
+        const value = optionalString(obj, 'value');
+        const label = optionalString(obj, 'label');
+        const hasIndex = typeof obj.index === 'number' && Number.isFinite(obj.index);
+        if (!value && !label && !hasIndex) {
+          throw new Error('browser.select_option requires one of value, label, or index');
+        }
+        return runBrowserOperation(
+          'browser.select-option',
+          {
+            selector,
+            value,
+            label,
+            index: hasIndex ? obj.index as number : undefined,
+            tabId: optionalString(obj, 'tabId'),
+          },
           { invalidateCache: true },
         );
       },

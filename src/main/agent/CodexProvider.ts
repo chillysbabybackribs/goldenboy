@@ -11,18 +11,24 @@ import {
 import { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolName } from './AgentTypes';
 import {
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
+  describeLoadedToolNames,
   describeProviderToolCall,
-  encodeToolInput,
   executeProviderToolCallWithEvents,
+  mergeLoadedTools,
   normalizeProviderMaxToolTurns,
   normalizeProviderFinalOutput,
   publishProviderFinalOutput,
-  resolveToolPackExpansion,
+  resolveLoadedToolExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
 
 const CODEX_INACTIVITY_TIMEOUT_MS = 180_000;
 const CODEX_WEB_SEARCH_DISABLED_CONFIG = 'web_search="disabled"';
+const MAX_PROMPT_TOOL_SCHEMA_CHARS = 1_200;
+const MAX_PROMPT_TOOL_INPUT_CHARS = 500;
+const MAX_PROMPT_TOOL_RESULT_CHARS = 1_600;
+const MAX_PROMPT_TRANSCRIPT_ENTRY_CHARS = 2_000;
+const MAX_PROMPT_TRANSCRIPT_ENTRIES = 12;
+const toolPlanningSectionCache = new Map<string, string>();
 
 type CodexProviderOptions = {
   providerId?: ProviderId;
@@ -51,6 +57,36 @@ type TranscriptEntry = {
   content: string;
 };
 
+function truncateForPrompt(text: string, maxChars: number, suffix: string): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}${suffix}`;
+}
+
+function compactJsonForPrompt(value: unknown, maxChars: number, suffix: string): string {
+  try {
+    return truncateForPrompt(JSON.stringify(value), maxChars, suffix);
+  } catch {
+    return truncateForPrompt(String(value), maxChars, suffix);
+  }
+}
+
+function appendTranscriptEntry(
+  transcript: TranscriptEntry[],
+  entry: TranscriptEntry,
+): void {
+  transcript.push({
+    type: entry.type,
+    content: truncateForPrompt(
+      entry.content,
+      MAX_PROMPT_TRANSCRIPT_ENTRY_CHARS,
+      '\n...[entry truncated]',
+    ),
+  });
+  if (transcript.length > MAX_PROMPT_TRANSCRIPT_ENTRIES) {
+    transcript.splice(0, transcript.length - MAX_PROMPT_TRANSCRIPT_ENTRIES);
+  }
+}
+
 function firstNonEmptyLine(value: string): string | null {
   for (const line of value.split('\n')) {
     const trimmed = line.trim();
@@ -59,23 +95,51 @@ function firstNonEmptyLine(value: string): string | null {
   return null;
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+}
+
+function buildToolPlanningSectionSignature(tools: AgentProviderRequest['tools']): string {
+  return tools.map((tool) => [
+    tool.name,
+    tool.description,
+    stableStringify(tool.inputSchema),
+  ].join('::')).join('||');
+}
+
+function buildToolPlanningSection(tools: AgentProviderRequest['tools']): string {
+  const signature = buildToolPlanningSectionSignature(tools);
+  const cached = toolPlanningSectionCache.get(signature);
+  if (cached) return cached;
+
+  const built = tools.length === 0
+    ? 'No tools are available in this runtime.'
+    : tools.map((tool) => {
+      const schema = compactJsonForPrompt(
+        tool.inputSchema,
+        MAX_PROMPT_TOOL_SCHEMA_CHARS,
+        '...[schema truncated]',
+      );
+      return [
+        `- ${tool.name}`,
+        `  Description: ${tool.description}`,
+        `  Input schema: ${schema}`,
+      ].join('\n');
+    }).join('\n\n');
+
+  toolPlanningSectionCache.set(signature, built);
+  return built;
+}
+
 function buildToolPlanningPrompt(
   request: Pick<AgentProviderRequest, 'systemPrompt' | 'contextPrompt' | 'task'>,
   tools: AgentProviderRequest['tools'],
   transcript: TranscriptEntry[],
   forceFinal: boolean,
 ): string {
-  const toolLines = tools.length === 0
-    ? ['No tools are available in this runtime.']
-    : tools.map((tool) => {
-      const schema = JSON.stringify(tool.inputSchema, null, 2);
-      return [
-        `- ${tool.name}`,
-        `  Description: ${tool.description}`,
-        `  Input schema: ${schema}`,
-      ].join('\n');
-    });
-
   const historyText = transcript.length === 0
     ? 'No prior tool calls yet.'
     : transcript.map((entry, index) => [
@@ -104,7 +168,7 @@ function buildToolPlanningPrompt(
 
   sections.push(
     '# Available Tools',
-    toolLines.join('\n\n'),
+    buildToolPlanningSection(tools),
     '# Current User Request',
     request.task.trim(),
     '# Prior Turn History',
@@ -261,7 +325,7 @@ export class CodexProvider implements AgentProvider {
     const completedItems = new Map<string, CodexItem>();
     const transcript: TranscriptEntry[] = [];
     let currentTools = [...request.tools];
-    const toolCatalog = request.toolCatalog?.length ? request.toolCatalog : request.tools;
+    const loadableTools = request.loadableTools;
 
     const maxToolTurns = normalizeProviderMaxToolTurns(request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS);
 
@@ -306,33 +370,6 @@ export class CodexProvider implements AgentProvider {
 
       const response = turnResult.response;
       if (response.kind === 'final') {
-        const autoExpansion = resolveAutoExpandedToolPack(response.message, currentTools, toolCatalog);
-        if (autoExpansion) {
-          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
-          if (response.message.trim()) {
-            request.onStatus?.(response.message.trim());
-            transcript.push({
-              type: 'assistant',
-              content: response.message.trim(),
-            });
-          }
-          const expandedToolNames = autoExpansion.scope === 'all'
-            ? ['all eligible tools']
-            : autoExpansion.tools;
-          const hostNote = [
-            `Host auto-expanded tool pack "${autoExpansion.pack}".`,
-            `Reason: ${autoExpansion.reason}`,
-            `Description: ${autoExpansion.description}`,
-            `Expanded tools: ${expandedToolNames.join(', ')}`,
-          ].join('\n');
-          request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
-          transcript.push({
-            type: 'tool',
-            content: hostNote,
-          });
-          continue;
-        }
-
         const finalText = normalizeProviderFinalOutput(response.message);
         request.onToken?.(finalText);
         const finalItem = publishProviderFinalOutput({
@@ -355,7 +392,7 @@ export class CodexProvider implements AgentProvider {
 
       if (response.message.trim()) {
         request.onStatus?.(response.message.trim());
-        transcript.push({
+        appendTranscriptEntry(transcript, {
           type: 'assistant',
           content: response.message.trim(),
         });
@@ -377,7 +414,7 @@ export class CodexProvider implements AgentProvider {
           toolInput = JSON.parse(toolCall.arguments_json);
         } catch (err) {
           const message = `Invalid JSON for tool ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
-          transcript.push({
+          appendTranscriptEntry(transcript, {
             type: 'tool',
             content: [
               `Tool: ${toolCall.name}`,
@@ -394,49 +431,45 @@ export class CodexProvider implements AgentProvider {
           request,
           toolName: toolCall.name,
           toolInput,
+          currentToolNames: currentTools.map((tool) => tool.name as AgentToolName),
           itemId,
         });
         completedItems.set(itemId, execution.completedItem);
 
         if (execution.ok) {
-          const expansion = resolveToolPackExpansion(request, toolCall.name, execution.result);
+          const expansion = resolveLoadedToolExpansion(request, toolCall.name, execution.result);
           if (expansion) {
-            currentTools = mergeExpandedTools(currentTools, toolCatalog, expansion);
-            const expandedToolNames = expansion.scope === 'all'
-              ? ['all eligible tools']
-              : expansion.tools;
-            transcript.push({
+            currentTools = mergeLoadedTools(currentTools, loadableTools, expansion);
+            appendTranscriptEntry(transcript, {
               type: 'tool',
               content: [
                 `Tool: ${toolCall.name}`,
-                `Input: ${encodeToolInput(toolInput)}`,
-                `Result: loaded tool pack "${expansion.pack}"`,
-                `Description: ${expansion.description}`,
-                `Expanded tools: ${expandedToolNames.join(', ')}`,
+                `Input: ${compactJsonForPrompt(toolInput, MAX_PROMPT_TOOL_INPUT_CHARS, '...[input truncated]')}`,
+                `Result: loaded tools "${describeLoadedToolNames(execution.result)}"`,
               ].join('\n'),
             });
             continue;
           }
 
-          transcript.push({
+          appendTranscriptEntry(transcript, {
             type: 'tool',
             content: [
               `Tool: ${toolCall.name}`,
-              `Input: ${encodeToolInput(toolInput)}`,
-              'Result:',
-              execution.toolContent,
+              `Input: ${compactJsonForPrompt(toolInput, MAX_PROMPT_TOOL_INPUT_CHARS, '...[input truncated]')}`,
+              `Result summary: ${execution.resultDescription}`,
+              `Result evidence: ${truncateForPrompt(execution.toolContent, MAX_PROMPT_TOOL_RESULT_CHARS, '\n...[result truncated]')}`,
             ].join('\n'),
           });
           continue;
         }
 
         const message = execution.errorMessage;
-        transcript.push({
+        appendTranscriptEntry(transcript, {
           type: 'tool',
           content: [
             `Tool: ${toolCall.name}`,
-            `Input: ${encodeToolInput(toolInput)}`,
-            `Error: ${message}`,
+            `Input: ${compactJsonForPrompt(toolInput, MAX_PROMPT_TOOL_INPUT_CHARS, '...[input truncated]')}`,
+            `Error: ${truncateForPrompt(message, MAX_PROMPT_TOOL_RESULT_CHARS, '...[error truncated]')}`,
           ].join('\n'),
         });
       }

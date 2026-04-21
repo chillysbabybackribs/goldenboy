@@ -6,6 +6,7 @@ import type {
   HandoffPacket,
   InvocationResult,
   TaskMemoryEntry,
+  TaskPlanMetadata,
   TaskMemoryRecord,
 } from '../../shared/types/model';
 import { createEmptyTaskMemoryRecord } from '../../shared/types/model';
@@ -15,6 +16,8 @@ const TASK_MEMORY_FILE = 'task-memory.json';
 const MAX_ENTRIES_PER_TASK = 200;
 const MAX_CONTEXT_ENTRIES = 10;
 const MAX_CONTEXT_CHARS = 2000;
+const MAX_PLAN_CONTEXT_ENTRIES = 6;
+const MAX_PLAN_CONTEXT_CHARS = 1200;
 const NUMBER_WORDS = new Set([
   'zero', 'one', 'two', 'three', 'four', 'five', 'six',
   'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
@@ -41,6 +44,14 @@ function saveMemory(records: TaskMemoryRecord[]): void {
   } catch (err) {
     console.error('Failed to persist task memory:', err);
   }
+}
+
+function toStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  }
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  return [];
 }
 
 export class TaskMemoryStore {
@@ -111,6 +122,99 @@ export class TaskMemoryStore {
     }
 
     return Array.from(issues);
+  }
+
+  hasPlan(taskId: string): boolean {
+    return this.get(taskId).entries.some(
+      (entry) => entry.kind === 'system' && this.isPlanMetadata(entry.metadata),
+    );
+  }
+
+  buildPlanContext(taskId: string): string | null {
+    const plans = this.get(taskId).entries
+      .filter((entry): entry is TaskMemoryEntry & { metadata: TaskPlanMetadata } => (
+        entry.kind === 'system' && this.isPlanMetadata(entry.metadata)
+      ))
+      .slice(-MAX_PLAN_CONTEXT_ENTRIES);
+
+    if (plans.length === 0) return null;
+
+    const latest = plans[plans.length - 1];
+    const previous = plans.slice(0, -1);
+    const sections = [
+      '## Plan Continuation',
+      `Latest milestone: ${this.formatPlanEntry(latest)}`,
+    ];
+
+    const latestState = this.buildStructuredPlanState(taskId);
+    if (latestState.objective) sections.push(`Objective: ${latestState.objective}`);
+    if (latestState.nextAction) sections.push(`Next action: ${latestState.nextAction}`);
+    if (latestState.tracks.length > 0) sections.push(`Tracks: ${latestState.tracks.join(' | ')}`);
+    if (latestState.delegation.length > 0) sections.push(`Delegation: ${latestState.delegation.join(' | ')}`);
+    if (latestState.validation.length > 0) sections.push(`Validation: ${latestState.validation.join(' | ')}`);
+
+    if (previous.length > 0) {
+      sections.push('Recent milestones:');
+      sections.push(...previous.map((plan) => `- ${this.formatPlanEntry(plan)}`));
+    }
+
+    let context = sections.join('\n');
+    if (context.length > MAX_PLAN_CONTEXT_CHARS) {
+      context = `${context.slice(0, MAX_PLAN_CONTEXT_CHARS)}\n...[plan context truncated]`;
+    }
+    return context;
+  }
+
+  getPlanSnapshot(taskId: string): {
+    objective: string | null;
+    tracks: string[];
+    delegation: string[];
+    validation: string[];
+    nextAction: string | null;
+    latestStage: TaskPlanMetadata['stage'] | null;
+    runningSubagents: Array<{ role: string; task: string; subagentId: string }>;
+    blockedSubagents: Array<{ role: string; task: string; blockers: string[] }>;
+    completedSubagents: Array<{ role: string; task: string }>;
+  } | null {
+    const planEntries = this.get(taskId).entries
+      .filter((entry): entry is TaskMemoryEntry & { metadata: TaskPlanMetadata } => (
+        entry.kind === 'system' && this.isPlanMetadata(entry.metadata)
+      ));
+
+    if (planEntries.length === 0) return null;
+
+    const state = this.buildStructuredPlanState(taskId);
+    const latestMetadata = planEntries[planEntries.length - 1]?.metadata;
+    const runningSubagents: Array<{ role: string; task: string; subagentId: string }> = [];
+    const blockedSubagents: Array<{ role: string; task: string; blockers: string[] }> = [];
+    const completedSubagents: Array<{ role: string; task: string }> = [];
+    const latestBySubagent = new Map<string, TaskPlanMetadata>();
+
+    for (const entry of planEntries) {
+      const metadata = entry.metadata;
+      if (metadata.subagentId) latestBySubagent.set(metadata.subagentId, metadata);
+    }
+
+    for (const metadata of latestBySubagent.values()) {
+      const role = metadata.role?.trim();
+      const task = metadata.task?.trim();
+      if (!role || !task) continue;
+      if (metadata.status === 'running' && metadata.subagentId) {
+        runningSubagents.push({ role, task, subagentId: metadata.subagentId });
+      } else if (metadata.status === 'failed' || metadata.status === 'cancelled') {
+        blockedSubagents.push({ role, task, blockers: metadata.blockers || [] });
+      } else if (metadata.status === 'completed') {
+        completedSubagents.push({ role, task });
+      }
+    }
+
+    return {
+      ...state,
+      latestStage: latestMetadata?.stage || null,
+      runningSubagents,
+      blockedSubagents,
+      completedSubagents,
+    };
   }
 
   recordUserPrompt(taskId: string, text: string, metadata?: Record<string, unknown>): TaskMemoryRecord {
@@ -201,6 +305,25 @@ export class TaskMemoryStore {
     });
   }
 
+  recordPlan(taskId: string, text: string, metadata?: Record<string, unknown>): TaskMemoryRecord {
+    const normalizedMetadata = this.isPlanMetadata(metadata)
+      ? metadata
+      : undefined;
+    const planMetadata: TaskPlanMetadata = {
+      category: 'plan',
+      stage: normalizedMetadata?.stage || 'scaffold',
+      ...(normalizedMetadata || {}),
+    };
+    return this.append(taskId, {
+      id: generateId('mem'),
+      taskId,
+      kind: 'system',
+      text: `Plan: ${text}`,
+      createdAt: Date.now(),
+      metadata: planMetadata,
+    });
+  }
+
   recordHandoff(packet: HandoffPacket): TaskMemoryRecord {
     return this.append(packet.taskId, {
       id: generateId('mem'),
@@ -230,6 +353,7 @@ export class TaskMemoryStore {
     const evidence: string[] = [];
     const critiques: string[] = [];
     const verifications: string[] = [];
+    const plans: string[] = [];
     const chronological: string[] = [];
 
     for (const entry of recent) {
@@ -243,6 +367,8 @@ export class TaskMemoryStore {
         critiques.push(entry.text);
       } else if (category === 'verification') {
         verifications.push(entry.text);
+      } else if (category === 'plan') {
+        plans.push(entry.text);
       } else {
         const prefix = (() => {
           switch (entry.kind) {
@@ -267,6 +393,11 @@ export class TaskMemoryStore {
       if (verifications.length > 0) sections.push('**Verifications:** ' + verifications.join(' | '));
     }
 
+    if (plans.length > 0) {
+      sections.push('### Planning State');
+      sections.push('**Plans:** ' + plans.join(' | '));
+    }
+
     if (chronological.length > 0) {
       sections.push('### History');
       sections.push(...chronological);
@@ -289,6 +420,58 @@ export class TaskMemoryStore {
     this.memoryByTask.set(taskId, next);
     saveMemory(Array.from(this.memoryByTask.values()));
     return next;
+  }
+
+  private isPlanMetadata(value: unknown): value is TaskPlanMetadata {
+    return Boolean(
+      value
+      && typeof value === 'object'
+      && (value as Record<string, unknown>).category === 'plan',
+    );
+  }
+
+  private formatPlanEntry(entry: TaskMemoryEntry & { metadata: TaskPlanMetadata }): string {
+    return this.formatEntryText(entry);
+  }
+
+  private buildStructuredPlanState(taskId: string): {
+    objective: string | null;
+    tracks: string[];
+    delegation: string[];
+    validation: string[];
+    nextAction: string | null;
+  } {
+    const planEntries = this.get(taskId).entries
+      .filter((entry): entry is TaskMemoryEntry & { metadata: TaskPlanMetadata } => (
+        entry.kind === 'system' && this.isPlanMetadata(entry.metadata)
+      ));
+
+    let objective: string | null = null;
+    let nextAction: string | null = null;
+    const tracks: string[] = [];
+    const delegation: string[] = [];
+    const validation: string[] = [];
+
+    for (const entry of planEntries) {
+      const metadata = entry.metadata;
+      if (!objective && typeof metadata.objective === 'string' && metadata.objective.trim()) {
+        objective = metadata.objective.trim();
+      }
+      if (typeof metadata.nextAction === 'string' && metadata.nextAction.trim()) {
+        nextAction = metadata.nextAction.trim();
+      }
+      for (const value of toStringList(metadata.tracks)) {
+        if (typeof value === 'string' && value.trim() && !tracks.includes(value.trim())) tracks.push(value.trim());
+      }
+      for (const value of toStringList(metadata.delegation)) {
+        if (typeof value === 'string' && value.trim() && !delegation.includes(value.trim())) delegation.push(value.trim());
+      }
+      for (const value of toStringList(metadata.validation)) {
+        if (typeof value === 'string' && value.trim() && !validation.includes(value.trim())) validation.push(value.trim());
+      }
+    }
+
+    return { objective, tracks, delegation, validation, nextAction };
   }
 
   private formatEntryText(entry: TaskMemoryEntry): string {

@@ -91,7 +91,8 @@ export class V2ToolBridge {
       if (req.url === '/tools/list') {
         const ctx = readContext(this.contextPath);
         const allowed = resolveAllowedToolNames(ctx);
-        const tools = agentToolExecutor.list()
+        const runtimeToolRegistry = agentToolExecutor.list();
+        const tools = runtimeToolRegistry
           .filter((t) => !allowed || allowed.has(t.name))
           .map((t) => ({
             name: toMcpName(t.name),

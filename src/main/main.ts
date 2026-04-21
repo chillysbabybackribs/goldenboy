@@ -49,6 +49,7 @@ app.on('ready', () => {
 
 app.on('before-quit', () => {
   setAppQuitting();
+  agentModelService.dispose();
   terminalService.setAppQuitting();
   terminalService.persistNow();
   browserService.dispose();

@@ -21,14 +21,37 @@
         <button class="cc-zoom-btn" id="chatZoomOutBtn" type="button" title="Zoom out" aria-label="Zoom out">−</button>
         <button class="cc-zoom-btn cc-zoom-btn-reset" id="chatZoomResetBtn" type="button" title="Reset zoom" aria-label="Reset zoom">100%</button>
         <button class="cc-zoom-btn" id="chatZoomInBtn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+        <button class="cc-zoom-btn cc-browser-host-btn" id="commandBrowserAttachBtn" type="button" title="Move browser to command window" aria-label="Move browser to command window">Attach Browser</button>
       </div>
       <span class="cc-header-task" id="taskSummary" hidden></span>
     </header>
 
-    <!-- Main area: left content + right logs -->
+    <!-- Main area: agent sidebar + chat + browser -->
     <div class="cc-main">
 
-      <!-- Left column: metric boxes + chat -->
+      <!-- Agent tab sidebar — left edge, no background -->
+      <div class="cc-agent-sidebar-shell" id="agentTabsShell" hidden>
+        <button
+          class="cc-agent-sidebar-toggle"
+          id="agentSidebarToggleBtn"
+          type="button"
+          title="Expand agent sidebar"
+          aria-label="Expand agent sidebar"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2.5" y="2.5" width="11" height="11" rx="2"/>
+            <path d="M6 3v10"/>
+            <path d="M9.5 6.25 7.25 8l2.25 1.75"/>
+          </svg>
+        </button>
+        <div class="cc-agent-sidebar" id="agentTabs">
+          <button class="cc-agent-tab-new" id="agentTabNewBtn" type="button" title="Launch new agent" aria-label="Launch new agent">+ New Agent</button>
+          <div class="cc-agent-tabs-list" id="agentTabsList"></div>
+        </div>
+      </div>
+
+      <!-- Center column: chat + input -->
       <div class="cc-left">
 
         <!-- Chat thread -->
@@ -37,12 +60,6 @@
             <div class="cc-chat-inner" id="chatInner">
               <div class="cc-chat-empty" id="chatEmptyState">
                 <div class="cc-idle-brand">Goldenboy</div>
-                <div class="cc-idle-chips">
-                  <button class="cc-idle-chip" data-prompt="Audit my codebase for dead code and duplicates" type="button">Audit codebase</button>
-                  <button class="cc-idle-chip" data-prompt="Research and summarize" type="button">Research</button>
-                  <button class="cc-idle-chip" data-prompt="Automate a browser task" type="button">Browser task</button>
-                  <button class="cc-idle-chip" data-prompt="Build a web app" type="button">Build</button>
-                </div>
               </div>
             </div>
           </div>
@@ -121,6 +138,7 @@
                 <div class="cc-model-selector" id="modelSelector" role="group" aria-label="Select model">
                   <button class="cc-model-btn" id="modelBtnPrimary" type="button" data-owner="gpt-5.4">Codex</button>
                   <button class="cc-model-btn" id="modelBtnHaiku" type="button" data-owner="haiku">Haiku 4.5</button>
+                  <button class="cc-model-btn" id="modelBtnGemini" type="button" data-owner="gemini">Gemini</button>
                 </div>
 
                 <!-- Right: stop + utilities -->
@@ -128,7 +146,7 @@
                   <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
                   <div class="cc-compose-utility-actions">
                     <button class="cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
-                    <button class="cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new chat" aria-label="Start a new chat">
+                    <button class="cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new chat" aria-label="Start a new chat" hidden>
                       New chat
                     </button>
                   </div>
@@ -144,13 +162,35 @@
 
       </div>
 
+      <aside class="cc-browser-pane" id="commandBrowserPane" hidden>
+        <div class="cc-browser-tabbar" id="commandBrowserTabBar">
+          <div class="cc-browser-tablist" id="commandBrowserTabList"></div>
+          <button class="cc-browser-tab-new" id="commandBrowserTabNewBtn" type="button" title="New tab" aria-label="New tab">+</button>
+        </div>
+        <div class="cc-browser-header">
+          <div class="cc-browser-nav-controls">
+            <button class="cc-browser-btn" id="commandBrowserBackBtn" type="button" title="Back" aria-label="Back">◀</button>
+            <button class="cc-browser-btn" id="commandBrowserForwardBtn" type="button" title="Forward" aria-label="Forward">▶</button>
+            <button class="cc-browser-btn" id="commandBrowserReloadBtn" type="button" title="Reload" aria-label="Reload">↻</button>
+          </div>
+          <div class="cc-browser-address-wrap">
+            <input class="cc-browser-address" id="commandBrowserAddressInput" type="text" placeholder="Enter URL and press Enter" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="cc-browser-status" id="commandBrowserStatus">Idle</div>
+        </div>
+        <div class="cc-browser-surface" id="commandBrowserSurfaceArea"></div>
+      </aside>
+
     </div>
 
     <!-- Status bar — full width -->
     <div class="cc-status">
       <span id="modelLabel">Codex</span>
       <span id="taskCount">tasks: 0</span>
-      <span id="tokenStatusLabel">0 in / 0 out</span>
+      <span class="cc-status-token-group">
+        <span id="tokenStatusLabel">0 in / 0 out</span>
+        <button class="cc-status-reset-btn" id="tokenUsageResetBtn" type="button" title="Reset token usage" aria-label="Reset token usage">Reset</button>
+      </span>
     </div>
   </div>
   <script type="module" src="command.js"></script>

@@ -111,4 +111,27 @@ describe('DocumentAttachmentStore', () => {
     expect(imported[0].statusDetail).toContain('No extractor is available yet');
     expect(store.search('task-2', 'pdf')).toEqual([]);
   });
+
+  it('imports from base64 when no filesystem path is available', async () => {
+    const body = '# Inline import\n\nWorks without File.path.\n';
+    const dataBase64 = Buffer.from(body, 'utf-8').toString('base64');
+
+    const { DocumentAttachmentStore } = await import('./DocumentAttachmentStore');
+    const store = new DocumentAttachmentStore();
+
+    const imported = await store.importDocuments('task-inline', [
+      {
+        dataBase64,
+        name: 'inline.md',
+        mediaType: 'text/markdown',
+        sizeBytes: body.length,
+      },
+    ]);
+
+    expect(imported).toHaveLength(1);
+    expect(imported[0].status).toBe('indexed');
+    expect(imported[0].chunkCount).toBeGreaterThan(0);
+    const doc = store.readDocument('task-inline', imported[0].id, 2000);
+    expect(doc?.content).toContain('Inline import');
+  });
 });

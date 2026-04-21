@@ -1,4 +1,5 @@
 import {
+  GEMINI_PROVIDER_ID,
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   type AgentTaskKind,
@@ -7,7 +8,7 @@ import {
 } from '../../shared/types/model';
 import { buildTaskProfile } from './taskProfile';
 
-const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID];
+const DEFAULT_PROVIDER_ORDER: ProviderId[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID];
 
 export type ProviderRoutingCapabilities = Partial<Record<ProviderId, {
   supportsV2ToolRuntime: boolean;
@@ -52,29 +53,10 @@ export function pickProviderForPrompt(
 
   if (available.size === 0) return null;
 
-  if (profile.kind === 'research') {
-    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
-    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
-  }
-
-  if (profile.kind === 'browser-automation') {
-    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
-    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
-  }
-
-  if (profile.kind === 'implementation') {
-    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
-    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
-  }
-
-  if (
-    profile.kind === 'orchestration'
-    || profile.kind === 'review'
-    || profile.kind === 'debug'
-  ) {
-    if (available.has(PRIMARY_PROVIDER_ID)) return PRIMARY_PROVIDER_ID;
-    if (available.has(HAIKU_PROVIDER_ID)) return HAIKU_PROVIDER_ID;
-  }
+  const preferredProvider = profile.kind === 'research'
+    ? HAIKU_PROVIDER_ID
+    : PRIMARY_PROVIDER_ID;
+  if (available.has(preferredProvider)) return preferredProvider;
 
   for (const providerId of DEFAULT_PROVIDER_ORDER) {
     if (available.has(providerId)) return providerId;

@@ -23,6 +23,8 @@ import { browserOperationLedger } from './browserOperationLedger';
 export type { BrowserOperationKind } from '../../shared/types/browserOperationLedger';
 
 type BrowserUploadFilePayload = { selector: string; filePath: string; tabId?: string };
+type BrowserGetElementStatePayload = { selector: string; tabId?: string };
+type BrowserSelectOptionPayload = { selector: string; tabId?: string; value?: string; label?: string; index?: number };
 type BrowserDownloadLinkPayload = { selector: string; tabId?: string };
 type BrowserDownloadUrlPayload = { url: string; tabId?: string };
 type BrowserGetDownloadsPayload = { state?: string; filename?: string; tabId?: string };
@@ -56,6 +58,8 @@ export type BrowserOperationPayloadMap = {
   'browser.get-state': Record<string, never>;
   'browser.get-tabs': Record<string, never>;
   'browser.search-web': { query: string };
+  'browser.get-element-state': BrowserGetElementStatePayload;
+  'browser.select-option': BrowserSelectOptionPayload;
   'browser.upload-file': BrowserUploadFilePayload;
   'browser.download-link': BrowserDownloadLinkPayload;
   'browser.download-url': BrowserDownloadUrlPayload;
@@ -334,6 +338,35 @@ export async function executeBrowserOperation(
         result = {
           summary: `Typed in: ${selector}`,
           data: { selector, textLength: text.length, result: typeResult },
+        };
+        break;
+      }
+
+      case 'browser.get-element-state': {
+        const { selector, tabId } = input.payload;
+        const stateResult = await browser.getElementState(selector, tabId);
+        result = {
+          summary: stateResult.found
+            ? `Read element state for ${selector}`
+            : `No element matched ${selector}`,
+          data: { selector, result: stateResult },
+        };
+        break;
+      }
+
+      case 'browser.select-option': {
+        const { selector, tabId, value, label, index } = input.payload;
+        const selectResult = await browser.selectOption(selector, { value, label, index }, tabId);
+        if (!selectResult.selected) {
+          throw new Error(selectResult.error || `Select option failed: ${selector}`);
+        }
+        result = {
+          summary: `Selected option in ${selector}`,
+          data: {
+            selector,
+            requested: { value: value ?? null, label: label ?? null, index: index ?? null },
+            result: selectResult,
+          },
         };
         break;
       }

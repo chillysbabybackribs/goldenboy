@@ -6,6 +6,8 @@ export type BrowserOperationKind =
   | 'browser.get-state'
   | 'browser.get-tabs'
   | 'browser.search-web'
+  | 'browser.get-element-state'
+  | 'browser.select-option'
   | 'browser.upload-file'
   | 'browser.download-link'
   | 'browser.download-url'

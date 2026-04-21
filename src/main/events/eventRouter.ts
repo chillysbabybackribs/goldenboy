@@ -68,7 +68,12 @@ export function initEventRouter(): void {
     appStateStore.dispatch({
       type: ActionType.UPDATE_TASK,
       taskId: event.payload.task.id,
-      updates: { status: event.payload.task.status, updatedAt: event.payload.task.updatedAt },
+      updates: {
+        title: event.payload.task.title,
+        owner: event.payload.task.owner,
+        status: event.payload.task.status,
+        updatedAt: event.payload.task.updatedAt,
+      },
     });
   });
 

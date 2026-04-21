@@ -12,6 +12,7 @@ The current codebase supports:
 
 - Codex via the local `codex` CLI
 - Haiku via the Anthropic API
+- Gemini via the Google Gemini API
 
 The UI stack is plain HTML/CSS plus TypeScript compiled with `tsc`. This is not a React app.
 
@@ -24,7 +25,7 @@ npm install
 npm start
 ```
 
-If you want the Haiku provider, copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`.
+If you want the Haiku or Gemini providers, copy `.env.example` to `.env` and set the relevant API keys.
 
 ## What The App Does
 
@@ -40,7 +41,8 @@ If you want the Haiku provider, copy `.env.example` to `.env` and set `ANTHROPIC
 Electron main process
 ├─ AgentModelService
 │  ├─ CodexProvider -> codex exec --json --model gpt-5.4
-│  └─ HaikuProvider -> Anthropic SDK
+│  ├─ HaikuProvider -> Anthropic SDK
+│  └─ GeminiProvider -> Gemini API client
 ├─ AgentRuntime + tool packs + provider tool runtime
 ├─ BrowserService
 │  ├─ persistent browser session
@@ -64,6 +66,7 @@ Renderer windows
 - `codex` available on your `PATH`
 - a working `codex` authentication setup
 - optional: `ANTHROPIC_API_KEY` if you want the Haiku provider
+- optional: `GEMINI_API_KEY` if you want the Gemini provider
 
 ## Environment
 
@@ -76,15 +79,34 @@ export V2_WORKSPACE_ROOT=/absolute/path/to/your/repo
 # Optional: enables the Haiku provider
 export ANTHROPIC_API_KEY=your_key_here
 
+# Optional: enables the Gemini provider
+export GEMINI_API_KEY=your_key_here
+
 # Optional: override the Haiku model id
 export ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+
+# Optional: override Gemini router targets
+export GEMINI_MODEL_DEFAULT=gemini-2.5-flash
+export GEMINI_MODEL_COMPLEX=gemini-2.5-pro
+export GEMINI_MODEL_FAST=gemini-2.5-flash
+export GEMINI_MODEL_LITE=gemini-2.5-flash-lite
+export GEMINI_ROUTER_STRATEGY=balanced
+
+# Optional: explicit Gemini fallback order for research-sidecar JSON tasks
+export GEMINI_MODELS=gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.5-pro
 
 # Optional: useful on machines with GPU rendering issues
 export V2_DISABLE_HARDWARE_ACCELERATION=1
 ```
 
-The Haiku provider also reads `.env` in the project root, so putting `ANTHROPIC_API_KEY=...` there works too.
+The Haiku and Gemini providers also read `.env` in the project root, so putting provider keys there works too.
 Use [.env.example](./.env.example) as the template for a local `.env` file.
+
+Gemini router strategies:
+
+- `cheap`: bias toward `LITE` and `FAST`, only escalate on clearly complex tasks
+- `balanced`: default behavior, uses task kind plus prompt complexity
+- `quality`: escalate earlier to `DEFAULT` and `COMPLEX`
 
 ## Install
 
@@ -145,6 +167,7 @@ In the `Command Center`, the top compose bar has provider buttons:
 
 - `Codex`
 - `HAIKU`
+- `GEMINI`
 
 Behavior:
 
@@ -155,8 +178,9 @@ Default routing is prompt-based:
 
 - research-style prompts prefer `haiku` when it is available
 - implementation, debug, review, and orchestration prompts prefer Codex
+- if the preferred provider is unavailable, routing falls back across Codex, Haiku, and Gemini based on availability
 
-If `codex` is unavailable, Codex will not be selectable. If `ANTHROPIC_API_KEY` is missing, Haiku will not be available.
+If `codex` is unavailable, Codex will not be selectable. If `ANTHROPIC_API_KEY` is missing, Haiku will not be available. If `GEMINI_API_KEY` is missing, Gemini will not be available.
 
 ### 3. Start a task
 

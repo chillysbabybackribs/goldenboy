@@ -14,6 +14,11 @@ export type SubAgentSpawnInput = {
   canSpawnSubagents?: boolean;
 };
 
+export type SubAgentScopeResolution = {
+  allowedTools: 'all' | AgentToolName[];
+  source: 'explicit-all' | 'explicit-list' | 'derived-mode4' | 'derived-mode6';
+};
+
 export type SubAgentRecord = {
   id: string;
   parentRunId: string;

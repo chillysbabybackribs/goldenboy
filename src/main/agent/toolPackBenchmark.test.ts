@@ -8,6 +8,7 @@ vi.mock('electron', () => ({
       if (name === 'userData') return '/tmp';
       return '/tmp';
     },
+    getAppPath: () => '/tmp',
   },
   dialog: {},
   session: {},
@@ -20,9 +21,7 @@ vi.mock('electron', () => ({
   WebContents: class {},
 }));
 
-const describeIf = process.env.RUN_TOOL_BENCHMARK ? describe : describe.skip;
-
-describeIf('tool pack benchmark', () => {
+describe('tool scope benchmark', () => {
   it('prints the comparative tool-surface report', async () => {
     const { buildToolPackBenchmarkReport } = await import('./toolPackBenchmark');
     const report = buildToolPackBenchmarkReport();

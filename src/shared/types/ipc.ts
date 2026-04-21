@@ -63,6 +63,7 @@ export const IPC_CHANNELS = {
   BROWSER_GET_BOOKMARKS: 'browser:get-bookmarks',
   BROWSER_SPLIT_TAB: 'browser:split-tab',
   BROWSER_CLEAR_SPLIT_VIEW: 'browser:clear-split-view',
+  BROWSER_ATTACH_SURFACE: 'browser:attach-surface',
 
   // Zoom
   BROWSER_ZOOM_IN: 'browser:zoom-in',
@@ -219,6 +220,7 @@ export interface WorkspaceAPI {
     clearDownloads(): Promise<void>;
     splitTab(tabId?: string): Promise<TabInfo>;
     clearSplitView(): Promise<void>;
+    attachSurface(role: PhysicalWindowRole): Promise<{ role: PhysicalWindowRole }>;
     // Cookie sync
     reimportCookies(): Promise<{ imported: number; failed: number; domains: string[] }>;
     // Subscriptions

@@ -11,6 +11,16 @@ html, body { overflow: hidden; }
   background: var(--bg-primary);
 }
 
+.execution-shell.browser-detached .browser-pane,
+.execution-shell.browser-detached .splitter {
+  display: none;
+}
+
+.execution-shell.browser-detached .terminal-pane {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+}
+
 /* ── Panes ──────────────────────────────────────────────────────────────── */
 .pane { display: flex; flex-direction: column; overflow: hidden; min-width: 120px; flex: 1 1 auto; }
 .terminal-pane { flex: 0 0 auto; }
@@ -393,6 +403,7 @@ html, body { overflow: hidden; }
 .btn-nav.btn-stop { color: var(--accent-red); font-size: 13px; }
 .btn-nav.btn-stop:hover { background: rgba(238, 68, 68, 0.1); }
 .btn-nav.btn-menu { font-size: 16px; }
+.btn-nav.btn-attach-browser { width: auto; padding: 0 10px; font-size: 12px; font-family: var(--font-mono); }
 
 .browser-address-bar { flex: 1; min-width: 0; }
 .address-input { width: 100%; background: #151515; border: 1px solid #2a2a2a; border-radius: var(--radius-xs); color: #cfcfcf; -webkit-text-fill-color: #cfcfcf; caret-color: #f2f2f2; font-family: var(--font-mono); font-size: 13px; padding: 4px 10px; outline: none; height: 28px; transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), -webkit-text-fill-color var(--duration-fast) var(--ease-out); }

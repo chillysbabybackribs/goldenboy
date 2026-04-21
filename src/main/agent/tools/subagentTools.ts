@@ -2,6 +2,7 @@ import { AgentProvider, AgentToolDefinition, AgentToolName } from '../AgentTypes
 import { SubAgentManager } from '../subagents/SubAgentManager';
 import { SubAgentSpawnInput, SubAgentWaitInput } from '../subagents/SubAgentTypes';
 import {
+  GEMINI_PROVIDER_ID,
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   type ProviderId,
@@ -29,17 +30,19 @@ function requireString(input: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function parseAllowedTools(value: unknown): 'all' | AgentToolName[] {
+function parseAllowedTools(value: unknown): 'all' | AgentToolName[] | undefined {
   if (value === 'all') return 'all';
-  if (!Array.isArray(value)) return 'all';
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
   return value.filter((item): item is AgentToolName => typeof item === 'string') as AgentToolName[];
 }
 
 function parseProviderId(value: unknown): ProviderId | 'auto' | undefined {
   if (value === 'auto') return 'auto';
-  if (value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID) return value;
+  if (value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID) return value;
   if (value === 'codex') return PRIMARY_PROVIDER_ID;
   if (value === 'haiku') return HAIKU_PROVIDER_ID;
+  if (value === 'gemini') return GEMINI_PROVIDER_ID;
   return undefined;
 }
 
@@ -73,7 +76,7 @@ export function createSubAgentToolDefinitions(providerFactory: (input: SubAgentS
           inheritedContext: { type: 'string', enum: ['full', 'summary', 'none'] },
           providerId: {
             type: 'string',
-            enum: ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, 'codex', 'haiku'],
+            enum: ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID, 'codex', 'haiku', 'gemini'],
           },
           allowedTools: { oneOf: [{ type: 'string', enum: ['all'] }, { type: 'array', items: { type: 'string' } }] },
           canSpawnSubagents: { type: 'boolean' },
@@ -91,11 +94,15 @@ export function createSubAgentToolDefinitions(providerFactory: (input: SubAgentS
           allowedTools: parseAllowedTools(obj.allowedTools),
           canSpawnSubagents: typeof obj.canSpawnSubagents === 'boolean' ? obj.canSpawnSubagents : true,
         };
-        const record = manager.spawnBackground(context.runId, spawnInput);
-        logSubAgent('info', `Spawned sub-agent ${record.id}: ${record.role}`);
+        const scope = manager.resolveScope(spawnInput);
+        const { record, reused } = manager.spawnBackground(context.runId, spawnInput);
+        logSubAgent(
+          reused ? 'warn' : 'info',
+          `${reused ? 'Reused' : 'Spawned'} sub-agent ${record.id}: ${record.role} scopeSource=${scope.source} scope=${scope.allowedTools === 'all' ? 'all' : scope.allowedTools.join(',')}`,
+        );
         return {
-          summary: `Spawned sub-agent ${record.id}`,
-          data: { subagent: record },
+          summary: reused ? `Reused running sub-agent ${record.id}` : `Spawned sub-agent ${record.id}`,
+          data: { subagent: record, reused, scopeSource: scope.source, allowedTools: scope.allowedTools },
         };
       },
     },

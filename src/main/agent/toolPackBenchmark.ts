@@ -7,18 +7,26 @@ import { createRuntimeToolDefinitions } from './tools/runtimeTools';
 import { createTerminalToolDefinitions } from './tools/terminalTools';
 import { createSubAgentToolDefinitions } from './tools/subagentTools';
 import type { AgentProvider, AgentToolDefinition } from './AgentTypes';
-import type { AgentTaskKind, AgentToolPackPreset } from '../../shared/types/model';
-import { AGENT_TOOL_PACK_PRESETS } from '../../shared/types/model';
+import type { AgentTaskKind, AgentToolScopePreset } from '../../shared/types/model';
+import { AGENT_TOOL_SCOPE_PRESETS } from '../../shared/types/model';
 import { buildTaskProfile } from './taskProfile';
+import { applyAdaptiveTaskProfileOverride } from './runtimeScope';
 
 type BenchmarkTask = {
   kind: AgentTaskKind;
   prompt: string;
+  adaptiveSnapshot?: {
+    latestStage: 'subagent-spawn' | 'subagent-complete' | 'parent-turn-complete';
+    runningSubagents: Array<{ role: string; task: string; subagentId: string }>;
+    blockedSubagents: Array<{ role: string; task: string; blockers: string[] }>;
+    completedSubagents: Array<{ role: string; task: string }>;
+    nextAction: string | null;
+  };
 };
 
 type BenchmarkRow = {
   kind: AgentTaskKind;
-  preset: AgentToolPackPreset;
+  preset: AgentToolScopePreset;
   toolCount: number;
   categories: string;
   systemPromptTokens: number;
@@ -46,6 +54,17 @@ const TASKS: BenchmarkTask[] = [
   {
     kind: 'orchestration',
     prompt: 'Split this repo-wide migration across sub-agents and coordinate the work',
+  },
+  {
+    kind: 'orchestration',
+    prompt: 'Split this repo-wide migration across sub-agents and coordinate the work',
+    adaptiveSnapshot: {
+      latestStage: 'subagent-spawn',
+      runningSubagents: [{ role: 'research', task: 'Inspect repo migration scope', subagentId: 'bench_sub_1' }],
+      blockedSubagents: [],
+      completedSubagents: [],
+      nextAction: 'Wait for research findings',
+    },
   },
   {
     kind: 'general',
@@ -111,12 +130,20 @@ function formatHaikuToolPayload(tools: Pick<AgentToolDefinition, 'name' | 'descr
 
 function selectTools(
   allTools: AgentToolDefinition[],
-  preset: AgentToolPackPreset,
+  preset: AgentToolScopePreset,
   task: BenchmarkTask,
 ): AgentToolDefinition[] {
+  const adaptiveOverrides = applyAdaptiveTaskProfileOverride(
+    task.prompt,
+    {
+      kind: task.kind,
+      toolScopePreset: preset,
+    },
+    task.adaptiveSnapshot,
+  );
   const profile = buildTaskProfile(task.prompt, {
     kind: task.kind,
-    toolPackPreset: preset,
+    ...adaptiveOverrides,
   });
   if (profile.allowedTools === 'all') return allTools;
   const allowed = new Set(profile.allowedTools);
@@ -133,7 +160,7 @@ export function buildToolPackBenchmarkReport(): string {
 
   const rows: BenchmarkRow[] = [];
   for (const task of TASKS) {
-    for (const preset of AGENT_TOOL_PACK_PRESETS) {
+    for (const preset of AGENT_TOOL_SCOPE_PRESETS) {
       const selectedTools = selectTools(tools, preset, task);
       const systemPrompt = promptBuilder.buildSystemPrompt({
         config: {
@@ -180,7 +207,7 @@ export function buildToolPackBenchmarkReport(): string {
   ].join(' ')).join('\n');
 
   return [
-    '=== Tool Pack Benchmark ===',
+    '=== Tool Scope Benchmark ===',
     '',
     `Registered tools: ${tools.length}`,
     '',

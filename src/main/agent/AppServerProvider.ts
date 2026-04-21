@@ -16,11 +16,11 @@ import type {
 import {
   DEFAULT_PROVIDER_MAX_TOOL_TURNS,
   describeProviderToolCall,
+  mergeLoadedTools,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
-  resolveToolPackExpansion,
+  resolveLoadedToolExpansion,
 } from './providerToolRuntime';
-import { mergeExpandedTools, resolveAutoExpandedToolPack } from './toolPacks';
 import type { AppServerProcess } from './AppServerProcess';
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -29,6 +29,9 @@ const THREAD_FILE = 'codex-threads.json';
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const TURN_TIMEOUT_MS = 3 * 60 * 1000;
 const DEFAULT_CONTEXT_PATH = path.join(os.tmpdir(), 'v2-tool-context.json');
+const MAX_THREAD_REUSE_MS = 24 * 60 * 60 * 1000;
+const MAX_THREAD_RESUME_COUNT = 3;
+const MAX_TURN_RECOVERY_ATTEMPTS = 2;
 
 // Use the Node 24 built-in WebSocket global via type cast.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,8 +39,14 @@ const NativeWebSocket = (globalThis as any).WebSocket as typeof WebSocket;
 
 // ─── Thread Registry Types ───────────────────────────────────────────────
 
-type ThreadEntry = { threadId: string; savedAt: number };
+type ThreadEntry = { threadId: string; savedAt: number; resumeCount?: number };
 type ThreadRegistry = Record<string, ThreadEntry>;
+
+type NormalizedThreadEntry = {
+  threadId: string;
+  savedAt: number;
+  resumeCount: number;
+};
 
 // ─── Thread Registry Persistence ─────────────────────────────────────────
 
@@ -51,12 +60,30 @@ function getThreadFilePath(): string {
 
 export function pruneExpiredEntries(entries: ThreadRegistry, now: number): ThreadRegistry {
   const result: ThreadRegistry = {};
-  for (const [taskId, entry] of Object.entries(entries)) {
+  for (const [taskId, rawEntry] of Object.entries(entries)) {
+    const entry = normalizeThreadEntry(rawEntry);
+    if (!entry) continue;
     if (now - entry.savedAt <= SEVEN_DAYS_MS) {
       result[taskId] = entry;
     }
   }
   return result;
+}
+
+function normalizeThreadEntry(entry: unknown): NormalizedThreadEntry | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const threadId = typeof (entry as { threadId?: unknown }).threadId === 'string'
+    ? (entry as { threadId: string }).threadId.trim()
+    : '';
+  const savedAt = typeof (entry as { savedAt?: unknown }).savedAt === 'number'
+    ? (entry as { savedAt: number }).savedAt
+    : 0;
+  const resumeCount = typeof (entry as { resumeCount?: unknown }).resumeCount === 'number'
+    ? Math.max(0, Math.floor((entry as { resumeCount: number }).resumeCount))
+    : 0;
+
+  if (!threadId || !Number.isFinite(savedAt) || savedAt <= 0) return null;
+  return { threadId, savedAt, resumeCount };
 }
 
 export function loadThreadRegistry(): ThreadRegistry {
@@ -112,6 +139,24 @@ type TurnStartInputItem =
   | { type: 'local_image'; path: string }
   | { type: 'input_image'; image_url: string };
 
+function mergeRecoveredMessage(prefix: string, text: string): string {
+  if (!prefix) return text;
+  if (!text) return prefix;
+  return text.startsWith(prefix) ? text : `${prefix}${text}`;
+}
+
+class RecoverableTurnError extends Error {
+  readonly partialMessage: string;
+  readonly toolsCalled: boolean;
+
+  constructor(message: string, options?: { partialMessage?: string; toolsCalled?: boolean }) {
+    super(message);
+    this.name = 'RecoverableTurnError';
+    this.partialMessage = options?.partialMessage ?? '';
+    this.toolsCalled = Boolean(options?.toolsCalled);
+  }
+}
+
 // ─── Provider Implementation ─────────────────────────────────────────────
 
 export class AppServerProvider implements AgentProvider {
@@ -121,10 +166,12 @@ export class AppServerProvider implements AgentProvider {
 
   private aborted = false;
   private abortCurrentTurn: (() => void) | null = null;
+  private steerCurrentTurn: ((input: string, attachments?: AgentProviderRequest['attachments']) => void) | null = null;
   private ws: WebSocket | null = null;
   private threadRegistry: ThreadRegistry = loadThreadRegistry();
   private nextId = 1;
   private readonly contextPath: string;
+  private wsPort: number | null = null;
 
   constructor(private readonly options: AppServerProviderOptions) {
     this.providerId = options.providerId ?? PRIMARY_PROVIDER_ID;
@@ -137,8 +184,16 @@ export class AppServerProvider implements AgentProvider {
     this.abortCurrentTurn?.();
   }
 
+  steer(input: string, attachments?: AgentProviderRequest['attachments']): void {
+    const text = input.trim();
+    if (!text) return;
+    this.steerCurrentTurn?.(text, attachments);
+  }
+
   async connect(wsPort: number): Promise<void> {
+    this.wsPort = wsPort;
     return new Promise<void>((resolve, reject) => {
+      this.ws?.close();
       const ws = new NativeWebSocket(`ws://127.0.0.1:${wsPort}`);
       const initId = this.nextId++;
 
@@ -160,6 +215,11 @@ export class AppServerProvider implements AgentProvider {
               ws.close();
               reject(new Error(`AppServerProvider: initialize failed: ${msg.error.message}`));
             } else {
+              ws.send(JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'notifications/initialized',
+                params: {},
+              }));
               this.ws = ws;
               resolve();
             }
@@ -208,7 +268,7 @@ export class AppServerProvider implements AgentProvider {
     let outputTokens = 0;
     const codexItems: CodexItem[] = [];
     let currentTools = [...request.tools];
-    const toolCatalog = request.toolCatalog?.length ? request.toolCatalog : request.tools;
+    const loadableTools = request.loadableTools;
     const maxToolTurns = normalizeProviderMaxToolTurns(
       request.maxToolTurns ?? DEFAULT_PROVIDER_MAX_TOOL_TURNS,
     );
@@ -235,62 +295,63 @@ export class AppServerProvider implements AgentProvider {
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
 
-      const turnInput = nextTurnInput ?? (turn === 0 ? firstTurnInput : accumulatedMessage);
+      const originalTurnInput = nextTurnInput ?? (turn === 0 ? firstTurnInput : accumulatedMessage);
       nextTurnInput = null;
+      let turnInput = originalTurnInput;
+      let turnResult: Awaited<ReturnType<AppServerProvider['runOneTurn']>>;
+      let activeWs = this.ws;
+      let recoveryAttempts = 0;
+      let recoveredTextPrefix = '';
 
-      const turnResult = await this.runOneTurn(ws, {
-        threadId,
-        task: turnInput,
-        request,
-        currentTools,
-        toolCatalog,
-      });
+      while (true) {
+        if (!activeWs) throw new Error('AppServerProvider: not connected');
+        try {
+          turnResult = await this.runOneTurn(activeWs, {
+            threadId,
+            task: turnInput,
+            request,
+            currentTools,
+            loadableTools,
+          });
+          break;
+        } catch (error) {
+          if (!(error instanceof RecoverableTurnError) || recoveryAttempts >= MAX_TURN_RECOVERY_ATTEMPTS) {
+            throw error;
+          }
+          if (this.aborted) throw new Error('Task cancelled by user.');
+
+          recoveryAttempts += 1;
+          request.onStatus?.(`stream-recover:${recoveryAttempts} reconnecting interrupted Codex turn`);
+          if (!error.toolsCalled && error.partialMessage.trim()) {
+            recoveredTextPrefix = mergeRecoveredMessage(recoveredTextPrefix, error.partialMessage);
+          }
+          activeWs = await this.reconnectAndResumeThread(taskId, threadId, request.systemPrompt);
+          turnInput = this.buildRecoveryTurnInput(originalTurnInput, error);
+        }
+      }
       if (this.aborted) throw new Error('Task cancelled by user.');
 
       inputTokens += turnResult.inputTokens;
       outputTokens += turnResult.outputTokens;
-      accumulatedMessage = turnResult.message;
+      accumulatedMessage = mergeRecoveredMessage(recoveredTextPrefix, turnResult.message);
 
       for (const item of turnResult.codexItems) {
         codexItems.push(item);
       }
 
-      // Apply explicit tool pack expansion (from runtime.request_tool_pack)
-      if (turnResult.toolPackExpanded && turnResult.expandedTools && turnResult.expansion) {
-        currentTools = mergeExpandedTools(currentTools, toolCatalog, turnResult.expansion);
-        // Update context file so MCP shim exposes the expanded tool set on the next turn
+      // Apply explicit tool loading (from runtime.load_tools)
+      if (turnResult.toolsLoaded && turnResult.expandedTools && turnResult.expansion) {
+        currentTools = mergeLoadedTools(currentTools, loadableTools, turnResult.expansion);
+        // Update context file so MCP shim exposes the loaded tool set on the next turn
         this.writeContextFile(request, currentTools);
       }
 
-      // Check for auto tool pack expansion
       if (turnResult.kind === 'final') {
-        const autoExpansion = resolveAutoExpandedToolPack(
-          turnResult.message,
-          currentTools,
-          toolCatalog,
-        );
-        if (autoExpansion) {
-          currentTools = mergeExpandedTools(currentTools, toolCatalog, autoExpansion);
-          // Update context file so MCP shim exposes the expanded tool set on the next turn
-          this.writeContextFile(request, currentTools);
-          request.onStatus?.(`tool-auto-expand:${autoExpansion.pack}`);
-          const expandedNames = autoExpansion.scope === 'all'
-            ? ['all eligible tools']
-            : autoExpansion.tools;
-          nextTurnInput = [
-            `Host auto-expanded tool pack "${autoExpansion.pack}".`,
-            `Reason: ${autoExpansion.reason}`,
-            `Description: ${autoExpansion.description}`,
-            `Expanded tools: ${expandedNames.join(', ')}`,
-          ].join('\n');
-          continue;
-        }
-
         // Emit the final output
         const finalItem = publishProviderFinalOutput({
           request,
           itemId: `${this.itemPrefix('final')}-${Date.now()}`,
-          text: turnResult.message,
+          text: accumulatedMessage,
         });
         codexItems.push(finalItem);
 
@@ -335,14 +396,25 @@ export class AppServerProvider implements AgentProvider {
     systemPrompt: string,
   ): Promise<string> {
     const existing = this.threadRegistry[taskId];
-    if (existing) {
+    const normalizedExisting = normalizeThreadEntry(existing);
+    if (normalizedExisting && this.shouldReuseThread(normalizedExisting)) {
       try {
-        return await this.resumeThread(ws, taskId, existing.threadId, systemPrompt);
+        return await this.resumeThread(ws, taskId, normalizedExisting.threadId, systemPrompt);
       } catch {
-        // resume failed; delete stale entry and fall through to start new thread
+        // resume failed; fall through to fork/start paths below
+      }
+    }
+    if (normalizedExisting) {
+      try {
+        return await this.forkThread(ws, taskId, normalizedExisting.threadId, systemPrompt);
+      } catch {
+        // fork failed; delete stale entry and fall through to start
         delete this.threadRegistry[taskId];
         saveThreadRegistry(this.threadRegistry);
       }
+    } else if (existing) {
+      delete this.threadRegistry[taskId];
+      saveThreadRegistry(this.threadRegistry);
     }
     return this.startThread(ws, taskId, systemPrompt);
   }
@@ -376,7 +448,7 @@ export class AppServerProvider implements AgentProvider {
             reject(new Error('AppServerProvider: thread/start response missing thread.id'));
             return;
           }
-          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };
+          this.threadRegistry[taskId] = { threadId, savedAt: Date.now(), resumeCount: 0 };
           saveThreadRegistry(this.threadRegistry);
           resolve(threadId);
         } catch {
@@ -430,7 +502,12 @@ export class AppServerProvider implements AgentProvider {
             reject(new Error(`thread/resume failed: ${msg.error.message}`));
             return;
           }
-          this.threadRegistry[taskId] = { threadId, savedAt: Date.now() };
+          const existing = normalizeThreadEntry(this.threadRegistry[taskId]);
+          this.threadRegistry[taskId] = {
+            threadId,
+            savedAt: Date.now(),
+            resumeCount: (existing?.resumeCount ?? 0) + 1,
+          };
           saveThreadRegistry(this.threadRegistry);
           resolve(threadId);
         } catch {
@@ -460,6 +537,66 @@ export class AppServerProvider implements AgentProvider {
     });
   }
 
+  private forkThread(
+    ws: WebSocket,
+    taskId: string,
+    threadId: string,
+    developerInstructions: string,
+  ): Promise<string> {
+    const reqId = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('AppServerProvider: thread/fork timed out'));
+      }, TURN_TIMEOUT_MS);
+
+      const handler = (event: MessageEvent): void => {
+        try {
+          const msg = JSON.parse(
+            typeof event.data === 'string' ? event.data : event.data.toString(),
+          ) as WsResponse;
+          if (msg.id !== reqId) return;
+          cleanup();
+          if (msg.error) {
+            reject(new Error(`thread/fork failed: ${msg.error.message}`));
+            return;
+          }
+          const thread = msg.result?.thread as { id?: string } | undefined;
+          const forkedThreadId = thread?.id;
+          if (!forkedThreadId) {
+            reject(new Error('AppServerProvider: thread/fork response missing thread.id'));
+            return;
+          }
+          this.threadRegistry[taskId] = { threadId: forkedThreadId, savedAt: Date.now(), resumeCount: 0 };
+          saveThreadRegistry(this.threadRegistry);
+          resolve(forkedThreadId);
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        ws.removeEventListener('message', handler);
+      };
+
+      ws.addEventListener('message', handler);
+      ws.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: reqId,
+        method: 'thread/fork',
+        params: {
+          threadId,
+          developerInstructions,
+          approvalPolicy: 'never',
+          sandboxPolicy: { type: 'dangerFullAccess' },
+          persistFullHistory: true,
+          config: { web_search: 'disabled' },
+        },
+      }));
+    });
+  }
+
   // ─── Private: Turn Execution ─────────────────────────────────────────────
 
   private runOneTurn(
@@ -469,36 +606,41 @@ export class AppServerProvider implements AgentProvider {
       task: string;
       request: AgentProviderRequest;
       currentTools: AgentProviderRequest['tools'];
-      toolCatalog: AgentProviderRequest['tools'];
+      loadableTools: AgentProviderRequest['loadableTools'];
     },
   ): Promise<{
     kind: 'final' | 'tool_calls';
     message: string;
     inputTokens: number;
     outputTokens: number;
-    toolPackExpanded: boolean;
-    expansion?: { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] };
+    toolsLoaded: boolean;
+    expansion?: { tools: AgentToolName[] };
     expandedTools?: AgentProviderRequest['tools'];
     codexItems: CodexItem[];
   }> {
-    const { threadId, task, request, currentTools, toolCatalog } = params;
+    const { threadId, task, request, currentTools, loadableTools } = params;
 
     return new Promise((resolve, reject) => {
       let message = '';
       let lastInputTokens = 0;
       let lastOutputTokens = 0;
       let toolsCalled = false;
-      let toolPackExpanded = false;
-      let expansion: { pack: string; description: string; tools: AgentToolName[]; scope: 'named' | 'all'; relatedPackIds: string[] } | undefined;
+      let toolsLoaded = false;
+      let expansion: { tools: AgentToolName[] } | undefined;
       let expandedTools: AgentProviderRequest['tools'] | undefined;
       const turnCodexItems: CodexItem[] = [];
 
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
       const resetTimer = (): void => {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
           cleanup();
-          reject(new Error('AppServerProvider: turn timed out'));
+          settled = true;
+          reject(new RecoverableTurnError('AppServerProvider: turn timed out', {
+            partialMessage: message,
+            toolsCalled,
+          }));
         }, TURN_TIMEOUT_MS);
       };
 
@@ -510,9 +652,13 @@ export class AppServerProvider implements AgentProvider {
           params: { threadId },
         }));
       };
+      this.steerCurrentTurn = (inputText, attachments) => {
+        this.sendTurnSteer(ws, threadId, inputText, attachments);
+      };
 
       const handler = (event: MessageEvent): void => {
         try {
+          if (settled) return;
           resetTimer();
           const raw = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
@@ -601,23 +747,23 @@ export class AppServerProvider implements AgentProvider {
                 request.onItem?.({ item: completedItem, eventType: 'item.completed' });
                 turnCodexItems.push(completedItem);
 
-                // Check for tool pack expansion from runtime.request_tool_pack
-                if (toolName === 'runtime.request_tool_pack' && !error && result) {
+                // Check for tool loading from runtime.load_tools
+                if (toolName === 'runtime.load_tools' && !error && result) {
                   const toolResult = {
                     summary: '',
                     data: (typeof result === 'object' && result !== null)
                       ? result as Record<string, unknown>
                       : {},
                   };
-                  const exp = resolveToolPackExpansion(
-                    { toolCatalog },
+                  const exp = resolveLoadedToolExpansion(
+                    { loadableTools },
                     toolName as AgentToolName,
                     toolResult,
                   );
                   if (exp) {
-                    toolPackExpanded = true;
+                    toolsLoaded = true;
                     expansion = exp;
-                    expandedTools = mergeExpandedTools(currentTools, toolCatalog, exp);
+                    expandedTools = mergeLoadedTools(currentTools, loadableTools, exp);
                   }
                 }
               }
@@ -641,12 +787,13 @@ export class AppServerProvider implements AgentProvider {
 
             case 'turn/completed': {
               cleanup();
+              settled = true;
               resolve({
                 kind: toolsCalled ? 'tool_calls' : 'final',
                 message,
                 inputTokens: lastInputTokens,
                 outputTokens: lastOutputTokens,
-                toolPackExpanded,
+                toolsLoaded,
                 expansion,
                 expandedTools,
                 codexItems: turnCodexItems,
@@ -656,6 +803,7 @@ export class AppServerProvider implements AgentProvider {
 
             case 'turn/failed': {
               cleanup();
+              settled = true;
               const turnData = (params.turn && typeof params.turn === 'object')
                 ? params.turn as { error?: { message?: string } }
                 : null;
@@ -672,15 +820,40 @@ export class AppServerProvider implements AgentProvider {
         }
       };
 
+      const closeHandler = (): void => {
+        if (settled) return;
+        cleanup();
+        settled = true;
+        reject(new RecoverableTurnError('AppServerProvider: WebSocket closed during turn', {
+          partialMessage: message,
+          toolsCalled,
+        }));
+      };
+
+      const errorHandler = (): void => {
+        if (settled) return;
+        cleanup();
+        settled = true;
+        reject(new RecoverableTurnError('AppServerProvider: WebSocket error during turn', {
+          partialMessage: message,
+          toolsCalled,
+        }));
+      };
+
       const cleanup = (): void => {
         if (timer) clearTimeout(timer);
         this.abortCurrentTurn = null;
+        this.steerCurrentTurn = null;
         ws.removeEventListener('message', handler);
+        ws.removeEventListener('close', closeHandler);
+        ws.removeEventListener('error', errorHandler);
       };
 
       const turnReqId = this.nextId++;
       const input = this.buildTurnStartInput(task, request.attachments);
       ws.addEventListener('message', handler);
+      ws.addEventListener('close', closeHandler);
+      ws.addEventListener('error', errorHandler);
       resetTimer();
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
@@ -722,6 +895,56 @@ export class AppServerProvider implements AgentProvider {
 
   private itemPrefix(kind: 'tool' | 'final'): string {
     return `${this.providerId.replace(/[^a-zA-Z0-9]+/g, '-')}-${kind}`;
+  }
+
+  private sendTurnSteer(
+    ws: WebSocket,
+    threadId: string,
+    inputText: string,
+    attachments?: AgentProviderRequest['attachments'],
+  ): void {
+    const input = this.buildTurnStartInput(inputText, attachments);
+    ws.send(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'turn/steer',
+      params: {
+        threadId,
+        input,
+      },
+    }));
+  }
+
+  private shouldReuseThread(entry: NormalizedThreadEntry): boolean {
+    if (Date.now() - entry.savedAt > MAX_THREAD_REUSE_MS) return false;
+    if (entry.resumeCount >= MAX_THREAD_RESUME_COUNT) return false;
+    return true;
+  }
+
+  private buildRecoveryTurnInput(originalTurnInput: string, error: RecoverableTurnError): string {
+    const partial = error.partialMessage.trim();
+    if (!error.toolsCalled && partial) {
+      return [
+        'Your previous response was interrupted before it completed.',
+        `It ended with:\n${partial}`,
+        'Continue from where you left off without repeating the text already provided.',
+      ].join('\n\n');
+    }
+    return originalTurnInput;
+  }
+
+  private async reconnectAndResumeThread(
+    taskId: string,
+    threadId: string,
+    systemPrompt: string,
+  ): Promise<WebSocket> {
+    const port = this.wsPort ?? (await this.options.process.waitUntilReady()).wsPort;
+    await this.connect(port);
+    const ws = this.ws;
+    if (!ws) {
+      throw new Error('AppServerProvider: reconnect failed to establish a WebSocket');
+    }
+    await this.resumeThread(ws, taskId, threadId, systemPrompt);
+    return ws;
   }
 
   private buildTurnStartInput(

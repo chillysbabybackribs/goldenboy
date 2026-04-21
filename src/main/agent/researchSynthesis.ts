@@ -10,7 +10,6 @@ export function shouldRunBackgroundResearchSynthesis(input: {
   synthesisProviderAvailable: boolean;
 }): boolean {
   if (input.taskKind !== 'research') return false;
-  if (input.primaryProviderId !== HAIKU_PROVIDER_ID) return false;
   if (!input.synthesisProviderAvailable) return false;
   return looksLikeComplexResearchPrompt(input.prompt);
 }
@@ -62,6 +61,6 @@ export function formatBackgroundResearchSynthesis(output: string): string {
   return `Refined synthesis:\n\n${trimmed}`;
 }
 
-export function backgroundResearchSynthesisProviderId(): ProviderId {
-  return PRIMARY_PROVIDER_ID;
+export function backgroundResearchSynthesisProviderId(primaryProviderId: ProviderId): ProviderId {
+  return primaryProviderId;
 }

@@ -3,6 +3,7 @@ import { TerminalSessionState, createDefaultTerminalState, TerminalCommandState,
 import { BrowserState, createDefaultBrowserState } from './browser';
 import { SurfaceActionRecord } from '../actions/surfaceActionTypes';
 import {
+  GEMINI_PROVIDER_ID,
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   ProviderId,
@@ -65,6 +66,21 @@ export type TokenUsageCumulative = {
   outputTokens: number;
 };
 
+export type TaskTokenUsageProviderBreakdown = {
+  inputTokens: number;
+  outputTokens: number;
+  apiCalls: number;
+};
+
+export type TaskTokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  apiCalls: number;
+  updatedAt: number;
+  lastProviderId: ProviderId | null;
+  providerBreakdown: Partial<Record<ProviderId, TaskTokenUsageProviderBreakdown>>;
+};
+
 export type AppState = {
   windows: Record<PhysicalWindowRole, WindowState>;
   executionSplit: ExecutionSplitState;
@@ -79,6 +95,7 @@ export type AppState = {
   surfaceActions: SurfaceActionRecord[];
   providers: Record<ProviderId, ProviderRuntime>;
   tokenUsage: TokenUsageCumulative;
+  taskTokenUsage: Record<string, TaskTokenUsage>;
 };
 
 export function createDefaultWindowState(role: PhysicalWindowRole): WindowState {
@@ -110,8 +127,10 @@ export function createDefaultAppState(): AppState {
     providers: {
       [PRIMARY_PROVIDER_ID]: createDefaultProviderRuntime(PRIMARY_PROVIDER_ID),
       [HAIKU_PROVIDER_ID]: createDefaultProviderRuntime(HAIKU_PROVIDER_ID),
+      [GEMINI_PROVIDER_ID]: createDefaultProviderRuntime(GEMINI_PROVIDER_ID),
     },
     tokenUsage: { inputTokens: 0, outputTokens: 0 },
+    taskTokenUsage: {},
   };
 }
 

@@ -38,7 +38,7 @@ describe('research synthesis helpers', () => {
       taskKind: 'research',
       primaryProviderId: 'gpt-5.4',
       synthesisProviderAvailable: true,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('builds constrained synthesis prompts and formats published output', () => {

@@ -1,4 +1,6 @@
 import {
+  applyAdaptiveTaskProfileOverride,
+  isOrchestrationExecutionReady,
   looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
   looksLikeImplementationTask,
@@ -19,11 +21,13 @@ describe('runtime scope', () => {
     expect(looksLikeDelegationTask('Split this work across multiple agents and run in parallel')).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
     expect(scope.allowedTools).toHaveLength(8);
-    expect(scope.allowedTools).toContain('runtime.request_tool_pack');
-    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
-    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
+    expect(scope.allowedTools).toContain('runtime.search_tools');
+    expect(scope.allowedTools).toContain('runtime.load_tools');
+    expect(scope.allowedTools).toContain('runtime.list_loaded_tools');
+    expect(scope.allowedTools).toContain('subagent.spawn');
+    expect(scope.allowedTools).toContain('subagent.wait');
     expect(scope.canSpawnSubagents).toBe(true);
-    expect(scope.skillNames).toEqual([]);
+    expect(scope.skillNames).toEqual(['subagent-coordination']);
   });
 
   it('uses research mode for browser search tasks and injects the search directive', () => {
@@ -32,10 +36,8 @@ describe('runtime scope', () => {
     expect(looksLikeResearchTask(prompt)).toBe(true);
     expect(looksLikeBrowserSearchTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(8);
-    expect(scope.allowedTools).toContain('runtime.request_tool_pack');
-    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
-    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
+    expect(scope.allowedTools).toHaveLength(6);
+    expect(scope.allowedTools).toContain('runtime.list_loaded_tools');
     expect(scope.allowedTools).toContain('browser.answer_from_cache');
     expect(scope.allowedTools).toContain('browser.extract_page');
     expect(scope.canSpawnSubagents).toBe(false);
@@ -55,11 +57,9 @@ describe('runtime scope', () => {
     const scope = scopeForPrompt(prompt);
     expect(looksLikeBrowserAutomationTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(9);
+    expect(scope.allowedTools).toHaveLength(7);
     expect(scope.allowedTools).toEqual(expect.arrayContaining([
-      'runtime.request_tool_pack',
-      'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
+      'runtime.list_loaded_tools',
       'browser.get_state',
       'browser.get_tabs',
       'browser.close_tab',
@@ -74,12 +74,12 @@ describe('runtime scope', () => {
     expect(looksLikeImplementationTask(prompt)).toBe(true);
     expect(looksLikeLocalCodeTask(prompt)).toBe(true);
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(8);
-    expect(scope.allowedTools).toContain('runtime.request_tool_pack');
-    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
-    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
+    expect(scope.allowedTools).toHaveLength(6);
+    expect(scope.allowedTools).toContain('runtime.list_loaded_tools');
+    expect(scope.allowedTools).toContain('filesystem.patch');
+    expect(scope.allowedTools).toContain('terminal.exec');
     expect(scope.canSpawnSubagents).toBe(false);
-    expect(scope.skillNames).toEqual([]);
+    expect(scope.skillNames).toEqual(expect.arrayContaining(['code-edit', 'typescript-typecheck']));
   });
 
   it('distinguishes debug and review tasks from implementation work', () => {
@@ -88,26 +88,27 @@ describe('runtime scope', () => {
     expect(looksLikeDebugTask(debugPrompt)).toBe(true);
     expect(looksLikeImplementationTask(debugPrompt)).toBe(false);
     expect(debugScope.maxToolTurns).toBe(28);
-    expect(debugScope.skillNames).toEqual([]);
+    expect(debugScope.allowedTools).toHaveLength(6);
+    expect(debugScope.skillNames).toEqual(expect.arrayContaining(['code-edit', 'typescript-typecheck', 'test-driven-fix']));
 
     const reviewPrompt = 'Review this PR diff and identify regressions before merge';
     const reviewScope = scopeForPrompt(reviewPrompt);
     expect(looksLikeReviewTask(reviewPrompt)).toBe(true);
     expect(looksLikeImplementationTask(reviewPrompt)).toBe(false);
     expect(reviewScope.allowedTools).not.toBe('all');
-    expect(reviewScope.allowedTools).toHaveLength(8);
+    expect(reviewScope.allowedTools).toHaveLength(6);
     expect(reviewScope.canSpawnSubagents).toBe(false);
-    expect(reviewScope.skillNames).toEqual([]);
+    expect(reviewScope.skillNames).toEqual(expect.arrayContaining(['code-edit', 'test-driven-fix']));
   });
 
-  it('keeps the broader default preset for general tasks', () => {
+  it('general tasks get search and load tools for open-ended discovery', () => {
     const scope = scopeForPrompt('Help me think through a product naming idea');
     expect(scope.allowedTools).not.toBe('all');
     expect(scope.allowedTools).toHaveLength(9);
     expect(scope.allowedTools).toEqual(expect.arrayContaining([
-      'runtime.request_tool_pack',
-      'runtime.list_tool_packs',
-      'runtime.haiku_browser_session',
+      'runtime.search_tools',
+      'runtime.load_tools',
+      'runtime.list_loaded_tools',
       'filesystem.search',
       'filesystem.read',
       'filesystem.patch',
@@ -125,7 +126,7 @@ describe('runtime scope', () => {
     const planningScope = scopeForPrompt(planningPrompt);
     expect(looksLikeOrchestrationTask(planningPrompt)).toBe(true);
     expect(planningScope.canSpawnSubagents).toBe(true);
-    expect(planningScope.skillNames).toEqual([]);
+    expect(planningScope.skillNames).toEqual(['subagent-coordination']);
   });
 
   it('treats explicit task profile overrides as authoritative', () => {
@@ -133,7 +134,7 @@ describe('runtime scope', () => {
     const scope = scopeForPrompt(prompt, {
       kind: 'research',
       skillNames: ['browser-operation', 'local-debug'],
-      toolPackPreset: 'all',
+      toolScopePreset: 'all',
       canSpawnSubagents: true,
       maxToolTurns: 9,
     });
@@ -157,13 +158,57 @@ describe('runtime scope', () => {
   it('supports the tighter four-tool preset for benchmark runs', () => {
     const scope = scopeForPrompt('Search the web for current SEC guidance', {
       kind: 'research',
-      toolPackPreset: 'mode-4',
+      toolScopePreset: 'mode-4',
     });
 
     expect(scope.allowedTools).not.toBe('all');
-    expect(scope.allowedTools).toHaveLength(6);
-    expect(scope.allowedTools).toContain('runtime.request_tool_pack');
-    expect(scope.allowedTools).toContain('runtime.list_tool_packs');
-    expect(scope.allowedTools).toContain('runtime.haiku_browser_session');
+    expect(scope.allowedTools).toHaveLength(4);
+    expect(scope.allowedTools).toContain('runtime.list_loaded_tools');
+    expect(scope.allowedTools).toContain('browser.research_search');
+  });
+
+  it('tightens orchestration scope once execution is underway', () => {
+    const overrides = applyAdaptiveTaskProfileOverride(
+      'Plan a repo-wide migration strategy',
+      undefined,
+      {
+        latestStage: 'subagent-spawn',
+        runningSubagents: [{ role: 'research', task: 'Inspect scope', subagentId: 'sub_1' }],
+        blockedSubagents: [],
+        completedSubagents: [],
+        nextAction: 'Wait for research findings',
+      },
+    );
+
+    const scope = scopeForPrompt('Plan a repo-wide migration strategy', overrides);
+    expect(isOrchestrationExecutionReady({
+      latestStage: 'subagent-spawn',
+      runningSubagents: [{ role: 'research', task: 'Inspect scope', subagentId: 'sub_1' }],
+      blockedSubagents: [],
+      completedSubagents: [],
+      nextAction: 'Wait for research findings',
+    })).toBe(true);
+    expect(overrides?.toolScopePreset).toBe('mode-4');
+    expect(scope.allowedTools).not.toBe('all');
+    expect(scope.allowedTools).toHaveLength(4);
+    expect(scope.allowedTools).toContain('subagent.spawn');
+    expect(scope.allowedTools).not.toContain('runtime.search_tools');
+    expect(scope.allowedTools).not.toContain('runtime.load_tools');
+  });
+
+  it('preserves explicit tool scope overrides ahead of adaptive orchestration tightening', () => {
+    const overrides = applyAdaptiveTaskProfileOverride(
+      'Plan a repo-wide migration strategy',
+      { toolScopePreset: 'all' },
+      {
+        latestStage: 'subagent-complete',
+        runningSubagents: [],
+        blockedSubagents: [],
+        completedSubagents: [{ role: 'research', task: 'Inspect scope' }],
+        nextAction: 'Patch prompt assembly',
+      },
+    );
+
+    expect(overrides).toEqual({ toolScopePreset: 'all' });
   });
 });

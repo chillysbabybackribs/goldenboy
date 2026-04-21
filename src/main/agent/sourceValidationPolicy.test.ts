@@ -1,6 +1,8 @@
-import { AgentPromptBuilder } from './AgentPromptBuilder';
+import { AgentPromptBuilder, buildResponseStyleAddendum } from './AgentPromptBuilder';
 import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
 import { AgentRuntimeConfig, AgentSkill } from './AgentTypes';
+import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
+import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 
 const baseConfig: AgentRuntimeConfig = {
   mode: 'unrestricted-dev',
@@ -23,7 +25,10 @@ describe('source validation policy', () => {
 
   it('always injects the compact source rule, constraint ledger, and task completion protocol', () => {
     const prompt = new AgentPromptBuilder().buildSystemPrompt({
-      config: baseConfig,
+      config: {
+        ...baseConfig,
+        agentId: PRIMARY_PROVIDER_ID,
+      },
       skills: [],
       tools: [],
     });
@@ -36,11 +41,17 @@ describe('source validation policy', () => {
     expect(prompt).toContain('## Physical Task Completion');
     expect(prompt).toContain('perform the real action');
     expect(prompt).toContain('## Workspace Root');
-    expect(prompt).toContain('/home/dp/Desktop/v2workspace');
+    expect(prompt).toContain(APP_WORKSPACE_ROOT);
     expect(prompt).toContain('## Operating Rules');
     expect(prompt).toContain('## Result Validation Discipline');
     expect(prompt).toContain('Current date/time:');
     expect(prompt).toContain('authoritative current date/time context');
+    expect(prompt).toContain('Tool execution is provider-driven');
+    expect(prompt).toContain('`runtime.load_tools`');
+    expect(prompt).not.toContain('## Tool Catalog');
+    expect(prompt).not.toContain('tool-runtime.html');
+    expect(prompt).not.toContain('window.runTool');
+    expect(prompt).not.toContain('runtime.search_tools');
     expect(prompt).not.toContain('## Current Integration State');
     expect(prompt).not.toContain('## File Map');
     expect(prompt).not.toContain('## Strict Source Validation Protocol');
@@ -99,5 +110,20 @@ describe('source validation policy', () => {
     expect(prompt).toContain('## Preferred Tools');
     expect(prompt).not.toContain('## Relevant Files');
     expect(prompt).not.toContain('BrowserService.ts');
+  });
+
+  it('treats architectural audits differently from code review findings', () => {
+    const addendum = buildResponseStyleAddendum('Audit the prompt and tool architecture for conflicts');
+
+    expect(addendum).toContain('Current state and the main tensions or conflicts.');
+    expect(addendum).toContain('Concrete recommendations, ordered by leverage.');
+    expect(addendum).not.toContain('Findings first, ordered by severity.');
+  });
+
+  it('treats code review requests as findings-first review tasks', () => {
+    const addendum = buildResponseStyleAddendum('Audit this diff for regressions and code review findings');
+
+    expect(addendum).toContain('Findings first, ordered by severity.');
+    expect(addendum).toContain('Each finding must include a file reference when available.');
   });
 });

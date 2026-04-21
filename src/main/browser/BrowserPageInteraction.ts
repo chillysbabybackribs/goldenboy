@@ -32,6 +32,26 @@ export type BrowserPointerHitTestResult = {
   intercepted?: boolean;
 };
 
+export type BrowserElementState = {
+  found: boolean;
+  count: number;
+  selector: string;
+  tagName: string | null;
+  text: string | null;
+  value: string | null;
+  checked: boolean | null;
+  disabled: boolean | null;
+  visible: boolean | null;
+  href: string | null;
+  src: string | null;
+  rect: { x: number; y: number; width: number; height: number } | null;
+  options?: Array<{ value: string; label: string; selected: boolean }> | null;
+  selectedIndex?: number | null;
+  selectedValue?: string | null;
+  selectedLabel?: string | null;
+  error?: string | null;
+};
+
 export class BrowserPageInteraction {
   private resolveEntry: ResolveEntry;
 
@@ -218,6 +238,98 @@ export class BrowserPageInteraction {
     `, tabId);
     if (error || !Array.isArray(result)) return [];
     return result;
+  }
+
+  async getElementState(
+    selector: string,
+    tabId?: string,
+  ): Promise<BrowserElementState> {
+    const safeSelector = JSON.stringify(selector);
+    const { result, error } = await this.executeInPage(`
+      (() => {
+        const nodes = Array.from(document.querySelectorAll(${safeSelector}));
+        const node = nodes[0] || null;
+        if (!node) {
+          return {
+            found: false,
+            count: 0,
+            selector: ${safeSelector},
+            tagName: null,
+            text: null,
+            value: null,
+            checked: null,
+            disabled: null,
+            visible: null,
+            href: null,
+            src: null,
+            rect: null,
+            options: null,
+            selectedIndex: null,
+            selectedValue: null,
+            selectedLabel: null,
+            error: null,
+          };
+        }
+
+        const isElement = node instanceof Element;
+        const html = node instanceof HTMLElement ? node : null;
+        const rect = isElement ? node.getBoundingClientRect() : null;
+        const visible = !!(rect && rect.width > 0 && rect.height > 0);
+        const value = 'value' in node && typeof node.value === 'string' ? node.value : null;
+        const checked = node instanceof HTMLInputElement ? node.checked : null;
+        const disabled = node instanceof HTMLElement && 'disabled' in node ? Boolean(node.disabled) : null;
+        const options = node instanceof HTMLSelectElement
+          ? Array.from(node.options).map(option => ({
+              value: option.value,
+              label: (option.label || option.textContent || '').trim(),
+              selected: option.selected,
+            }))
+          : null;
+        const selectedOption = node instanceof HTMLSelectElement ? node.selectedOptions[0] || null : null;
+
+        return {
+          found: true,
+          count: nodes.length,
+          selector: ${safeSelector},
+          tagName: isElement ? node.tagName.toLowerCase() : null,
+          text: isElement ? ((node.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 500) || null) : null,
+          value,
+          checked,
+          disabled,
+          visible,
+          href: node instanceof HTMLAnchorElement ? node.href : isElement ? node.getAttribute('href') : null,
+          src: node instanceof HTMLImageElement ? node.src : isElement ? node.getAttribute('src') : null,
+          rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+          options,
+          selectedIndex: node instanceof HTMLSelectElement ? node.selectedIndex : null,
+          selectedValue: node instanceof HTMLSelectElement ? node.value : null,
+          selectedLabel: selectedOption ? ((selectedOption.label || selectedOption.textContent || '').trim() || null) : null,
+          error: null,
+        };
+      })()
+    `, tabId);
+    if (error) {
+      return {
+        found: false,
+        count: 0,
+        selector,
+        tagName: null,
+        text: null,
+        value: null,
+        checked: null,
+        disabled: null,
+        visible: null,
+        href: null,
+        src: null,
+        rect: null,
+        options: null,
+        selectedIndex: null,
+        selectedValue: null,
+        selectedLabel: null,
+        error,
+      };
+    }
+    return result as BrowserElementState;
   }
 
   // ─── Click Element ──────────────────────────────────────────────────────
@@ -801,6 +913,100 @@ export class BrowserPageInteraction {
     if (error) return { typed: false, error };
     const r = result as { typed?: boolean; reason?: string } | null;
     return { typed: r?.typed ?? false, error: r?.reason ?? null };
+  }
+
+  async selectOption(
+    selector: string,
+    target: { value?: string; label?: string; index?: number },
+    tabId?: string,
+  ): Promise<{
+    selected: boolean;
+    error: string | null;
+    selector: string;
+    selectedIndex: number | null;
+    selectedValue: string | null;
+    selectedLabel: string | null;
+  }> {
+    const safeSelector = JSON.stringify(selector);
+    const safeValue = JSON.stringify(target.value ?? null);
+    const safeLabel = JSON.stringify(target.label ?? null);
+    const safeIndex = Number.isFinite(target.index) ? Math.floor(target.index as number) : null;
+    const { result, error } = await this.executeInPage(`
+      (() => {
+        const node = document.querySelector(${safeSelector});
+        if (!node) return { selected: false, reason: 'Element not found' };
+        if (!(node instanceof HTMLSelectElement)) {
+          return { selected: false, reason: 'Element is not an HTMLSelectElement' };
+        }
+        if (node.disabled) return { selected: false, reason: 'Element is disabled' };
+
+        const requestedValue = ${safeValue};
+        const requestedLabel = ${safeLabel};
+        const requestedIndex = ${safeIndex === null ? 'null' : safeIndex};
+        let matched = false;
+
+        if (typeof requestedValue === 'string') {
+          matched = Array.from(node.options).some((option) => {
+            if (option.value !== requestedValue) return false;
+            option.selected = true;
+            return true;
+          });
+        } else if (typeof requestedLabel === 'string') {
+          matched = Array.from(node.options).some((option) => {
+            const label = (option.label || option.textContent || '').trim();
+            if (label !== requestedLabel) return false;
+            option.selected = true;
+            return true;
+          });
+        } else if (typeof requestedIndex === 'number') {
+          if (requestedIndex >= 0 && requestedIndex < node.options.length) {
+            node.selectedIndex = requestedIndex;
+            matched = true;
+          }
+        } else {
+          return { selected: false, reason: 'Provide value, label, or index' };
+        }
+
+        if (!matched) {
+          return { selected: false, reason: 'Requested option not found' };
+        }
+
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+        const selectedOption = node.selectedOptions[0] || null;
+        return {
+          selected: true,
+          selectedIndex: node.selectedIndex,
+          selectedValue: node.value,
+          selectedLabel: selectedOption ? ((selectedOption.label || selectedOption.textContent || '').trim() || null) : null,
+        };
+      })()
+    `, tabId);
+    if (error) {
+      return {
+        selected: false,
+        error,
+        selector,
+        selectedIndex: null,
+        selectedValue: null,
+        selectedLabel: null,
+      };
+    }
+    const typedResult = result as {
+      selected?: boolean;
+      reason?: string;
+      selectedIndex?: number | null;
+      selectedValue?: string | null;
+      selectedLabel?: string | null;
+    } | null;
+    return {
+      selected: typedResult?.selected === true,
+      error: typedResult?.selected === true ? null : typedResult?.reason || null,
+      selector,
+      selectedIndex: typedResult?.selectedIndex ?? null,
+      selectedValue: typedResult?.selectedValue ?? null,
+      selectedLabel: typedResult?.selectedLabel ?? null,
+    };
   }
 
   // ─── Page Metadata ──────────────────────────────────────────────────────

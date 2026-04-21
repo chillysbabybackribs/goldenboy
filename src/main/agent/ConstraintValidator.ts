@@ -53,14 +53,16 @@ function checkExitCode(result: AgentToolResult): ConstraintVerdict {
   };
 }
 
-function checkOutputContainsError(result: AgentToolResult): ConstraintVerdict | null {
+function checkOutputContainsError(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
   const output = typeof result.data.output === 'string' ? result.data.output : '';
   if (!output) return null;
 
+  const command = extractCommand(input);
+  if (command && looksLikeReadOnlyInspectionCommand(command)) return null;
+
   const errorPatterns = [
-    /\b(?:already exists)\b/i,
-    /\bfatal:\s/i,
-    /\berror:\s/i,
+    /(?:^|\n)\s*fatal:\s/i,
+    /(?:^|\n)\s*error:\s/i,
     /\bfailed\b.*\bcreate\b/i,
     /\bcreate\b.*\bfailed\b/i,
     /\bpermission denied\b/i,
@@ -68,7 +70,6 @@ function checkOutputContainsError(result: AgentToolResult): ConstraintVerdict | 
     /\b403\b.*\bforbidden\b/i,
     /\b401\b.*\bunauthorized\b/i,
     /\b422\b/,
-    /\bconflict\b/i,
     /\brepository.*already.*exists\b/i,
     /\bcannot\b.*\bcreate\b/i,
   ];
@@ -89,7 +90,7 @@ function checkCreationVerb(result: AgentToolResult, input: unknown): ConstraintV
   const command = extractCommand(input);
   if (!command) return null;
 
-  const isCreate = /\b(?:create|new|init|add|make|mkdir|touch)\b/i.test(command);
+  const isCreate = looksLikeCreateCommand(command);
   if (!isCreate) return null;
 
   const output = typeof result.data.output === 'string' ? result.data.output : '';
@@ -313,12 +314,217 @@ function checkBrowserActivatedTab(result: AgentToolResult, input: unknown): Cons
   };
 }
 
+function checkBrowserCloseAllTabs(result: AgentToolResult): ConstraintVerdict[] {
+  const tabs = Array.isArray(result.data.tabs) ? result.data.tabs : null;
+  const activeTabId = typeof result.data.activeTabId === 'string' ? result.data.activeTabId : '';
+  const actualUrl = typeof result.data.url === 'string' ? result.data.url : '';
+  const expectedUrl = typeof result.data.homepageUrl === 'string' ? result.data.homepageUrl : '';
+
+  if (!tabs || !activeTabId) {
+    return [{
+      name: 'single_homepage_tab',
+      status: 'UNKNOWN',
+      observed: 'missing post-action tab state or active tab id',
+      expected: 'exactly one active Google homepage tab',
+    }];
+  }
+
+  const activeTab = tabs.find((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).id === activeTabId) as Record<string, unknown> | undefined;
+  const observedUrl = actualUrl || (activeTab && typeof activeTab.navigation === 'object' && activeTab.navigation !== null
+    ? (activeTab.navigation as Record<string, unknown>).url as string | undefined
+    : undefined) || '';
+
+  const verdicts: ConstraintVerdict[] = [{
+    name: 'single_tab_remaining',
+    status: tabs.length === 1 ? 'PASS' : 'FAIL',
+    observed: `${tabs.length} tabs remain`,
+    expected: '1 tab remains',
+  }];
+
+  verdicts.push({
+    name: 'active_tab_consistent',
+    status: tabs.length === 1 && !!activeTab ? 'PASS' : 'FAIL',
+    observed: activeTab ? `active tab ${activeTabId} is present` : `active tab ${activeTabId || '<missing>'} not present in remaining tabs`,
+    expected: 'remaining tab is the active tab',
+  });
+
+  if (!observedUrl || !expectedUrl) {
+    verdicts.push({
+      name: 'homepage_target',
+      status: 'UNKNOWN',
+      observed: `observed=${observedUrl || '<missing>'}, expected=${expectedUrl || '<missing>'}`,
+      expected: 'Google homepage URL',
+    });
+    return verdicts;
+  }
+
+  try {
+    const observed = new URL(observedUrl);
+    const expected = new URL(expectedUrl);
+    const observedHost = observed.hostname.replace(/^www\./, '');
+    const expectedHost = expected.hostname.replace(/^www\./, '');
+    verdicts.push({
+      name: 'homepage_target',
+      status: observedHost === expectedHost ? 'PASS' : 'FAIL',
+      observed: observedUrl,
+      expected: expectedUrl,
+    });
+  } catch {
+    verdicts.push({
+      name: 'homepage_target',
+      status: 'UNKNOWN',
+      observed: `unparseable URL observed=${observedUrl}`,
+      expected: expectedUrl,
+    });
+  }
+
+  return verdicts;
+}
+
+function checkBrowserNavigateTo(result: AgentToolResult): ConstraintVerdict | null {
+  const actualUrl = typeof result.data.url === 'string' ? result.data.url : '';
+  const normalizedUrl = typeof result.data.normalizedUrl === 'string' ? result.data.normalizedUrl : '';
+  if (!actualUrl || !normalizedUrl) {
+    return {
+      name: 'navigation_target',
+      status: 'UNKNOWN',
+      observed: `actual=${actualUrl || '<missing>'}, normalized=${normalizedUrl || '<missing>'}`,
+      expected: 'actual URL should match normalized target',
+    };
+  }
+
+  try {
+    const actual = new URL(actualUrl);
+    const normalized = new URL(normalizedUrl);
+    return {
+      name: 'navigation_target',
+      status: actual.hostname === normalized.hostname ? 'PASS' : 'FAIL',
+      observed: actualUrl,
+      expected: normalizedUrl,
+    };
+  } catch {
+    return {
+      name: 'navigation_target',
+      status: 'UNKNOWN',
+      observed: `actual=${actualUrl}, normalized=${normalizedUrl}`,
+      expected: 'parseable URLs',
+    };
+  }
+}
+
+function checkBrowserElementState(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
+  const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+  const selector = typeof obj.selector === 'string' ? obj.selector : null;
+  if (!selector) return null;
+
+  const resultObject = result.data.result;
+  if (!resultObject || typeof resultObject !== 'object') {
+    return {
+      name: 'element_state_returned',
+      status: 'UNKNOWN',
+      observed: 'no result object in tool output',
+      expected: `state object for selector ${selector}`,
+    };
+  }
+
+  const returnedSelector = typeof (resultObject as Record<string, unknown>).selector === 'string'
+    ? (resultObject as Record<string, unknown>).selector
+    : '';
+  const found = (resultObject as Record<string, unknown>).found;
+  if (typeof found !== 'boolean') {
+    return {
+      name: 'element_state_returned',
+      status: 'UNKNOWN',
+      observed: 'result object missing boolean found field',
+      expected: `state object for selector ${selector}`,
+    };
+  }
+
+  return {
+    name: 'element_state_returned',
+    status: returnedSelector === selector ? 'PASS' : 'FAIL',
+    observed: `selector=${returnedSelector || '<missing>'}, found=${found}`,
+    expected: selector,
+  };
+}
+
+function checkBrowserSelectOption(result: AgentToolResult, input: unknown): ConstraintVerdict[] {
+  const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+  const requestedValue = typeof obj.value === 'string' ? obj.value : null;
+  const requestedLabel = typeof obj.label === 'string' ? obj.label : null;
+  const requestedIndex = typeof obj.index === 'number' ? obj.index : null;
+  const resultObject = result.data.result;
+
+  if (!resultObject || typeof resultObject !== 'object') {
+    return [{
+      name: 'option_selected',
+      status: 'UNKNOWN',
+      observed: 'no result object in tool output',
+      expected: 'selected state returned',
+    }];
+  }
+
+  const selected = (resultObject as Record<string, unknown>).selected;
+  const rawSelectedValue = (resultObject as Record<string, unknown>).selectedValue;
+  const selectedValue = typeof rawSelectedValue === 'string'
+    ? rawSelectedValue
+    : null;
+  const rawSelectedLabel = (resultObject as Record<string, unknown>).selectedLabel;
+  const selectedLabel = typeof rawSelectedLabel === 'string'
+    ? rawSelectedLabel
+    : null;
+  const selectedIndex = typeof (resultObject as Record<string, unknown>).selectedIndex === 'number'
+    ? (resultObject as Record<string, unknown>).selectedIndex
+    : null;
+
+  const verdicts: ConstraintVerdict[] = [{
+    name: 'option_selected',
+    status: selected === true ? 'PASS' : 'FAIL',
+    observed: `selected=${String(selected)}`,
+    expected: 'selected=true',
+  }];
+
+  if (requestedValue !== null) {
+    verdicts.push({
+      name: 'selected_value',
+      status: selectedValue === requestedValue ? 'PASS' : 'FAIL',
+      observed: selectedValue ?? '<missing>',
+      expected: requestedValue,
+    });
+  } else if (requestedLabel !== null) {
+    verdicts.push({
+      name: 'selected_label',
+      status: selectedLabel === requestedLabel ? 'PASS' : 'FAIL',
+      observed: selectedLabel ?? '<missing>',
+      expected: requestedLabel,
+    });
+  } else if (requestedIndex !== null) {
+    verdicts.push({
+      name: 'selected_index',
+      status: selectedIndex === requestedIndex ? 'PASS' : 'FAIL',
+      observed: selectedIndex === null ? '<missing>' : `${selectedIndex}`,
+      expected: `${requestedIndex}`,
+    });
+  }
+
+  return verdicts;
+}
+
 // --- Helpers ----------------------------------------------------------------
 
 function extractCommand(input: unknown): string | null {
   if (typeof input === 'string') return input;
   const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
   return typeof obj.command === 'string' ? obj.command : null;
+}
+
+function looksLikeReadOnlyInspectionCommand(command: string): boolean {
+  return /^\s*(?:rg|grep|sed|cat|head|tail|less|more|nl|awk|cut|sort|uniq|wc|find|ls|tree|pwd|which|whereis|git\s+(?:status|show|diff|log|branch)|stat)\b/i.test(command);
+}
+
+function looksLikeCreateCommand(command: string): boolean {
+  return /\b(?:create|new|init|mkdir|touch)\b/i.test(command)
+    || /\b(?:gh\s+repo\s+create|npm\s+init|pnpm\s+create|yarn\s+create)\b/i.test(command);
 }
 
 function extractUrlFromOutput(output: string): string | null {
@@ -361,7 +567,7 @@ const TERMINAL_EXEC_CONSTRAINTS: ConstraintExtractor = (result, input) => {
   const verdicts: ConstraintVerdict[] = [];
   verdicts.push(checkExitCode(result));
 
-  const errorCheck = checkOutputContainsError(result);
+  const errorCheck = checkOutputContainsError(result, input);
   if (errorCheck) verdicts.push(errorCheck);
 
   const createCheck = checkCreationVerb(result, input);
@@ -379,6 +585,13 @@ const BROWSER_NAVIGATE_CONSTRAINTS: ConstraintExtractor = (result, input) => {
   const navCheck = checkBrowserNavigationTarget(result, input);
   if (navCheck) verdicts.push(navCheck);
 
+  return verdicts;
+};
+
+const BROWSER_NAVIGATE_TO_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  const navCheck = checkBrowserNavigateTo(result);
+  if (navCheck) verdicts.push(navCheck);
   return verdicts;
 };
 
@@ -412,14 +625,33 @@ const BROWSER_ACTIVATE_TAB_CONSTRAINTS: ConstraintExtractor = (result, input) =>
   return verdicts;
 };
 
+const BROWSER_CLOSE_ALL_TABS_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
+  return checkBrowserCloseAllTabs(result);
+};
+
+const BROWSER_GET_ELEMENT_STATE_CONSTRAINTS: ConstraintExtractor = (result, input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  const stateCheck = checkBrowserElementState(result, input);
+  if (stateCheck) verdicts.push(stateCheck);
+  return verdicts;
+};
+
+const BROWSER_SELECT_OPTION_CONSTRAINTS: ConstraintExtractor = (result, input) => {
+  return checkBrowserSelectOption(result, input);
+};
+
 // Map tool names to their constraint extractors
 const TOOL_CONSTRAINTS = new Map<AgentToolName, ConstraintExtractor>([
   ['terminal.exec', TERMINAL_EXEC_CONSTRAINTS],
   ['browser.navigate', BROWSER_NAVIGATE_CONSTRAINTS],
+  ['browser.navigate_to', BROWSER_NAVIGATE_TO_CONSTRAINTS],
   ['browser.research_search', RESEARCH_SEARCH_CONSTRAINTS],
   ['browser.create_tab', BROWSER_CREATE_TAB_CONSTRAINTS],
   ['browser.close_tab', BROWSER_CLOSE_TAB_CONSTRAINTS],
+  ['browser.close_all_tabs', BROWSER_CLOSE_ALL_TABS_CONSTRAINTS],
   ['browser.activate_tab', BROWSER_ACTIVATE_TAB_CONSTRAINTS],
+  ['browser.get_element_state', BROWSER_GET_ELEMENT_STATE_CONSTRAINTS],
+  ['browser.select_option', BROWSER_SELECT_OPTION_CONSTRAINTS],
 ]);
 
 // --- Public API -------------------------------------------------------------

@@ -12,12 +12,13 @@ export type AgentToolName =
   | 'attachments.read_chunk'
   | 'attachments.read_document'
   | 'attachments.stats'
-  | 'runtime.request_tool_pack'
-  | 'runtime.list_tool_packs'
-  | 'runtime.haiku_browser_session'
+  | 'runtime.search_tools'
+  | 'runtime.load_tools'
+  | 'runtime.list_loaded_tools'
   | 'browser.get_state'
   | 'browser.get_tabs'
   | 'browser.navigate'
+  | 'browser.navigate_to'
   | 'browser.search_web'
   | 'browser.research_search'
   | 'browser.back'
@@ -25,9 +26,12 @@ export type AgentToolName =
   | 'browser.reload'
   | 'browser.create_tab'
   | 'browser.close_tab'
+  | 'browser.close_all_tabs'
   | 'browser.activate_tab'
   | 'browser.click'
   | 'browser.type'
+  | 'browser.get_element_state'
+  | 'browser.select_option'
   | 'browser.upload_file'
   | 'browser.download_link'
   | 'browser.download_url'
@@ -83,6 +87,14 @@ export type AgentToolName =
   | 'chat.read_window'
   | 'chat.recall'
   | 'chat.cache_stats'
+  | 'session.start'
+  | 'session.end'
+  | 'session.record_message'
+  | 'session.get_previous_context'
+  | 'session.get_context_string'
+  | 'session.get_all_sessions'
+  | 'session.clear_all'
+  | 'session.stats'
   | 'subagent.spawn'
   | 'subagent.message'
   | 'subagent.wait'
@@ -175,7 +187,7 @@ export type AgentRuntimeConfig = {
   depth?: number;
   skillNames?: string[];
   allowedTools?: 'all' | AgentToolName[];
-  restrictToolCatalogToAllowedTools?: boolean;
+  restrictLoadableToolsToAllowedTools?: boolean;
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
   attachments?: InvocationAttachment[];
@@ -194,7 +206,7 @@ export type AgentProviderRequest = {
   contextPrompt?: string | null;
   maxToolTurns?: number;
   tools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
-  toolCatalog?: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
+  loadableTools: Array<Pick<AgentToolDefinition, 'name' | 'description' | 'inputSchema'>>;
   attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
   onStatus?: (status: string) => void;
@@ -207,6 +219,7 @@ export type AgentProviderResult = {
   codexItems?: CodexItem[];
   usage?: {
     inputTokens: number;
+    cachedInputTokens?: number;
     outputTokens: number;
     durationMs: number;
   };

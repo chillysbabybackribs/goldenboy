@@ -10,10 +10,10 @@ This file previously described pre-migration runtime findings. The active model/
 
 Use these files for the current state instead:
 
-- [README.md](/home/dp/Desktop/v2workspace/README.md)
-- [AGENT.md](/home/dp/Desktop/v2workspace/AGENT.md)
-- [TWO_MODEL_AUDIT_IMPLEMENTATION_PLAN.md](/home/dp/Desktop/v2workspace/TWO_MODEL_AUDIT_IMPLEMENTATION_PLAN.md)
-- [CODEX_CONTINUATION_NOTE.md](/home/dp/Desktop/v2workspace/CODEX_CONTINUATION_NOTE.md)
+- [README.md](/home/dp/Documents/goldenboy/README.md)
+- [AGENTS.md](/home/dp/Documents/goldenboy/AGENTS.md)
+- [TWO_MODEL_AUDIT_IMPLEMENTATION_PLAN.md](/home/dp/Documents/goldenboy/docs/archive/root/TWO_MODEL_AUDIT_IMPLEMENTATION_PLAN.md)
+- [CODEX_CONTINUATION_NOTE.md](/home/dp/Documents/goldenboy/docs/archive/root/CODEX_CONTINUATION_NOTE.md)
 
 ## Current verified state
 

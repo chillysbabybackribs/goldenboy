@@ -2,7 +2,7 @@
 
 Canonical inventory for the stable dotted tool names exposed to agents.
 
-Update this file when adding, removing, or renaming agent-facing tools. Keep names stable even if implementation files move. The authoritative live list is also available at runtime via the tool catalog chunks in `~/.config/v2-workspace/tool-catalog/`.
+Update this file when adding, removing, or renaming agent-facing tools. Keep names stable even if implementation files move.
 
 ## Attachments
 
@@ -38,6 +38,7 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `browser.get_console_events`
 - `browser.get_dialogs`
 - `browser.get_downloads`
+- `browser.get_element_state`
 - `browser.get_network_events`
 - `browser.get_state`
 - `browser.get_tabs`
@@ -54,6 +55,7 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `browser.run_intent_program`
 - `browser.search_page_cache`
 - `browser.search_web`
+- `browser.select_option`
 - `browser.summarize_page`
 - `browser.type`
 - `browser.upload_file`

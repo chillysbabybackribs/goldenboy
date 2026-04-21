@@ -1,7 +1,11 @@
 import type { AgentToolName } from './AgentTypes';
 import type { AgentTaskKind, AgentTaskProfileOverride } from '../../shared/types/model';
 import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
-import { DEFAULT_TOOL_PACK_PRESET, resolveAllowedToolsForTaskKind } from './toolPacks';
+import {
+  RUNTIME_LOAD_TOOLS_TOOL_NAME,
+  RUNTIME_SEARCH_TOOLS_TOOL_NAME,
+} from './toolPacks';
+import { DEFAULT_TOOL_SCOPE_PRESET, resolveAllowedToolsForTaskKind } from './toolScope';
 
 export type AgentTaskProfile = {
   kind: AgentTaskKind;
@@ -17,6 +21,11 @@ const STRICT_VALIDATION_MAX_TOOL_TURNS = 32;
 const DEBUG_MAX_TOOL_TURNS = 28;
 const REVIEW_MAX_TOOL_TURNS = 24;
 const DELEGATION_MAX_TOOL_TURNS = 40;
+const ORCHESTRATION_COMPLEXITY_PATTERNS = [
+  /\b(repo-wide|codebase-wide|workspace-wide|cross-cutting|end-to-end|multi-step|staged|phased)\b/,
+  /\b(migration|rollout|architecture|system|refactor|decomposition|coordination)\b/,
+  /\b(multiple surfaces|multiple areas|several modules|several teams|several components)\b/,
+] as const;
 
 function maxTurnsForPrompt(prompt: string): number {
   return shouldUseStrictSourceValidation(prompt)
@@ -26,10 +35,16 @@ function maxTurnsForPrompt(prompt: string): number {
 
 export function buildTaskProfile(prompt: string, overrides?: AgentTaskProfileOverride): AgentTaskProfile {
   const kind = resolveTaskKind(prompt, overrides);
-  const toolPackPreset = overrides?.toolPackPreset ?? DEFAULT_TOOL_PACK_PRESET;
-  const base = defaultTaskProfileForKind(kind, prompt, toolPackPreset);
+  const toolScopePreset = overrides?.toolScopePreset ?? DEFAULT_TOOL_SCOPE_PRESET;
+  const base = defaultTaskProfileForKind(kind, prompt, toolScopePreset);
+  const allowedTools = overrides?.disableToolDiscovery && base.allowedTools !== 'all'
+    ? base.allowedTools.filter((tool) => (
+      tool !== RUNTIME_SEARCH_TOOLS_TOOL_NAME && tool !== RUNTIME_LOAD_TOOLS_TOOL_NAME
+    ))
+    : base.allowedTools;
   return {
     ...base,
+    allowedTools,
     skillNames: overrides?.skillNames ? [...overrides.skillNames] : base.skillNames,
     canSpawnSubagents: overrides?.canSpawnSubagents ?? base.canSpawnSubagents,
     maxToolTurns: overrides?.maxToolTurns ?? base.maxToolTurns,
@@ -75,14 +90,14 @@ function resolveTaskKind(prompt: string, overrides?: AgentTaskProfileOverride): 
 function defaultTaskProfileForKind(
   kind: AgentTaskKind,
   prompt: string,
-  toolPackPreset = DEFAULT_TOOL_PACK_PRESET,
+  toolScopePreset = DEFAULT_TOOL_SCOPE_PRESET,
 ): AgentTaskProfile {
   switch (normalizeTaskKind(kind)) {
     case 'orchestration':
       return {
         kind: 'orchestration',
-        skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('orchestration', toolPackPreset),
+        skillNames: ['subagent-coordination'],
+        allowedTools: resolveAllowedToolsForTaskKind('orchestration', toolScopePreset),
         canSpawnSubagents: true,
         maxToolTurns: DELEGATION_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -91,7 +106,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'research',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('research', toolPackPreset),
+        allowedTools: resolveAllowedToolsForTaskKind('research', toolScopePreset),
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: true,
@@ -100,7 +115,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'browser-automation',
         skillNames: ['browser-operation'],
-        allowedTools: resolveAllowedToolsForTaskKind('browser-automation', toolPackPreset),
+        allowedTools: resolveAllowedToolsForTaskKind('browser-automation', toolScopePreset),
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -108,8 +123,8 @@ function defaultTaskProfileForKind(
     case 'implementation':
       return {
         kind: 'implementation',
-        skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('implementation', toolPackPreset),
+        skillNames: ['code-edit', 'typescript-typecheck'],
+        allowedTools: resolveAllowedToolsForTaskKind('implementation', toolScopePreset),
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -117,8 +132,8 @@ function defaultTaskProfileForKind(
     case 'debug':
       return {
         kind: 'debug',
-        skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('debug', toolPackPreset),
+        skillNames: ['code-edit', 'typescript-typecheck', 'test-driven-fix'],
+        allowedTools: resolveAllowedToolsForTaskKind('debug', toolScopePreset),
         canSpawnSubagents: false,
         maxToolTurns: DEBUG_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -126,8 +141,8 @@ function defaultTaskProfileForKind(
     case 'review':
       return {
         kind: 'review',
-        skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('review', toolPackPreset),
+        skillNames: ['code-edit', 'test-driven-fix'],
+        allowedTools: resolveAllowedToolsForTaskKind('review', toolScopePreset),
         canSpawnSubagents: false,
         maxToolTurns: REVIEW_MAX_TOOL_TURNS,
         requiresBrowserSearchDirective: false,
@@ -137,7 +152,7 @@ function defaultTaskProfileForKind(
       return {
         kind: 'general',
         skillNames: [],
-        allowedTools: resolveAllowedToolsForTaskKind('general', toolPackPreset),
+        allowedTools: resolveAllowedToolsForTaskKind('general', toolScopePreset),
         canSpawnSubagents: false,
         maxToolTurns: maxTurnsForPrompt(prompt),
         requiresBrowserSearchDirective: false,
@@ -150,7 +165,10 @@ export function looksLikeOrchestrationTask(prompt: string): boolean {
   const delegationIntent = /\b(sub-?agents?|delegate|parallel|concurrently|multiple agents?|workers?|split (?:the )?work)\b/.test(normalized);
   const planningIntent = /\b(plan|planning|strategy|roadmap|migration plan|migration strategy|rollout plan|execution plan)\b/.test(normalized);
   const projectScope = /\b(repo|repository|codebase|workspace|project|architecture|system|refactor|migration|rollout)\b/.test(normalized);
-  return delegationIntent || (planningIntent && projectScope);
+  const complexityScore = ORCHESTRATION_COMPLEXITY_PATTERNS.reduce((score, pattern) => (
+    score + (pattern.test(normalized) ? 1 : 0)
+  ), 0);
+  return delegationIntent || (planningIntent && projectScope && complexityScore >= 1);
 }
 
 export function looksLikeImplementationTask(prompt: string): boolean {
@@ -166,10 +184,14 @@ export function looksLikeImplementationTask(prompt: string): boolean {
 
 export function looksLikeResearchTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
-  const explicitSearchIntent = /\b(search(?: the web| online)?(?: for)?|look up|lookup|find online|research(?: online)?|web search|google|duckduckgo|bing)\b/.test(normalized);
+  // Match search engines only when used as a verb ("google X"), not as a navigation target ("open google", "go to google")
+  const searchEngineAsVerb = /\b(google|duckduckgo|bing)\b/.test(normalized)
+    && !/\b(open|go to|visit|navigate to|launch)\b.{0,20}\b(google|duckduckgo|bing)\b/.test(normalized);
+  const explicitSearchIntent = /\b(search(?: the web| online)?(?: for)?|look up|lookup|find online|research(?: online)?|web search)\b/.test(normalized)
+    || searchEngineAsVerb;
   const freshnessIntent = /\b(latest|current|today|news)\b/.test(normalized);
   const localContext = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|grep|filesystem)\b/.test(normalized);
-  const browserAutomation = /\b(navigate|navigation|go to|visit|open url|open the url|open page|click|type|fill|form|login|sign in|upload|download|checkout|book|submit|automate|workflow|autonomous|agentic|audit|qa|regression)\b/.test(normalized);
+  const browserAutomation = /\b(navigate|navigation|go to|visit|open url|open the url|open page|open|click|type|fill|form|login|sign in|upload|download|checkout|book|submit|automate|workflow|autonomous|agentic|audit|qa|regression)\b/.test(normalized);
 
   if (localContext || browserAutomation) return false;
   return explicitSearchIntent || freshnessIntent;
@@ -178,7 +200,7 @@ export function looksLikeResearchTask(prompt: string): boolean {
 export function looksLikeBrowserAutomationTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   const localContext = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|terminal|typescript|javascript|electron|build|test|server|ci)\b/.test(normalized);
-  const browserSurface = /\b(browser|tab|tabs|page|pages|site|website|webpage|url|link|links|window|windows)\b/.test(normalized);
+  const browserSurface = /\b(browser|tab|tabs|page|pages|site|website|webpage|url|link|links|window|windows|google|youtube|github|twitter|reddit|gmail|slack|notion|figma|linkedin|amazon|facebook|instagram)\b/.test(normalized);
   const tabManagement = /\b(close|close out|close all|switch|activate|focus|reopen|restore|arrange|cleanup|clean up)\b/.test(normalized)
     && /\b(tab|tabs|window|windows)\b/.test(normalized);
   const browserActions = /\b(navigate|go to|open|visit|click|type|fill|submit|login|log in|sign in|upload|download|checkout)\b/.test(normalized);

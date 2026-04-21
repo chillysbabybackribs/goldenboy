@@ -1,3 +1,5 @@
+import type { DocumentInvocationAttachment } from './attachments';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Model Layer Types — Provider registry, routing, handoff, Codex events
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6,7 +8,8 @@
 
 export const PRIMARY_PROVIDER_ID = 'gpt-5.4' as const;
 export const HAIKU_PROVIDER_ID = 'haiku' as const;
-export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID] as const;
+export const GEMINI_PROVIDER_ID = 'gemini' as const;
+export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID] as const;
 
 export type ProviderId = typeof PROVIDER_IDS[number];
 export type LegacyProviderId = 'codex';
@@ -70,7 +73,7 @@ export function createDefaultProviderRuntime(id: ProviderId): ProviderRuntime {
 }
 
 export function isProviderId(value: string): value is ProviderId {
-  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
+  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
 }
 
 export function isLegacyProviderId(value: string): value is LegacyProviderId {
@@ -93,13 +96,14 @@ export type AgentTaskKind =
   | 'local-code'
   | 'general';
 
-export const AGENT_TOOL_PACK_PRESETS = ['all', 'mode-6', 'mode-4'] as const;
-export type AgentToolPackPreset = typeof AGENT_TOOL_PACK_PRESETS[number];
+export const AGENT_TOOL_SCOPE_PRESETS = ['all', 'mode-6', 'mode-4'] as const;
+export type AgentToolScopePreset = typeof AGENT_TOOL_SCOPE_PRESETS[number];
 
 export type AgentTaskProfileOverride = {
   kind?: AgentTaskKind;
   skillNames?: string[];
-  toolPackPreset?: AgentToolPackPreset;
+  toolScopePreset?: AgentToolScopePreset;
+  disableToolDiscovery?: boolean;
   canSpawnSubagents?: boolean;
   maxToolTurns?: number;
   requiresBrowserSearchDirective?: boolean;
@@ -172,14 +176,22 @@ export type InvocationRequest = {
   abortSignal: AbortSignal;
 };
 
-export type InvocationProgress = {
-  taskId: string;
-  providerId: ProviderId;
-  type: 'stdout' | 'stderr' | 'token' | 'status' | 'item';
-  data: string;
-  codexItem?: CodexItem;
-  timestamp: number;
-};
+export type InvocationProgress =
+  | {
+      taskId: string;
+      providerId: ProviderId;
+      type: 'stdout' | 'stderr' | 'token' | 'status' | 'item';
+      data: string;
+      codexItem?: CodexItem;
+      timestamp: number;
+    }
+  | {
+      taskId: string;
+      providerId: ProviderId;
+      type: 'usage';
+      data: { inputTokens: number; outputTokens: number; apiCalls: number };
+      timestamp: number;
+    };
 
 export type InvocationResult = {
   taskId: string;
@@ -230,6 +242,30 @@ export type TaskMemoryEntry = {
   providerId?: ProviderId;
   createdAt: number;
   metadata?: Record<string, unknown>;
+};
+
+export type TaskPlanMetadata = {
+  category: 'plan';
+  stage:
+    | 'scaffold'
+    | 'parent-turn-complete'
+    | 'parent-turn-failed'
+    | 'subagent-spawn'
+    | 'subagent-complete'
+    | 'subagent-failed'
+    | 'subagent-cancelled';
+  objective?: string;
+  tracks?: string[];
+  delegation?: string[];
+  validation?: string[];
+  nextAction?: string;
+  status?: 'running' | 'completed' | 'failed' | 'cancelled';
+  providerId?: ProviderId;
+  role?: string;
+  subagentId?: string;
+  task?: string;
+  findings?: string[];
+  blockers?: string[];
 };
 
 export type TaskMemoryRecord = {
@@ -290,4 +326,25 @@ export const DEFAULT_HAIKU_CONFIG: HaikuInvocationConfig = {
   maxTokens: 4096,
   streaming: true,
 };
-import type { DocumentInvocationAttachment } from './attachments';
+
+export type GeminiInvocationConfig = {
+  defaultModelId: string;
+  complexModelId: string;
+  fastModelId: string;
+  liteModelId: string;
+  maxOutputTokens: number;
+  fastThinkingBudget: number | null;
+  defaultThinkingBudget: number | null;
+  complexThinkingBudget: number | null;
+};
+
+export const DEFAULT_GEMINI_CONFIG: GeminiInvocationConfig = {
+  defaultModelId: 'gemini-2.5-flash',
+  complexModelId: 'gemini-2.5-pro',
+  fastModelId: 'gemini-2.5-flash',
+  liteModelId: 'gemini-2.5-flash-lite',
+  maxOutputTokens: 4096,
+  fastThinkingBudget: -1,
+  defaultThinkingBudget: -1,
+  complexThinkingBudget: -1,
+};

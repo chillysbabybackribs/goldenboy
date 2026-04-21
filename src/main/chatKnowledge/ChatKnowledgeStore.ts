@@ -187,13 +187,18 @@ export class ChatKnowledgeStore {
     return { ...meta };
   }
 
-  buildInvocationContext(taskId: string, currentMessageId?: string): string | null {
-    const current = currentMessageId
+  buildInvocationContext(
+    taskId: string,
+    currentMessageId?: string,
+    options?: { includeCurrentMessage?: boolean; recentCount?: number },
+  ): string | null {
+    const includeCurrentMessage = options?.includeCurrentMessage ?? true;
+    const current = currentMessageId && includeCurrentMessage
       ? this.readMessage(taskId, currentMessageId, 1200)
       : null;
     const summary = this.threadSummary(taskId);
     const recent = this.readLast(taskId, {
-      count: 2,
+      count: Math.min(Math.max(options?.recentCount ?? 2, 1), 6),
       maxChars: 1000,
       excludeMessageIds: currentMessageId ? [currentMessageId] : [],
     });

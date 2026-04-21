@@ -7,7 +7,10 @@ export type DocumentAttachmentStatus =
   | 'failed';
 
 export type DocumentImportRequest = {
-  path: string;
+  /** Absolute path to a local file (Electron exposes `File.path` in the renderer). */
+  path?: string;
+  /** Raw file bytes as base64 when `path` is unavailable (e.g. sandboxed or browser-like picker). */
+  dataBase64?: string;
   name?: string;
   mediaType?: string;
   sizeBytes?: number;

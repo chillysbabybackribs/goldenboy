@@ -67,7 +67,7 @@ That means Codex is mostly being used as a remote reasoning engine that emits te
 
 ### 2. Prompt assembly is still too monolithic
 
-`src/main/agent/AgentPromptBuilder.ts` appends `AGENT.md`, validation protocols, tool names, and full skill bodies into one system prompt. This works, but it fights the token-discipline goals in `AGENT.md`.
+`src/main/agent/AgentPromptBuilder.ts` appends `AGENTS.md`, validation protocols, tool names, and full skill bodies into one system prompt. This works, but it fights the token-discipline goals in `AGENTS.md`.
 
 Right now the app is relying heavily on prompt instruction density instead of runtime context selection.
 
@@ -107,7 +107,7 @@ instead of treating those mostly as side-channel details.
 
 ### Priority 1: Replace prompt bulk with context assembly
 
-Keep `AGENT.md` as the contract, but stop injecting so much of it every run.
+Keep `AGENTS.md` as the contract, but stop injecting so much of it every run.
 
 Move toward a prompt model with:
 

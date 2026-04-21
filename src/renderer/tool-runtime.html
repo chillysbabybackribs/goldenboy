@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Tool Runtime</title>
+  <title>Debug Only: Tool Runtime Disabled</title>
   <style>
     body { background: #000; color: #888; font-family: monospace; font-size: 12px; padding: 16px; }
     #status { color: #00d47b; margin-bottom: 8px; }
@@ -10,10 +10,9 @@
   </style>
 </head>
 <body>
-  <div id="status">Initializing tool runtime...</div>
+  <div id="status">Debug only: renderer tool runtime disabled</div>
   <div id="log"></div>
 <script>
-  const api = window.workspaceAPI;
   const statusEl = document.getElementById('status');
   const logEl = document.getElementById('log');
 
@@ -21,42 +20,10 @@
     logEl.textContent += new Date().toISOString().slice(11, 23) + ' ' + msg + '\n';
   }
 
-  if (!api || !api.tool) {
-    statusEl.textContent = 'ERROR: workspaceAPI.tool not available';
-    statusEl.style.color = '#ee4444';
-    throw new Error('workspaceAPI.tool not available — page must run inside the app browser');
-  }
-
-  // ── Single entry point — routes every tool call through agentToolExecutor ──
-
-  window.runTool = async (name, input, context) => {
-    try {
-      const result = await api.tool.invoke(name, input ?? {}, context);
-      return { ok: true, result };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  };
-
-  // ── Batch helper — always writes results to disk, returns confirmation ────
-  // Results are written to disk so evaluate_js only returns a short string.
-  // The constraint validator never sees raw batch output.
-
-  window.runBatch = async (calls, outPath) => {
-    const results = await Promise.all(
-      calls.map(({ name, input, context }) => window.runTool(name, input, context))
-    );
-    const dest = outPath ?? `/tmp/batch-${Date.now()}.json`;
-    await api.fs.write(dest, JSON.stringify(results, null, 2));
-    return `wrote ${results.length} results to ${dest}`;
-  };
-
-  // ── Ready ─────────────────────────────────────────────────────────────────
-
-  statusEl.textContent = 'Tool runtime ready';
-  log('window.runTool(name, input, context?) — invoke any registered agent tool');
-  log('window.runBatch(calls, outPath?) — parallel batch, always writes results to disk');
-  log('calls format: [{ name, input, context? }, ...]');
+  statusEl.style.color = '#ee4444';
+  log('Provider-centric tool execution is active.');
+  log('Renderer tool invocation is disabled.');
+  log('Use the provider tool runtime through agentToolExecutor.');
 </script>
 </body>
 </html>

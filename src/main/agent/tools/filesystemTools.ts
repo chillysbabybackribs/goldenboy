@@ -211,7 +211,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'filesystem.search_file_cache',
-      description: 'Search indexed file chunks by query, optional path prefix, and language. Returns snippets and chunk ids for targeted reads.',
+      description: 'Search indexed file chunks by query, optional path prefix, and language. Returns ranked snippets, summaries, and chunk ids for targeted reads.',
       inputSchema: {
         type: 'object',
         required: ['query'],
@@ -275,7 +275,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'filesystem.file_cache_stats',
-      description: 'Return file knowledge cache size, token estimate, and hit/miss counters.',
+      description: 'Return file knowledge cache size, token estimate, hit/miss counters, and hottest files/directories.',
       inputSchema: { type: 'object', properties: {} },
       async execute() {
         const stats = fileKnowledgeStore.getStats();
@@ -346,6 +346,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, content, 'utf-8');
         fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
+        fileKnowledgeStore.notePatch(target);
         invalidateFilesystemCaches();
         return { summary: `Wrote ${content.length} characters`, data: { path: target } };
       },
@@ -364,6 +365,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const after = before.replace(search, replace);
         fs.writeFileSync(target, after, 'utf-8');
         fileKnowledgeStore.refreshFile(target, APP_WORKSPACE_ROOT);
+        fileKnowledgeStore.notePatch(target);
         invalidateFilesystemCaches();
         return { summary: `Patched ${target}`, data: { path: target, changed: before !== after } };
       },
@@ -405,6 +407,7 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
         const removedRecords = fileKnowledgeStore.removePathTree(from);
         if (stat.isFile()) {
           fileKnowledgeStore.refreshFile(to, APP_WORKSPACE_ROOT);
+          fileKnowledgeStore.notePatch(to);
         }
         invalidateFilesystemCaches();
         return {

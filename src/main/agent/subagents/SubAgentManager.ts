@@ -1,12 +1,14 @@
 import * as path from 'path';
-import type { CodexItem } from '../../../shared/types/model';
+import type { AgentTaskKind, CodexItem, TaskPlanMetadata } from '../../../shared/types/model';
 import type { AgentToolCallRecord, AgentToolResult, ValidationStatus } from '../AgentTypes';
 import { AgentProvider } from '../AgentTypes';
-import { SubAgentRecord, SubAgentResult, SubAgentSpawnInput } from './SubAgentTypes';
+import { isOrchestrationExecutionReady } from '../runtimeScope';
+import { SubAgentRecord, SubAgentResult, SubAgentScopeResolution, SubAgentSpawnInput } from './SubAgentTypes';
 import { SubAgentRuntime } from './SubAgentRuntime';
 import { agentRunStore } from '../AgentRunStore';
 import { chatKnowledgeStore } from '../../chatKnowledge/ChatKnowledgeStore';
 import { taskMemoryStore } from '../../models/taskMemoryStore';
+import { resolveAllowedToolsForTaskKind } from '../toolPacks';
 import { APP_WORKSPACE_ROOT } from '../../workspaceRoot';
 
 function makeSubAgentId(): string {
@@ -30,6 +32,30 @@ function unique(items: string[]): string[] {
 
 function limitList(items: string[], limit = 6): string[] {
   return unique(items).slice(0, limit);
+}
+
+function normalizeComparableText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function taskKindForSubagentRole(role: string, task: string): AgentTaskKind {
+  const normalizedRole = role.toLowerCase();
+  const normalizedTask = task.toLowerCase();
+  if (/\b(review|audit|qa)\b/.test(normalizedRole)) return 'review';
+  if (/\b(debug|terminal|fix)\b/.test(normalizedRole)) return 'debug';
+  if (/\b(browser|research|search)\b/.test(normalizedRole)) return 'research';
+  if (/\b(code|file|implement|patch|edit|refactor)\b/.test(normalizedRole)) return 'implementation';
+
+  if (/\b(review|audit|regression)\b/.test(normalizedTask)) return 'review';
+  if (/\b(debug|error|failing|failure|crash|exception)\b/.test(normalizedTask)) return 'debug';
+  if (/\b(search|research|latest|current)\b/.test(normalizedTask)) return 'research';
+  if (/\b(patch|edit|implement|refactor|file|code|build)\b/.test(normalizedTask)) return 'implementation';
+  return 'general';
+}
+
+function requiresVerificationHeavyScope(task: string): boolean {
+  const normalizedTask = task.toLowerCase();
+  return /\b(verify|verification|validate|validation|confirm|check|assert|test|reproduce|compare|regression)\b/.test(normalizedTask);
 }
 
 function toRelativeWorkspacePath(rawPath: string): string {
@@ -171,12 +197,87 @@ function emptyValidation(): SubAgentResult['validation'] {
   return { total: 0, valid: 0, invalid: 0, incomplete: 0 };
 }
 
+function summarizePlanMilestone(input: {
+  role: string;
+  task: string;
+  status: SubAgentResult['status'] | 'running';
+  findings?: string[];
+  blockers?: string[];
+}): string {
+  const task = input.task.replace(/\s+/g, ' ').trim();
+  const parts = [
+    `Sub-agent ${input.role} ${input.status}`,
+    `task="${task.length > 140 ? `${task.slice(0, 140)}...` : task}"`,
+  ];
+  if (input.findings?.length) parts.push(`findings=${input.findings.slice(0, 2).join('; ')}`);
+  if (input.blockers?.length) parts.push(`blockers=${input.blockers.slice(0, 2).join('; ')}`);
+  return parts.join(' | ');
+}
+
+function buildSubagentPlanMetadata(input: {
+  stage: TaskPlanMetadata['stage'];
+  role: string;
+  task: string;
+  subagentId: string;
+  status: TaskPlanMetadata['status'];
+  findings?: string[];
+  blockers?: string[];
+  validation?: string[];
+}): TaskPlanMetadata {
+  return {
+    category: 'plan',
+    stage: input.stage,
+    role: input.role,
+    subagentId: input.subagentId,
+    status: input.status,
+    task: input.task,
+    delegation: [`Sub-agent ${input.role}: ${input.task}`],
+    findings: input.findings?.slice(0, 3),
+    blockers: input.blockers?.slice(0, 3),
+    validation: input.validation,
+    nextAction: input.status === 'running' ? `Wait for sub-agent ${input.role} if the parent becomes blocked.` : undefined,
+  };
+}
+
 export class SubAgentManager {
   private records = new Map<string, SubAgentRecord>();
   private results = new Map<string, SubAgentResult>();
   private runPromises = new Map<string, Promise<SubAgentResult>>();
 
   constructor(private readonly providerFactory: (input: SubAgentSpawnInput) => AgentProvider) {}
+
+  resolveScope(input: SubAgentSpawnInput): SubAgentScopeResolution {
+    if (input.allowedTools === 'all') {
+      return { allowedTools: 'all', source: 'explicit-all' };
+    }
+    if (Array.isArray(input.allowedTools)) {
+      return { allowedTools: input.allowedTools, source: 'explicit-list' };
+    }
+    const snapshot = input.taskId ? taskMemoryStore.getPlanSnapshot(input.taskId) : null;
+    const preset = isOrchestrationExecutionReady(snapshot) && !requiresVerificationHeavyScope(input.task)
+      ? 'mode-4'
+      : 'mode-6';
+    return {
+      allowedTools: resolveAllowedToolsForTaskKind(
+        taskKindForSubagentRole(input.role || 'subagent', input.task),
+        preset,
+      ),
+      source: preset === 'mode-4' ? 'derived-mode4' : 'derived-mode6',
+    };
+  }
+
+  private findDuplicateRunning(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord | null {
+    const targetRole = normalizeComparableText(input.role || 'subagent');
+    const targetTask = normalizeComparableText(input.task);
+    for (const record of this.records.values()) {
+      if (record.parentRunId !== parentRunId) continue;
+      if (record.status !== 'running') continue;
+      if (normalizeComparableText(record.role) !== targetRole) continue;
+      if (normalizeComparableText(record.task) !== targetTask) continue;
+      return { ...record };
+    }
+    return null;
+  }
 
   spawn(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord {
     const record: SubAgentRecord = {
@@ -193,11 +294,34 @@ export class SubAgentManager {
       error: null,
     };
     this.records.set(record.id, record);
+    if (input.taskId) {
+      taskMemoryStore.recordPlan(
+        input.taskId,
+        summarizePlanMilestone({
+          role: record.role,
+          task: record.task,
+          status: 'running',
+        }),
+        buildSubagentPlanMetadata({
+          stage: 'subagent-spawn',
+          role: record.role,
+          task: record.task,
+          subagentId: record.id,
+          status: 'running',
+        }),
+      );
+    }
     this.prune();
     return { ...record };
   }
 
   run(parentRunId: string, input: SubAgentSpawnInput): Promise<SubAgentResult> {
+    const duplicate = this.findDuplicateRunning(parentRunId, input);
+    if (duplicate) {
+      const existing = this.runPromises.get(duplicate.id);
+      if (existing) return existing;
+    }
+
     const record = this.spawn(parentRunId, input);
     const runtime = new SubAgentRuntime(this.providerFactory(input));
 
@@ -218,6 +342,7 @@ export class SubAgentManager {
         return cancelled;
       }
 
+      const scope = this.resolveScope(input);
       const result = await runtime.run({
         mode: record.mode,
         agentId: record.id,
@@ -228,7 +353,7 @@ export class SubAgentManager {
         parentRunId,
         depth: 1,
         skillNames: this.skillNamesForRole(record.role, input.canSpawnSubagents !== false),
-        allowedTools: input.allowedTools || 'all',
+        allowedTools: scope.allowedTools,
         canSpawnSubagents: input.canSpawnSubagents,
       });
       const summary = result.output.slice(0, 1000);
@@ -253,6 +378,28 @@ export class SubAgentManager {
         validation: summarizeValidation(toolCalls),
       };
       this.results.set(record.id, subResult);
+      if (input.taskId) {
+        taskMemoryStore.recordPlan(
+          input.taskId,
+          summarizePlanMilestone({
+            role: record.role,
+            task: record.task,
+            status: 'completed',
+            findings: subResult.findings,
+            blockers: subResult.blockers,
+          }),
+          buildSubagentPlanMetadata({
+            stage: 'subagent-complete',
+            role: record.role,
+            task: record.task,
+            subagentId: record.id,
+            status: 'completed',
+            findings: subResult.findings,
+            blockers: subResult.blockers,
+            validation: [`valid=${subResult.validation.valid} invalid=${subResult.validation.invalid} incomplete=${subResult.validation.incomplete}`],
+          }),
+        );
+      }
       this.prune();
       return subResult;
     })().catch((err): SubAgentResult => {
@@ -278,6 +425,26 @@ export class SubAgentManager {
         validation: summarizeValidation(toolCalls),
       };
       this.results.set(record.id, subResult);
+      if (input.taskId) {
+        taskMemoryStore.recordPlan(
+          input.taskId,
+          summarizePlanMilestone({
+            role: record.role,
+            task: record.task,
+            status,
+            blockers: subResult.blockers,
+          }),
+          buildSubagentPlanMetadata({
+            stage: status === 'cancelled' ? 'subagent-cancelled' : 'subagent-failed',
+            role: record.role,
+            task: record.task,
+            subagentId: record.id,
+            status,
+            blockers: subResult.blockers,
+            validation: [`valid=${subResult.validation.valid} invalid=${subResult.validation.invalid} incomplete=${subResult.validation.incomplete}`],
+          }),
+        );
+      }
       this.prune();
       return subResult;
     });
@@ -286,14 +453,22 @@ export class SubAgentManager {
     return promise;
   }
 
-  spawnBackground(parentRunId: string, input: SubAgentSpawnInput): SubAgentRecord {
+  spawnBackground(parentRunId: string, input: SubAgentSpawnInput): { record: SubAgentRecord; reused: boolean } {
+    const duplicate = this.findDuplicateRunning(parentRunId, input);
+    if (duplicate) {
+      const existing = this.runPromises.get(duplicate.id);
+      if (existing) {
+        return { record: duplicate, reused: true };
+      }
+    }
+
     const promise = this.run(parentRunId, input);
     promise.catch(() => {});
     const id = Array.from(this.records.values())
       .filter(record => record.parentRunId === parentRunId)
       .sort((a, b) => b.createdAt - a.createdAt)[0]?.id;
     if (!id) throw new Error('Failed to create sub-agent');
-    return this.get(id)!;
+    return { record: this.get(id)!, reused: false };
   }
 
   async wait(id: string, timeoutMs: number = 120_000): Promise<SubAgentResult> {

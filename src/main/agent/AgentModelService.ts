@@ -5,6 +5,7 @@ import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { LogSource } from '../../shared/types/appState';
 import {
+  GEMINI_PROVIDER_ID,
   HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   AgentInvocationOptions,
@@ -21,9 +22,11 @@ import { generateId } from '../../shared/utils/ids';
 import { AgentProvider, AgentToolName } from './AgentTypes';
 import { AgentRuntime } from './AgentRuntime';
 import { CodexProvider } from './CodexProvider';
+import { GeminiProvider } from './GeminiProvider';
 import { HaikuProvider } from './HaikuProvider';
 import { AppServerBackedProvider } from './AppServerBackedProvider';
 import { AppServerProcess } from './AppServerProcess';
+import { AppServerProvider } from './AppServerProvider';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { createBrowserToolDefinitions } from './tools/browserTools';
 import { createChatToolDefinitions } from './tools/chatTools';
@@ -35,7 +38,7 @@ import { createTerminalToolDefinitions } from './tools/terminalTools';
 import { createSubAgentToolDefinitions } from './tools/subagentTools';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
-import { scopeForPrompt, withBrowserSearchDirective } from './runtimeScope';
+import { applyAdaptiveTaskProfileOverride, scopeForPrompt, withBrowserSearchDirective } from './runtimeScope';
 import { pickProviderForPrompt, taskKindRequiresV2ToolRuntime } from './providerRouting';
 import { SubAgentSpawnInput } from './subagents/SubAgentTypes';
 import { buildTaskProfile } from './taskProfile';
@@ -43,7 +46,6 @@ import { browserService } from '../browser/BrowserService';
 import { V2ToolBridge } from './V2ToolBridge';
 import type { AgentTaskKind } from '../../shared/types/model';
 import { buildStartupStatusMessages, shouldPrimeResearchBrowserSurface } from './startupProgress';
-import { writeCatalog } from './CatalogWriter';
 import {
   backgroundResearchSynthesisProviderId,
   buildBackgroundResearchSynthesisContext,
@@ -53,6 +55,7 @@ import {
   shouldRunBackgroundResearchSynthesis,
 } from './researchSynthesis';
 import type { InvocationAttachment } from '../../shared/types/model';
+import type { TaskPlanMetadata } from '../../shared/types/model';
 import type { DocumentInvocationAttachment } from '../../shared/types/attachments';
 
 type ProviderEntry = {
@@ -71,11 +74,14 @@ type ActiveTaskInvocation = {
 type SharedAppServerSession = {
   process: AppServerProcess;
   wsPort: number;
+  /** Pre-connected provider — reused across tasks to skip per-task WS connect. */
+  provider: AppServerProvider;
 };
 
 const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }> = [
   { id: PRIMARY_PROVIDER_ID, label: 'Codex', modelId: PRIMARY_PROVIDER_ID },
   { id: HAIKU_PROVIDER_ID, label: 'Haiku 4.5', modelId: HAIKU_PROVIDER_ID },
+  { id: GEMINI_PROVIDER_ID, label: 'Gemini', modelId: GEMINI_PROVIDER_ID },
 ];
 
 function buildAttachmentSummary(attachments?: InvocationAttachment[]): string | null {
@@ -116,6 +122,109 @@ function buildChatUserMessageText(prompt: string, attachments?: InvocationAttach
   if (text && attachmentSummary) return `${text}\n${attachmentSummary}`;
   if (text) return text;
   return attachmentSummary || prompt;
+}
+
+function summarizeOrchestrationMilestone(output: string): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const important = lines
+    .filter((line) => /^[-*]/.test(line) || /^\d+\./.test(line) || /objective:|tracks:|delegation:|validation:|next action:/i.test(line))
+    .slice(0, 4)
+    .map((line) => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, ''));
+
+  const selected = important.length > 0 ? important : lines.slice(0, 3);
+  const compact = selected.join(' | ').replace(/\s+/g, ' ').trim();
+  return compact.length > 400 ? `${compact.slice(0, 400)}...` : compact;
+}
+
+function buildInitialPlanMetadata(prompt: string): TaskPlanMetadata {
+  return {
+    category: 'plan',
+    stage: 'scaffold',
+    objective: prompt.trim(),
+    delegation: [
+      'Keep the parent on the critical path.',
+      'Spawn only bounded independent sub-agents with explicit ownership and validation.',
+    ],
+    validation: [
+      'Confirm each milestone with observed runtime events.',
+      'Prefer compact executable plans over broad strategy text.',
+    ],
+    nextAction: 'Break the work into the smallest independent tracks before executing.',
+  };
+}
+
+function buildParentTurnPlanMetadata(
+  output: string,
+  providerId: ProviderId,
+  stage: 'parent-turn-complete' | 'parent-turn-failed',
+): TaskPlanMetadata {
+  const compact = summarizeOrchestrationMilestone(output);
+  return {
+    category: 'plan',
+    stage,
+    providerId,
+    tracks: /tracks:/i.test(compact) ? [compact] : [],
+    nextAction: /next action:/i.test(compact) ? compact : undefined,
+    validation: /validation:/i.test(compact) ? [compact] : [],
+  };
+}
+
+function buildOrchestrationContinuationContext(taskId: string, taskKind: AgentTaskKind): string | null {
+  if (taskKind !== 'orchestration') return null;
+  const planContext = taskMemoryStore.buildPlanContext(taskId);
+  const snapshot = taskMemoryStore.getPlanSnapshot(taskId);
+  if (!planContext && !snapshot) return null;
+
+  const sections: string[] = [];
+  if (snapshot) {
+    sections.push('## Orchestration Guidance');
+    if (snapshot.latestStage) sections.push(`Latest stage: ${snapshot.latestStage}`);
+    if (snapshot.runningSubagents.length > 0) {
+      sections.push(`Running sub-agents: ${snapshot.runningSubagents.map(item => `${item.role} (${item.subagentId})`).join(', ')}`);
+      sections.push('Do not spawn duplicate sub-agents for work that is already running unless the task has materially changed.');
+      sections.push('Prefer continuing local critical-path work or waiting if the next step depends on a running child.');
+    }
+    if (snapshot.blockedSubagents.length > 0) {
+      sections.push(`Blocked sub-agents: ${snapshot.blockedSubagents.map(item => `${item.role}`).join(', ')}`);
+      sections.push('Resolve the known blocker or explicitly change the plan before spawning replacement sub-agents.');
+    }
+    if (snapshot.nextAction) {
+      sections.push(`Priority next action: ${snapshot.nextAction}`);
+    }
+    if (snapshot.completedSubagents.length > 0) {
+      sections.push(`Completed sub-agents: ${snapshot.completedSubagents.map(item => item.role).join(', ')}`);
+    }
+  }
+
+  if (planContext) sections.push(planContext);
+  return sections.join('\n\n').trim() || null;
+}
+
+function logAdaptiveOrchestrationScopeDecision(input: {
+  taskId: string;
+  prompt: string;
+  originalTaskProfile?: AgentInvocationOptions['taskProfile'];
+  adaptiveTaskProfile?: AgentInvocationOptions['taskProfile'];
+}): void {
+  const originalPreset = input.originalTaskProfile?.toolScopePreset || 'default';
+  const adaptivePreset = input.adaptiveTaskProfile?.toolScopePreset || originalPreset;
+  const discovery = input.adaptiveTaskProfile?.disableToolDiscovery ? 'disabled' : 'default';
+  if (adaptivePreset === originalPreset && discovery === 'default') return;
+
+  appStateStore.dispatch({
+    type: ActionType.ADD_LOG,
+    log: {
+      id: generateId('log'),
+      timestamp: Date.now(),
+      level: 'info',
+      source: 'system',
+      taskId: input.taskId,
+      message: `Adaptive orchestration scope preset=${adaptivePreset} discovery=${discovery} prompt=${input.prompt.slice(0, 120)}`,
+    },
+  });
 }
 
 function buildDocumentAttachmentContext(attachments?: InvocationAttachment[]): string | null {
@@ -174,10 +283,10 @@ class AgentModelService {
       ...createTerminalToolDefinitions(),
       ...createSubAgentToolDefinitions((input) => this.createPreferredSubAgentProvider(input)),
     ]);
-    writeCatalog(agentToolExecutor.list());
 
     void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
     this.initializeHaikuProvider(PROVIDER_CONFIGS[1]);
+    this.initializeGeminiProvider(PROVIDER_CONFIGS[2]);
 
     if (this.providers.size === 0) {
       this.log('system', 'warn', 'No model providers are available.');
@@ -211,6 +320,7 @@ class AgentModelService {
 
   dispose(): void {
     this.sharedAppServerSessionPromise = null;
+    this.sharedAppServerSession?.provider.abort();
     this.sharedAppServerSession?.process.stop();
     this.sharedAppServerSession = null;
     if (this.sharedAppServerBridge) {
@@ -242,6 +352,18 @@ class AgentModelService {
     }
     const activeTask = this.createTaskInvocation(providerId);
 
+    const adaptiveTaskProfile = applyAdaptiveTaskProfileOverride(
+      prompt,
+      options?.taskProfile,
+      taskMemoryStore.getPlanSnapshot(taskId),
+    );
+    logAdaptiveOrchestrationScopeDecision({
+      taskId,
+      prompt,
+      originalTaskProfile: options?.taskProfile,
+      adaptiveTaskProfile,
+    });
+
     const attachmentSummary = buildAttachmentSummary(options?.attachments);
     const displayPrompt = typeof options?.displayPrompt === 'string' ? options.displayPrompt : prompt;
     const chatUserMessage = chatKnowledgeStore.recordUserMessage(
@@ -252,6 +374,18 @@ class AgentModelService {
       attachments: options?.attachments,
       attachmentSummary,
     });
+    const taskProfile = buildTaskProfile(prompt, adaptiveTaskProfile);
+    if (taskProfile.kind === 'orchestration' && !taskMemoryStore.hasPlan(taskId)) {
+      taskMemoryStore.recordPlan(
+        taskId,
+        [
+          `Objective: ${displayPrompt.trim()}`,
+          'Execution mode: keep the parent on the critical path.',
+          'Delegation policy: spawn only bounded independent sub-agents with explicit ownership and validation.',
+        ].join(' '),
+        buildInitialPlanMetadata(displayPrompt),
+      );
+    }
     const taskMemoryContext = taskMemoryStore.buildContext(taskId);
     this.activeTaskProviders.set(taskId, activeTask);
 
@@ -272,17 +406,21 @@ class AgentModelService {
     this.log(providerId, 'info', `${provider.label} invocation started`, taskId);
 
     try {
-      const taskProfile = buildTaskProfile(prompt, options?.taskProfile);
       this.emitStartupStatuses(taskId, providerId, taskProfile.kind);
       if (shouldPrimeResearchBrowserSurface(taskProfile.kind, browserService.isCreated())) {
         void this.primeResearchBrowserSurface(prompt, providerId, taskId);
       }
 
-      const runtimePrompt = withBrowserSearchDirective(prompt, options?.taskProfile);
-      const runtimeScope = scopeForPrompt(prompt, options?.taskProfile);
+      const runtimePrompt = withBrowserSearchDirective(prompt, adaptiveTaskProfile);
+      const runtimeScope = scopeForPrompt(prompt, adaptiveTaskProfile);
+      const useContinuationContext = shouldUseAutomaticContinuationContext(taskId, prompt);
       const contextPrompt = buildContextPrompt([
-        buildAutomaticTaskContinuationContext(taskId, prompt),
-        chatKnowledgeStore.buildInvocationContext(taskId, chatUserMessage.id),
+        buildOrchestrationContinuationContext(taskId, taskProfile.kind),
+        useContinuationContext ? buildAutomaticTaskContinuationContext(taskId, prompt) : null,
+        chatKnowledgeStore.buildInvocationContext(taskId, chatUserMessage.id, {
+          includeCurrentMessage: false,
+          recentCount: useContinuationContext ? 1 : 2,
+        }),
         taskMemoryContext,
         buildDocumentAttachmentContext(options?.attachments),
       ]);
@@ -341,6 +479,13 @@ class AgentModelService {
 
       chatKnowledgeStore.recordAssistantMessage(taskId, response.output, providerId);
       taskMemoryStore.recordInvocationResult(result);
+      if (taskProfile.kind === 'orchestration') {
+        taskMemoryStore.recordPlan(
+          taskId,
+          `Parent completed orchestration turn | ${summarizeOrchestrationMilestone(response.output)}`,
+          buildParentTurnPlanMetadata(response.output, providerId, 'parent-turn-complete'),
+        );
+      }
       this.recordInvocationUsage(taskId, providerId, response.usage);
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
@@ -374,6 +519,13 @@ class AgentModelService {
       };
       chatKnowledgeStore.recordAssistantMessage(taskId, `Invocation failed: ${message}`, providerId);
       taskMemoryStore.recordInvocationResult(result);
+      if (taskProfile.kind === 'orchestration') {
+        taskMemoryStore.recordPlan(
+          taskId,
+          `Parent orchestration turn failed | ${message}`,
+          buildParentTurnPlanMetadata(message, providerId, 'parent-turn-failed'),
+        );
+      }
       this.recordInvocationUsage(taskId, providerId, result.usage);
       appStateStore.dispatch({
         type: ActionType.UPDATE_TASK,
@@ -429,6 +581,32 @@ class AgentModelService {
   private initializeHaikuProvider(config: { id: ProviderId; label: string; modelId: string }): void {
     try {
       const provider = new HaikuProvider();
+      this.providers.set(config.id, {
+        id: config.id,
+        label: config.label,
+        modelId: provider.modelId,
+        supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
+      });
+      this.setRuntime(config.id, {
+        status: 'available',
+        activeTaskId: null,
+        errorDetail: null,
+      }, provider.modelId);
+      this.log(config.id, 'info', `${config.label} ready: ${provider.modelId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.setRuntime(config.id, {
+        status: 'unavailable',
+        activeTaskId: null,
+        errorDetail: message,
+      });
+      this.log(config.id, 'warn', `${config.label} unavailable: ${message}`);
+    }
+  }
+
+  private initializeGeminiProvider(config: { id: ProviderId; label: string; modelId: string }): void {
+    try {
+      const provider = new GeminiProvider();
       this.providers.set(config.id, {
         id: config.id,
         label: config.label,
@@ -508,6 +686,9 @@ class AgentModelService {
     if (providerId === HAIKU_PROVIDER_ID) {
       return new HaikuProvider();
     }
+    if (providerId === GEMINI_PROVIDER_ID) {
+      return new GeminiProvider();
+    }
     if (providerId === PRIMARY_PROVIDER_ID) {
       const session = this.sharedAppServerSession;
       return new AppServerBackedProvider({
@@ -515,6 +696,7 @@ class AgentModelService {
         modelId: config.modelId,
         process: session?.process,
         wsPort: session?.wsPort,
+        provider: session?.provider,
       });
     }
     throw new Error(`Unsupported direct provider instance path for ${providerId}`);
@@ -536,9 +718,16 @@ class AgentModelService {
       try {
         await processHandle.start();
         const { wsPort } = await processHandle.waitUntilReady();
+        const sharedProvider = new AppServerProvider({
+          providerId: PROVIDER_CONFIGS[0].id,
+          modelId: PROVIDER_CONFIGS[0].modelId,
+          process: processHandle,
+          contextPath,
+        });
+        await sharedProvider.connect(wsPort);
         this.sharedAppServerBridge = bridge;
         this.sharedAppServerContextPath = contextPath;
-        this.sharedAppServerSession = { process: processHandle, wsPort };
+        this.sharedAppServerSession = { process: processHandle, wsPort, provider: sharedProvider };
         return this.sharedAppServerSession;
       } catch (err) {
         processHandle.stop();
@@ -847,7 +1036,7 @@ class AgentModelService {
 }
 
 function isSupportedProvider(value: string): value is ProviderId {
-  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID;
+  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
 }
 
 function hasDisposableProvider(provider: AgentProvider): provider is AgentProvider & { dispose(): Promise<void> | void } {
@@ -858,8 +1047,12 @@ function buildContextPrompt(parts: Array<string | null | undefined>): string | n
   return packContextSections(parts, 4_000, '\n...[context truncated]');
 }
 
+function shouldUseAutomaticContinuationContext(taskId: string, prompt: string): boolean {
+  return looksLikeContinuationPrompt(prompt) || lastInvocationFailed(taskId);
+}
+
 function buildAutomaticTaskContinuationContext(taskId: string, prompt: string): string | null {
-  if (!looksLikeContinuationPrompt(prompt) && !lastInvocationFailed(taskId)) {
+  if (!shouldUseAutomaticContinuationContext(taskId, prompt)) {
     return null;
   }
 

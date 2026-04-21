@@ -6,6 +6,7 @@ import { appStateStore } from '../state/appStateStore';
 import { eventBus } from '../events/eventBus';
 import { AppEventType } from '../../shared/types/events';
 import { getRoleByWebContentsId } from '../windows/windowManager';
+import { getWindowByRole } from '../windows/windowManager';
 import { generateId } from '../../shared/utils/ids';
 import { TaskRecord, ExecutionLayoutPreset, TaskStatus, LogLevel, LogSource } from '../../shared/types/appState';
 import { ActionType } from '../state/actions';
@@ -232,6 +233,14 @@ export function registerIpc(): void {
   safeHandle(IPC_CHANNELS.BROWSER_CLEAR_SITE_DATA, async (_event, origin?: string) => {
     return browserService.clearSiteData(origin);
   });
+  safeHandle(IPC_CHANNELS.BROWSER_ATTACH_SURFACE, (_event, role: 'command' | 'execution') => {
+    const targetWindow = getWindowByRole(role);
+    if (!targetWindow) {
+      throw new Error(`Window not available: ${role}`);
+    }
+    browserService.attachSurface(targetWindow, role);
+    return { role };
+  });
 
   safeHandle(IPC_CHANNELS.BROWSER_REPORT_BOUNDS, (event, bounds: { x: number; y: number; width: number; height: number }) => {
     const role = getRoleByWebContentsId(event.sender.id);
@@ -365,13 +374,8 @@ export function registerIpc(): void {
 
   safeHandle(
     IPC_CHANNELS.TOOL_INVOKE,
-    async (_event, name: string, input: unknown, opts?: { taskId?: string; runId?: string }) => {
-      return agentToolExecutor.execute(name as any, input, {
-        runId: opts?.runId ?? generateId('run'),
-        agentId: 'tool-runtime',
-        mode: 'unrestricted-dev',
-        taskId: opts?.taskId,
-      });
+    async () => {
+      throw new Error('Renderer tool invocation is disabled. Use the provider tool runtime.');
     },
   );
 
