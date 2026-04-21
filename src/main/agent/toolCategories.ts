@@ -20,9 +20,8 @@ export type ToolCategoryDescriptor = {
 export const TOOL_CATEGORIES: Record<ToolCategoryId, ToolCategoryDescriptor> = {
   browser: {
     id: 'browser',
-    summary: 'Multi-tab browser: navigation, interaction, extraction, downloads, per-page cache.',
+    summary: 'Multi-tab browser: navigation, interaction, extraction, downloads, per-page cache, pinned findings.',
     tools: [
-      'browser.tabs',
       'browser.navigate',
       'browser.research_search',
       'browser.back',
@@ -54,12 +53,14 @@ export const TOOL_CATEGORIES: Record<ToolCategoryId, ToolCategoryDescriptor> = {
       'browser.search_page_cache',
       'browser.read_cached_chunk',
       'browser.cache_inventory',
+      'browser.record_finding',
     ],
     rules: [
       'The V2 browser is an app-owned multi-tab workspace.',
-      '- `browser.tabs` (scope="active"|"all") inspects tab state; do not invent tab behavior the tool did not report.',
+      '- Tab state is already in the prompt: the `## Browser Overview` block lists every tab each turn, and mutating browser tools echo `{ activeTabId, tabs }` in their response. Trust that inventory; do not invent tab behavior the tool did not report.',
       '- `browser.navigate` changes the active tab; set `normalize: true` for bare domains (e.g. "example" -> "example.com"). Use `browser.create_tab` for new tabs.',
-      '- `browser.research_search` is the web-search entry point; mode="open" opens a search page without reading results.',
+      '- `browser.research_search` is the web-search entry point; mode="open" opens a search page without reading results. When evidence is judged sufficient, the finding is auto-pinned to task memory.',
+      '- `browser.record_finding` pins a key fact, answer, or caveat to task memory so it survives into later turns without re-reading the page.',
       '- To reset, close tabs with `browser.close_tab` and navigate the survivor to a default URL.',
       '- Extract before answering: prefer `browser.extract_page` / `browser.summarize_page` / `browser.cache_current_page` over guessing page content.',
       '- Ground every factual claim in an observed tool result. Do not answer from model memory or provider-native search.',

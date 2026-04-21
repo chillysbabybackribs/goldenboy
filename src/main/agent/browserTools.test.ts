@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { executeBrowserOperation } = vi.hoisted(() => ({
+const { executeBrowserOperation, recordTabFinding } = vi.hoisted(() => ({
   executeBrowserOperation: vi.fn(),
+  recordTabFinding: vi.fn(),
 }));
 
 vi.mock('../browser/BrowserService', () => ({
@@ -29,6 +30,7 @@ vi.mock('../browser/BrowserService', () => ({
       },
     ]),
     getState: vi.fn(() => ({ activeTabId: 'tab_1', navigation: { url: 'https://example.com', title: 'Example' } })),
+    recordTabFinding,
   },
 }));
 
@@ -57,6 +59,7 @@ describe('buildWaitForTextExpression', () => {
 describe('createBrowserToolDefinitions', () => {
   beforeEach(() => {
     executeBrowserOperation.mockReset();
+    recordTabFinding.mockReset();
   });
 
   it('routes browser.navigate through the browser operation layer', async () => {
@@ -222,5 +225,88 @@ describe('createBrowserToolDefinitions', () => {
     expect(result.data.tabs).toEqual([
       { id: 'tab_1', url: 'https://example.com', title: 'Example', isLoading: false },
     ]);
+  });
+
+  it('no longer exposes browser.tabs — tab state lives in the per-turn prompt and the tab-echo on mutating tool responses', () => {
+    const names = createBrowserToolDefinitions().map(tool => tool.name);
+    expect(names).not.toContain('browser.tabs');
+  });
+
+  it('exposes browser.record_finding for pinning research into task memory', async () => {
+    recordTabFinding.mockResolvedValue({
+      id: 'finding_1',
+      taskId: 'task_7',
+      tabId: 'tab_1',
+      snapshotId: null,
+      title: 'Claude Sonnet 4.5 price',
+      summary: '$3 input / $15 output per million tokens',
+      severity: 'info',
+      evidence: ['anthropic.com/pricing lists $3/$15.'],
+      createdAt: 12345,
+    });
+
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.record_finding');
+    expect(tool).toBeTruthy();
+
+    const result = await tool!.execute(
+      {
+        title: 'Claude Sonnet 4.5 price',
+        summary: '$3 input / $15 output per million tokens',
+        severity: 'info',
+        evidence: ['anthropic.com/pricing lists $3/$15.'],
+      },
+      { runId: 'run_f', agentId: 'agent_f', mode: 'unrestricted-dev', taskId: 'task_7' },
+    );
+
+    expect(recordTabFinding).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task_7',
+      title: 'Claude Sonnet 4.5 price',
+      summary: '$3 input / $15 output per million tokens',
+      severity: 'info',
+      snapshotId: null,
+    }));
+    expect(result.summary).toContain('Pinned finding');
+    expect(result.data).toMatchObject({
+      findingId: 'finding_1',
+      tabId: 'tab_1',
+      title: 'Claude Sonnet 4.5 price',
+      severity: 'info',
+      evidenceCount: 1,
+      activeTabId: 'tab_1',
+    });
+    expect(Array.isArray(result.data.tabs)).toBe(true);
+  });
+
+  it('rejects browser.record_finding when invoked without a task context', async () => {
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.record_finding');
+    expect(tool).toBeTruthy();
+    await expect(
+      tool!.execute(
+        { title: 'stray', summary: 'no task' },
+        { runId: 'run_f', agentId: 'agent_f', mode: 'unrestricted-dev' },
+      ),
+    ).rejects.toThrow(/task context/i);
+    expect(recordTabFinding).not.toHaveBeenCalled();
+  });
+
+  it('coerces unknown severity values on browser.record_finding to info', async () => {
+    recordTabFinding.mockResolvedValue({
+      id: 'finding_2',
+      taskId: 'task_8',
+      tabId: 'tab_1',
+      snapshotId: null,
+      title: 't',
+      summary: 's',
+      severity: 'info',
+      evidence: [],
+      createdAt: 1,
+    });
+
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.record_finding');
+    await tool!.execute(
+      { title: 't', summary: 's', severity: 'bogus' },
+      { runId: 'run_f', agentId: 'agent_f', mode: 'unrestricted-dev', taskId: 'task_8' },
+    );
+    expect(recordTabFinding).toHaveBeenCalledWith(expect.objectContaining({ severity: 'info' }));
   });
 });

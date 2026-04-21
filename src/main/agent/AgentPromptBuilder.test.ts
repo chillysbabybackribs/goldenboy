@@ -25,16 +25,17 @@ describe('AgentPromptBuilder', () => {
   const browserTools: AgentToolDefinition[] = [
     ...tools,
     {
-      name: 'browser.tabs',
-      description: 'Return browser tab state.',
+      name: 'browser.navigate',
+      description: 'Navigate the active tab to a URL.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        properties: {},
+        properties: { url: { type: 'string' } },
+        required: ['url'],
       },
       async execute() {
         return {
-          summary: 'listed tabs',
+          summary: 'navigated',
           data: {},
         };
       },

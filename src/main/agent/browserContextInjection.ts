@@ -33,9 +33,11 @@ const DEFAULT_MAX_LABEL_CHARS = 80;
  * live browser surface at the start of a turn. Returns null when the
  * browser is not initialised so we do not pollute text-only tasks.
  *
- * Intentionally small (few hundred chars): the full tab list and cache
- * inventory remain available through `browser.tabs` and
- * `browser.cache_inventory` when the model needs more.
+ * Intentionally small (few hundred chars): the full cache inventory
+ * remains available through `browser.cache_inventory` when the model
+ * needs more. Tab state is covered by this block plus the
+ * `{ activeTabId, tabs }` echo on mutating browser tool responses, so
+ * there is no dedicated `browser.tabs` tool.
  */
 export function buildBrowserContextBlock(
   sources: BrowserContextSources,
@@ -72,7 +74,7 @@ export function buildBrowserContextBlock(
   );
   lines.push(...tabLines);
   if (hiddenTabCount > 0) {
-    lines.push(`- ...and ${hiddenTabCount} more tab${hiddenTabCount === 1 ? '' : 's'} (call \`browser.tabs\` with scope="all" for the full list).`);
+    lines.push(`- ...and ${hiddenTabCount} more tab${hiddenTabCount === 1 ? '' : 's'} open (inactive tabs elided; run a browser action in one of them to see its full state echoed back).`);
   }
   if (cachedPageLines.length > 0) {
     lines.push('');
@@ -81,7 +83,7 @@ export function buildBrowserContextBlock(
   }
   lines.push('');
   lines.push(
-    'Prefer this overview over re-calling `browser.tabs` every turn. Use `browser.search_page_cache` against the cached pages above before re-extracting a tab.',
+    'Use `browser.search_page_cache` against the cached pages above before re-extracting a tab, and `browser.record_finding` to pin answers into task memory instead of re-reading pages next turn.',
   );
   return lines.join('\n');
 }

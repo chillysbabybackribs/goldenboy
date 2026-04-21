@@ -5,7 +5,6 @@ import { validateToolResult } from './ConstraintValidator';
 import { runWithBrowserOperationContext } from '../browser/browserOperationContext';
 
 const CACHEABLE_TOOLS = new Set<AgentToolName>([
-  'browser.tabs',
   'browser.extract_page',
   'browser.inspect_page',
   'browser.find_element',

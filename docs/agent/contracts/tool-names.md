@@ -39,13 +39,13 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `browser.inspect_page`
 - `browser.navigate`
 - `browser.read_cached_chunk`
+- `browser.record_finding`
 - `browser.reload`
 - `browser.research_search`
 - `browser.run_intent_program`
 - `browser.search_page_cache`
 - `browser.select_option`
 - `browser.summarize_page`
-- `browser.tabs`
 - `browser.type`
 - `browser.upload_file`
 - `browser.wait_for`

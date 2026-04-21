@@ -77,7 +77,6 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'browser.forward': return 'Browser: forward';
     case 'browser.reload': return 'Browser: reload';
     case 'browser.extract_page': return 'Browser: extract page';
-    case 'browser.tabs': return args.scope === 'all' ? 'Browser: list tabs' : 'Browser: get state';
     case 'browser.create_tab': return `Browser: create tab ${args.url ? `(${args.url})` : ''}`.trim();
     case 'browser.close_tab': return 'Browser: close tab';
     case 'browser.activate_tab': return 'Browser: activate tab';
@@ -99,6 +98,11 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'browser.search_page_cache': return `Browser cache: ${args.mode === 'answer' ? 'answer' : 'search'} "${args.query || ''}"`;
     case 'browser.read_cached_chunk': return `Browser cache: read chunk ${args.chunkId || args.id || ''}`.trim();
     case 'browser.cache_inventory': return `Browser cache: ${args.scope || 'stats'}`;
+    case 'browser.record_finding': {
+      const title = typeof args.title === 'string' ? args.title : '';
+      const trimmed = title.length > 60 ? `${title.slice(0, 59)}…` : title;
+      return `Browser: pin finding "${trimmed}"`;
+    }
     case 'filesystem.list': return `Files: list ${args.path || 'directory'}`;
     case 'filesystem.glob': return `Files: glob ${args.pattern || '*'}`;
     case 'filesystem.search': return `Files: search "${args.query || args.pattern || ''}"`;

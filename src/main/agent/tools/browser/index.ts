@@ -15,6 +15,7 @@ import {
   BrowserOperationResult,
   executeBrowserOperation,
 } from '../../../browser/browserOperations';
+import type { BrowserFindingSeverity } from '../../../../shared/types/browserIntelligence';
 
 const SIDECAR_RANK_TIMEOUT_MS = 1200;
 const SIDECAR_JUDGE_TIMEOUT_MS = 1200;
@@ -378,20 +379,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
   });
 
+  // NOTE: `browser.tabs` used to live here. It was removed once every mutating
+  // browser tool started echoing `{ activeTabId, tabs }` in its response (see
+  // `withTabEcho`) and the per-turn `## Browser Overview` block in
+  // `browserContextInjection` started carrying tab state into the prompt — so
+  // the model has fresh tab state on every turn without a dedicated call.
   return [
-    {
-      name: 'browser.tabs',
-      description: 'Return browser tab state. scope="active" (default) returns the active tab id and current navigation; scope="all" returns every open tab with ids.',
-      inputSchema: {
-        type: 'object',
-        properties: { scope: { type: 'string', enum: ['active', 'all'] } },
-      },
-      async execute(input) {
-        const scope = typeof objectInput(input).scope === 'string' ? String(objectInput(input).scope) : 'active';
-        if (scope === 'all') return runBrowserOperation('browser.get-tabs', {});
-        return runBrowserOperation('browser.get-state', {});
-      },
-    },
     {
       name: 'browser.navigate',
       description: 'Navigate the active tab to a URL. Set normalize=true to treat bare domains (e.g. "example") as "example.com". Use browser.create_tab for a new tab, browser.research_search for search workflows.',
@@ -572,6 +565,43 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
               score: match.score,
             })),
           });
+          // Auto-promote sufficient evidence to task memory so the finding
+          // survives across turns. The model sees this in the next turn's
+          // ## Task Memory block without re-reading the page or re-running
+          // the cache search. Best-effort: never block the search loop on a
+          // memory-store failure.
+          if (sufficient && context.taskId) {
+            try {
+              const findingTitle = compactText(
+                evidence?.title || page.title || target.title,
+                140,
+              );
+              const judgeSummary = geminiJudge?.compactEvidence?.find(text => typeof text === 'string');
+              const findingSummary = compactText(
+                evidence?.summary
+                  || judgeSummary
+                  || `Query "${query}" — evidence from ${target.url}`,
+                500,
+              );
+              const findingEvidence = (geminiJudge?.compactEvidence?.length
+                ? geminiJudge.compactEvidence
+                : matchSnippets
+              )
+                .slice(0, 4)
+                .map(text => compactText(text, 320));
+              await browserService.recordTabFinding({
+                taskId: context.taskId,
+                tabId,
+                title: findingTitle,
+                summary: findingSummary,
+                severity: 'info',
+                evidence: findingEvidence,
+                snapshotId: null,
+              });
+            } catch {
+              // best-effort
+            }
+          }
           if (stopWhenAnswerFound && sufficient) {
             stoppedEarly = true;
             stopReason = geminiJudge?.sufficient
@@ -1138,6 +1168,60 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         return {
           summary: `Browser cache has ${stats.pageCount} pages and ${stats.chunkCount} chunks`,
           data: { stats },
+        };
+      },
+    },
+    {
+      name: 'browser.record_finding',
+      description: 'Pin a key finding from the current research into task memory. Use this to preserve a fact, answer, or decision across turns — the entry shows up in the next turn\'s ## Task Memory block, so you do not have to re-read or re-query the page to recall it.',
+      inputSchema: {
+        type: 'object',
+        required: ['title', 'summary'],
+        properties: {
+          title: { type: 'string', description: 'Short headline for the finding (<=120 chars).' },
+          summary: { type: 'string', description: 'The finding itself — the fact, answer, or takeaway to remember (<=600 chars).' },
+          severity: { type: 'string', enum: ['info', 'warning', 'critical'], description: 'Default "info". Use "warning" for caveats, "critical" for blockers.' },
+          evidence: { type: 'array', items: { type: 'string' }, description: 'Optional supporting snippets or quotes backing the finding.' },
+          tabId: { type: 'string', description: 'Optional; defaults to the active tab.' },
+        },
+      },
+      async execute(input, context) {
+        if (!context.taskId) {
+          throw new Error('browser.record_finding requires a task context.');
+        }
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const title = compactText(requireString(obj, 'title'), 160);
+        const summary = compactText(requireString(obj, 'summary'), 800);
+        const severityInput = optionalString(obj, 'severity');
+        const severity: BrowserFindingSeverity = severityInput === 'warning' || severityInput === 'critical'
+          ? severityInput
+          : 'info';
+        const evidence = optionalStringArray(obj, 'evidence')
+          .slice(0, 6)
+          .map(item => compactText(item, 400));
+        const tabId = optionalString(obj, 'tabId');
+        const finding = await browserService.recordTabFinding({
+          taskId: context.taskId,
+          tabId,
+          title,
+          summary,
+          severity,
+          evidence,
+          snapshotId: null,
+        });
+        logBrowserCache(`Pinned finding "${title}" to task memory (${severity})`);
+        return {
+          summary: `Pinned finding: ${title}`,
+          data: {
+            findingId: finding.id,
+            tabId: finding.tabId,
+            title: finding.title,
+            severity: finding.severity,
+            evidenceCount: finding.evidence.length,
+            activeTabId: browserService.getState().activeTabId,
+            tabs: compactTabInventory(),
+          },
         };
       },
     },
