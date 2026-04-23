@@ -9,6 +9,7 @@ import { SurfaceActionInput, SurfaceActionRecord, SurfaceActionKind } from '../a
 import { AgentInvocationOptions, TaskMemoryRecord } from './model';
 import { DocumentImportRequest, DocumentInvocationAttachment } from './attachments';
 import { CodeHeatmapSnapshot } from './codeHeatmap';
+import { ScreenRecorderPendingFile, ScreenRecorderSaveResult, ScreenRecorderSource } from './screenRecorder';
 
 export const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -125,6 +126,8 @@ export const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  SCREEN_RECORDER_SAVE_FILES: 'screen-recorder:save-files',
 
   CODE_HEATMAP_GET_SNAPSHOT: 'code-heatmap:get-snapshot',
   CODE_HEATMAP_UPDATE: 'code-heatmap:update',
@@ -245,6 +248,11 @@ export interface WorkspaceAPI {
     onOutput(callback: (data: string) => void): void;
     onStatus(callback: (session: TerminalSessionInfo) => void): void;
     onExit(callback: (exitCode: number) => void): void;
+  };
+
+  screenRecorder: {
+    listSources(): Promise<ScreenRecorderSource[]>;
+    saveFiles(files: ScreenRecorderPendingFile[]): Promise<ScreenRecorderSaveResult>;
   };
 
   codeHeatmap: {

@@ -106,4 +106,6 @@ export const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  SCREEN_RECORDER_SAVE_FILES: 'screen-recorder:save-files',
 } as const;

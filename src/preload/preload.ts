@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, desktopCapturer, ipcRenderer, webUtils } from 'electron';
 import type { AgentInvocationOptions } from '../shared/types/model';
 import type { DocumentImportRequest } from '../shared/types/attachments';
 import type { BrowserOperationLedgerEntry } from '../shared/types/browserOperationLedger';
+import type { ScreenRecorderPendingFile, ScreenRecorderSource } from '../shared/types/screenRecorder';
 
 const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -92,6 +93,8 @@ const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  SCREEN_RECORDER_SAVE_FILES: 'screen-recorder:save-files',
 
   CODE_HEATMAP_GET_SNAPSHOT: 'code-heatmap:get-snapshot',
   CODE_HEATMAP_UPDATE: 'code-heatmap:update',
@@ -329,6 +332,25 @@ const api = {
       ipcRenderer.on(IPC_CHANNELS.TERMINAL_EXIT, (_event: any, exitCode: number) => {
         callback(exitCode);
       });
+    },
+  },
+
+  screenRecorder: {
+    async listSources(): Promise<ScreenRecorderSource[]> {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        fetchWindowIcons: false,
+        thumbnailSize: { width: 320, height: 180 },
+      });
+      return sources.map((source) => ({
+        id: source.id,
+        displayId: source.display_id || null,
+        name: source.name || 'Display',
+        thumbnailDataUrl: source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL(),
+      }));
+    },
+    saveFiles(files: ScreenRecorderPendingFile[]) {
+      return ipcRenderer.invoke(IPC_CHANNELS.SCREEN_RECORDER_SAVE_FILES, files);
     },
   },
 

@@ -56,6 +56,36 @@ let lastDiagnosticsData: {
   networkEvents: [],
   capturedAt: null,
 };
+let recorderPanelRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let recorderState: {
+  sources: ScreenRecorderSource[];
+  selectedSourceIds: Set<string>;
+  isLoading: boolean;
+  isRecording: boolean;
+  startedAt: number | null;
+  isSaving: boolean;
+  lastSaved: ScreenRecorderSaveResult | null;
+  error: string | null;
+} = {
+  sources: [],
+  selectedSourceIds: new Set<string>(),
+  isLoading: false,
+  isRecording: false,
+  startedAt: null,
+  isSaving: false,
+  lastSaved: null,
+  error: null,
+};
+
+type ActiveRecorderTrack = {
+  source: ScreenRecorderSource;
+  stream: MediaStream;
+  recorder: MediaRecorder;
+  chunks: Blob[];
+  stopped: Promise<{ fileName: string; blob: Blob }>;
+};
+
+let activeRecorderTracks: ActiveRecorderTrack[] = [];
 
 // CSP blocks inline `onerror` handlers, so favicon failures are handled here.
 document.addEventListener('error', (event: Event) => {
@@ -69,6 +99,261 @@ function formatNetworkDuration(ms: unknown): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return 'Unknown';
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
+}
+
+function formatRecorderDuration(startedAt: number | null): string {
+  if (!startedAt) return '00:00';
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function sanitizeRecorderSegment(input: string): string {
+  return input.replace(/[^a-z0-9._-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'display';
+}
+
+function getRecorderMimeType(): string {
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  for (const candidate of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+  return 'video/webm';
+}
+
+function updateRecorderPanelRefreshTimer(): void {
+  if (recorderPanelRefreshTimer) {
+    clearInterval(recorderPanelRefreshTimer);
+    recorderPanelRefreshTimer = null;
+  }
+  if (activePanel === 'recorder' && recorderState.isRecording) {
+    recorderPanelRefreshTimer = setInterval(() => {
+      if (activePanel === 'recorder') renderPanel('recorder');
+    }, 1000);
+  }
+}
+
+async function loadRecorderSources(force = false): Promise<void> {
+  if (!workspaceAPI) return;
+  if (recorderState.isLoading) return;
+  if (!force && recorderState.sources.length > 0) return;
+  recorderState.isLoading = true;
+  recorderState.error = null;
+  if (activePanel === 'recorder') renderPanel('recorder');
+  try {
+    const sources = await workspaceAPI.screenRecorder.listSources();
+    recorderState.sources = sources;
+    const currentSelections = new Set(recorderState.selectedSourceIds);
+    const validSelections = new Set(
+      sources
+        .map((source) => source.id)
+        .filter((sourceId) => currentSelections.has(sourceId)),
+    );
+    recorderState.selectedSourceIds = validSelections.size > 0
+      ? validSelections
+      : new Set(sources.map((source) => source.id));
+  } catch (error) {
+    recorderState.error = error instanceof Error ? error.message : 'Unable to load displays.';
+  } finally {
+    recorderState.isLoading = false;
+    if (activePanel === 'recorder') renderPanel('recorder');
+  }
+}
+
+function buildRecorderFileName(source: ScreenRecorderSource, startedAt: number): string {
+  const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, '-');
+  const label = sanitizeRecorderSegment(source.displayId ? `${source.name}-display-${source.displayId}` : source.name);
+  return `${label}-${stamp}.webm`;
+}
+
+async function createRecorderTrack(source: ScreenRecorderSource, mimeType: string, startedAt: number): Promise<ActiveRecorderTrack> {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: source.id,
+      },
+    } as MediaTrackConstraints,
+  } as MediaStreamConstraints);
+
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const stopped = new Promise<{ fileName: string; blob: Blob }>((resolve, reject) => {
+    recorder.onstop = () => {
+      resolve({
+        fileName: buildRecorderFileName(source, startedAt),
+        blob: new Blob(chunks, { type: mimeType || 'video/webm' }),
+      });
+    };
+    recorder.onerror = () => {
+      reject(new Error(`Recording failed for ${source.name}.`));
+    };
+  });
+  recorder.ondataavailable = (event: BlobEvent) => {
+    if (event.data && event.data.size > 0) {
+      chunks.push(event.data);
+    }
+  };
+  recorder.start(1000);
+
+  return {
+    source,
+    stream,
+    recorder,
+    chunks,
+    stopped,
+  };
+}
+
+async function startRecorderSession(): Promise<void> {
+  if (!workspaceAPI || recorderState.isRecording || recorderState.isSaving) return;
+  await loadRecorderSources();
+  const selectedSources = recorderState.sources.filter((source) => recorderState.selectedSourceIds.has(source.id));
+  if (selectedSources.length === 0) {
+    recorderState.error = 'Select at least one monitor before recording.';
+    if (activePanel === 'recorder') renderPanel('recorder');
+    return;
+  }
+
+  const startedAt = Date.now();
+  const mimeType = getRecorderMimeType();
+  recorderState.error = null;
+  recorderState.lastSaved = null;
+
+  const startedTracks: ActiveRecorderTrack[] = [];
+  try {
+    for (const source of selectedSources) {
+      const track = await createRecorderTrack(source, mimeType, startedAt);
+      startedTracks.push(track);
+    }
+    activeRecorderTracks = startedTracks;
+    recorderState.isRecording = true;
+    recorderState.startedAt = startedAt;
+    updateRecorderPanelRefreshTimer();
+    if (activePanel === 'recorder') renderPanel('recorder');
+  } catch (error) {
+    for (const track of startedTracks) {
+      track.stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+    }
+    activeRecorderTracks = [];
+    recorderState.isRecording = false;
+    recorderState.startedAt = null;
+    recorderState.error = error instanceof Error ? error.message : 'Unable to start recording.';
+    updateRecorderPanelRefreshTimer();
+    if (activePanel === 'recorder') renderPanel('recorder');
+  }
+}
+
+async function stopRecorderSession(): Promise<void> {
+  if (!workspaceAPI || !recorderState.isRecording || recorderState.isSaving || activeRecorderTracks.length === 0) return;
+  recorderState.isSaving = true;
+  recorderState.error = null;
+  if (activePanel === 'recorder') renderPanel('recorder');
+
+  try {
+    const pending = [...activeRecorderTracks];
+    for (const track of pending) {
+      if (track.recorder.state !== 'inactive') {
+        track.recorder.stop();
+      }
+    }
+    const finished = await Promise.all(pending.map((track) => track.stopped));
+    for (const track of pending) {
+      track.stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+    }
+
+    const files = await Promise.all(finished.map(async (item) => {
+      const bytes = new Uint8Array(await item.blob.arrayBuffer());
+      return {
+        fileName: item.fileName,
+        bytes,
+      };
+    }));
+    const result = await workspaceAPI.screenRecorder.saveFiles(files);
+    recorderState.lastSaved = result;
+    recorderState.isRecording = false;
+    recorderState.startedAt = null;
+    recorderState.error = null;
+    activeRecorderTracks = [];
+  } catch (error) {
+    recorderState.error = error instanceof Error ? error.message : 'Unable to stop and save recordings.';
+  } finally {
+    recorderState.isSaving = false;
+    recorderState.isRecording = false;
+    recorderState.startedAt = null;
+    activeRecorderTracks = [];
+    updateRecorderPanelRefreshTimer();
+    if (activePanel === 'recorder') renderPanel('recorder');
+  }
+}
+
+function renderRecorderPanel(): void {
+  const hasSources = recorderState.sources.length > 0;
+  const selectionCount = recorderState.selectedSourceIds.size;
+  const savedMarkup = recorderState.lastSaved
+    ? `
+      <div class="recorder-block">
+        <div class="recorder-block-title">Last Capture</div>
+        <div class="recorder-summary">${escapeHtml(recorderState.lastSaved.directory)}</div>
+        <div class="recorder-saved-list">
+          ${recorderState.lastSaved.files.map((file) => `
+            <div class="recorder-saved-item">
+              <span class="recorder-saved-name">${escapeHtml(file.fileName)}</span>
+              <span class="recorder-saved-meta">${Math.max(1, Math.round(file.byteLength / 1048576))} MB</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `
+    : '';
+
+  dropdownContent.innerHTML = `
+    <div class="recorder-block">
+      <div class="recorder-header">
+        <div>
+          <div class="recorder-block-title">Multi-Monitor Recorder</div>
+          <div class="recorder-summary">${recorderState.isRecording ? `Recording ${selectionCount} display${selectionCount === 1 ? '' : 's'} · ${formatRecorderDuration(recorderState.startedAt)}` : 'Capture selected monitors into separate WebM files.'}</div>
+        </div>
+        <div class="recorder-actions">
+          <button class="ext-load-btn" id="btnRecorderRefreshSources" ${recorderState.isLoading || recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>Refresh</button>
+          <button class="ext-load-btn" id="btnRecorderStart" ${!hasSources || recorderState.isLoading || recorderState.isRecording || recorderState.isSaving || selectionCount === 0 ? 'disabled' : ''}>Start</button>
+          <button class="ext-load-btn" id="btnRecorderStop" ${!recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>Stop</button>
+        </div>
+      </div>
+      <div class="recorder-chip-row">
+        <button class="settings-toggle-button" id="btnRecorderSelectAll" ${!hasSources || recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>All</button>
+        <button class="settings-toggle-button" id="btnRecorderClearAll" ${!hasSources || recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>None</button>
+        <span class="recorder-pill ${recorderState.isRecording ? 'live' : ''}">${recorderState.isSaving ? 'Saving…' : recorderState.isRecording ? 'Live' : 'Idle'}</span>
+      </div>
+      ${recorderState.error ? `<div class="recorder-error">${escapeHtml(recorderState.error)}</div>` : ''}
+      ${recorderState.isLoading ? '<div class="panel-empty">Loading displays...</div>' : ''}
+      ${!recorderState.isLoading && !hasSources ? '<div class="panel-empty">No monitors available.</div>' : ''}
+      <div class="recorder-grid">
+        ${recorderState.sources.map((source) => `
+          <label class="recorder-source-card ${recorderState.selectedSourceIds.has(source.id) ? 'selected' : ''}">
+            <input class="recorder-source-checkbox" type="checkbox" data-recorder-source-id="${escapeHtml(source.id)}" ${recorderState.selectedSourceIds.has(source.id) ? 'checked' : ''} ${recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>
+            <div class="recorder-source-preview">${source.thumbnailDataUrl ? `<img src="${source.thumbnailDataUrl}" alt="${escapeHtml(source.name)}">` : '<div class="recorder-source-placeholder">No preview</div>'}</div>
+            <div class="recorder-source-meta">
+              <span class="recorder-source-title">${escapeHtml(source.name)}</span>
+              <span class="recorder-source-subtitle">${escapeHtml(source.displayId ? `Display ${source.displayId}` : 'Desktop source')}</span>
+            </div>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+    ${savedMarkup}
+  `;
 }
 
 
@@ -504,6 +789,7 @@ btnMenu.addEventListener('click', () => {
 
 function openPanel(panel: string): void {
   activePanel = panel;
+  updateRecorderPanelRefreshTimer();
   dropdownPanel.style.display = 'flex';
   // Update tab active state
   dropdownPanel.querySelectorAll('.dropdown-tab').forEach(t => {
@@ -519,6 +805,11 @@ function openPanel(panel: string): void {
     void refreshBrowserDiagnostics().then(() => {
       if (activePanel === 'diagnostics') renderPanel('diagnostics');
     });
+  } else if (panel === 'recorder') {
+    dropdownContent.innerHTML = '<div class="panel-empty">Loading recorder…</div>';
+    void loadRecorderSources().then(() => {
+      if (activePanel === 'recorder') renderPanel('recorder');
+    });
   } else {
     renderPanel(panel);
   }
@@ -527,6 +818,7 @@ function openPanel(panel: string): void {
 
 function closePanel(): void {
   activePanel = null;
+  updateRecorderPanelRefreshTimer();
   dropdownPanel.style.display = 'none';
   reportBrowserBounds();
 }
@@ -582,6 +874,8 @@ function renderPanel(panel: string): void {
         <span class="item-url">${sizeStr}</span>
       </div>`;
     }).join('');
+  } else if (panel === 'recorder') {
+    renderRecorderPanel();
   } else if (panel === 'diagnostics') {
     try {
       const nav = bs.navigation;
@@ -753,6 +1047,33 @@ dropdownContent.addEventListener('click', (e: Event) => {
     return;
   }
 
+  if (target.id === 'btnRecorderRefreshSources') {
+    void loadRecorderSources(true);
+    return;
+  }
+
+  if (target.id === 'btnRecorderStart') {
+    void startRecorderSession();
+    return;
+  }
+
+  if (target.id === 'btnRecorderStop') {
+    void stopRecorderSession();
+    return;
+  }
+
+  if (target.id === 'btnRecorderSelectAll') {
+    recorderState.selectedSourceIds = new Set(recorderState.sources.map((source) => source.id));
+    if (activePanel === 'recorder') renderPanel('recorder');
+    return;
+  }
+
+  if (target.id === 'btnRecorderClearAll') {
+    recorderState.selectedSourceIds = new Set<string>();
+    if (activePanel === 'recorder') renderPanel('recorder');
+    return;
+  }
+
   // Settings toggles
   const settingKey = target.getAttribute('data-setting');
   if (settingKey && lastBrowserState) {
@@ -818,6 +1139,16 @@ dropdownContent.addEventListener('change', (e: Event) => {
   }
   if (target.id === 'settingsContentMode') {
     workspaceAPI?.browser.updateSettings({ contentMode: (target as HTMLSelectElement).value as 'strict-clean' | 'compatibility' });
+  }
+
+  const recorderCheckbox = target.closest('[data-recorder-source-id]') as HTMLInputElement | null;
+  if (recorderCheckbox) {
+    const sourceId = recorderCheckbox.getAttribute('data-recorder-source-id') || '';
+    if (sourceId) {
+      if (recorderCheckbox.checked) recorderState.selectedSourceIds.add(sourceId);
+      else recorderState.selectedSourceIds.delete(sourceId);
+      if (activePanel === 'recorder') renderPanel('recorder');
+    }
   }
 });
 

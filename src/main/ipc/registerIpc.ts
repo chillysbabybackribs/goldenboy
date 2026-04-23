@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { ipcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
+import { app, ipcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { AgentInvocationOptions } from '../../shared/types/model';
 import { appStateStore } from '../state/appStateStore';
@@ -25,6 +25,7 @@ import { codeHeatmapService } from '../codeHeatmap/CodeHeatmapService';
 import * as path from 'path';
 import * as os from 'os';
 import type { DocumentImportRequest } from '../../shared/types/attachments';
+import type { ScreenRecorderPendingFile } from '../../shared/types/screenRecorder';
 
 type TrustedIpcEvent = IpcMainEvent | IpcMainInvokeEvent;
 
@@ -57,6 +58,10 @@ function safeHandle<TEventArgs extends unknown[], TResult>(
     }
     return handler(event, ...args);
   });
+}
+
+function sanitizeRecorderFileSegment(input: string): string {
+  return input.replace(/[^a-z0-9._-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'capture';
 }
 
 export function registerIpc(): void {
@@ -212,6 +217,32 @@ export function registerIpc(): void {
 
   safeHandle(IPC_CHANNELS.TERMINAL_CAPTURE_SCROLLBACK, () => {
     return terminalService.captureScrollback();
+  });
+
+  safeHandle(IPC_CHANNELS.SCREEN_RECORDER_SAVE_FILES, async (_event, files: ScreenRecorderPendingFile[]) => {
+    const downloadsDir = app.getPath('downloads') || path.join(os.homedir(), 'Downloads');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const targetDir = path.join(downloadsDir, 'Goldenboy Recordings', stamp);
+    await fs.promises.mkdir(targetDir, { recursive: true });
+
+    const written = [];
+    for (const file of files) {
+      const baseName = sanitizeRecorderFileSegment(file.fileName);
+      const finalName = baseName.toLowerCase().endsWith('.webm') ? baseName : `${baseName}.webm`;
+      const outputPath = path.join(targetDir, finalName);
+      const buffer = Buffer.from(file.bytes);
+      await fs.promises.writeFile(outputPath, buffer);
+      written.push({
+        fileName: finalName,
+        path: outputPath,
+        byteLength: buffer.byteLength,
+      });
+    }
+
+    return {
+      directory: targetDir,
+      files: written,
+    };
   });
 
   // ── Browser runtime IPC handlers ─────────────────────────────────────
