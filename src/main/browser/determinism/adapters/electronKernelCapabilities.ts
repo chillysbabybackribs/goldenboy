@@ -49,11 +49,6 @@ export function createElectronKernelCapabilities(deps: ElectronKernelCapabilitie
   return {
     attachCdp,
 
-    async reloadTab(tabId) {
-      const wc = requireWebContents(tabId);
-      wc.reload();
-    },
-
     async setUserAgent(tabId, userAgent) {
       const wc = requireWebContents(tabId);
       const previous = wc.getUserAgent();
