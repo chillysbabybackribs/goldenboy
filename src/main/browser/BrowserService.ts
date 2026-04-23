@@ -221,6 +221,16 @@ function shouldSuppressConsoleNoise(event: BrowserConsoleEvent): boolean {
   return host ? isNoisyThirdPartyHost(host) : false;
 }
 
+function shouldSuppressBlockedNavigationError(validatedURL: string, errorDescription: string): boolean {
+  if (!/ERR_BLOCKED_BY_CLIENT/i.test(errorDescription)) return false;
+  return shouldBlockNoisyThirdPartyRequest(validatedURL, 'script')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'image')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'xhr')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'fetch')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'ping')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'subFrame');
+}
+
 export class BrowserService {
   private tabs: Map<string, TabEntry> = new Map();
   private activeTabId: string = '';
@@ -714,12 +724,7 @@ export class BrowserService {
   private destroyTabEntry(entry: TabEntry): void {
     this.layoutService.detachTab(entry.id, entry.view);
     this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
-    // Closing a tab used to hard-delete every page it cached, which made the
-    // common "I just closed that tab, look it up again" case impossible.
-    // Keep the chunks searchable under their original tabId and just stamp
-    // them as closed — the LRU will evict them ahead of live-tab pages once
-    // the cap is hit, and pinned pages survive indefinitely.
-    pageKnowledgeStore.markTabClosed(entry.id);
+    pageKnowledgeStore.removePagesForTab(entry.id);
     this.lastBackgroundExtractionByTab.delete(entry.id);
     this.dialogManager.detachTab(entry.id);
     try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
@@ -841,6 +846,7 @@ export class BrowserService {
 
     wc.on('did-fail-load', (_e: ElectronEvent, errorCode: number, errorDescription: string, validatedURL: string) => {
       if (errorCode === -3) return; // aborted
+      if (shouldSuppressBlockedNavigationError(validatedURL, errorDescription)) return;
       this.lastError = { code: errorCode, description: errorDescription, url: validatedURL, timestamp: Date.now() };
       info.status = 'error';
       this.syncTabAndMaybeNavigation(entry);
@@ -991,6 +997,16 @@ export class BrowserService {
 
   isKnownTabWebContents(webContentsId: number): boolean {
     return this.resolveTabIdByWebContentsId(webContentsId) !== null;
+  }
+
+  public getTabWebContents(tabId: string): Electron.WebContents | null {
+    const entry = this.tabs.get(tabId);
+    return entry ? entry.view.webContents : null;
+  }
+
+  public getTabSession(tabId: string): Electron.Session | null {
+    const entry = this.tabs.get(tabId);
+    return entry ? entry.view.webContents.session : null;
   }
 
   private syncTabAndMaybeNavigation(entry: TabEntry): void {
