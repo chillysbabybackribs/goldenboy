@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AgentInvocationOptions } from '../shared/types/model';
 import type { DocumentImportRequest } from '../shared/types/attachments';
 import type { BrowserOperationLedgerEntry } from '../shared/types/browserOperationLedger';
@@ -74,13 +74,6 @@ const IPC_CHANNELS = {
   BROWSER_STATE_UPDATE: 'browser:state-update',
   BROWSER_NAV_UPDATE: 'browser:nav-update',
   BROWSER_FIND_UPDATE: 'browser:find-update',
-  FS_READ: 'fs:read',
-  FS_WRITE: 'fs:write',
-  FS_EXISTS: 'fs:exists',
-  FS_LIST: 'fs:list',
-  FS_DELETE: 'fs:delete',
-  FS_MKDIR: 'fs:mkdir',
-
   DEBUG_TEST_DISK_EXTRACT: 'debug:test-disk-extract',
 
   MODEL_INVOKE: 'model:invoke',
@@ -88,7 +81,6 @@ const IPC_CHANNELS = {
   MODEL_GET_PROVIDERS: 'model:get-providers',
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
-  MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
@@ -100,6 +92,9 @@ const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  CODE_HEATMAP_GET_SNAPSHOT: 'code-heatmap:get-snapshot',
+  CODE_HEATMAP_UPDATE: 'code-heatmap:update',
 
   TOOL_INVOKE: 'tool:invoke',
 } as const;
@@ -292,9 +287,6 @@ const api = {
     resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RESOLVE, prompt, explicitOwner, options);
     },
-    handoff(taskId: string, from: string, to: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.MODEL_HANDOFF, taskId, from, to);
-    },
     runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }) {
       return ipcRenderer.invoke(IPC_CHANNELS.MODEL_RUN_INTENT_PROGRAM, taskId, input);
     },
@@ -340,26 +332,14 @@ const api = {
     },
   },
 
-  // ── Filesystem bridge ───────────────────────────────────────────────────
-
-  fs: {
-    read(filePath: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.FS_READ, filePath);
+  codeHeatmap: {
+    getSnapshot() {
+      return ipcRenderer.invoke(IPC_CHANNELS.CODE_HEATMAP_GET_SNAPSHOT);
     },
-    write(filePath: string, content: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.FS_WRITE, filePath, content);
-    },
-    exists(filePath: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.FS_EXISTS, filePath);
-    },
-    list(dirPath: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.FS_LIST, dirPath);
-    },
-    delete(filePath: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.FS_DELETE, filePath);
-    },
-    mkdir(dirPath: string) {
-      return ipcRenderer.invoke(IPC_CHANNELS.FS_MKDIR, dirPath);
+    onUpdate(callback: (snapshot: any) => void) {
+      ipcRenderer.on(IPC_CHANNELS.CODE_HEATMAP_UPDATE, (_event: any, snapshot: any) => {
+        callback(snapshot);
+      });
     },
   },
 
@@ -368,6 +348,21 @@ const api = {
   tool: {
     invoke(name: string, input: unknown, context?: { taskId?: string; runId?: string }) {
       return ipcRenderer.invoke(IPC_CHANNELS.TOOL_INVOKE, name, input, context);
+    },
+  },
+
+  // ── File utilities ──────────────────────────────────────────────────────
+  // Electron 32+ replaced File.path with webUtils.getPathForFile(File). Only
+  // the preload can call webUtils directly, so we expose a thin wrapper.
+
+  file: {
+    getPathForFile(file: File): string | null {
+      try {
+        const resolved = webUtils.getPathForFile(file);
+        return typeof resolved === 'string' && resolved.trim().length > 0 ? resolved : null;
+      } catch {
+        return null;
+      }
     },
   },
 
@@ -382,6 +377,7 @@ const api = {
     ipcRenderer.removeAllListeners(IPC_CHANNELS.BROWSER_FIND_UPDATE);
     ipcRenderer.removeAllListeners(IPC_CHANNELS.SURFACE_ACTION_UPDATE);
     ipcRenderer.removeAllListeners(IPC_CHANNELS.MODEL_PROGRESS);
+    ipcRenderer.removeAllListeners(IPC_CHANNELS.CODE_HEATMAP_UPDATE);
   },
 };
 

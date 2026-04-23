@@ -11,7 +11,7 @@ function isWorkspaceRoot(candidate: string): boolean {
   return WORKSPACE_MARKERS.every(marker => fs.existsSync(path.join(candidate, marker)));
 }
 
-export function resolveAppWorkspaceRoot(fromDir: string, envRoot = process.env.V2_WORKSPACE_ROOT): string {
+export function resolveAppWorkspaceRoot(fromDir: string, envRoot = process.env.GOLDENBOY_WORKSPACE_ROOT): string {
   if (envRoot && envRoot.trim()) {
     return path.resolve(envRoot);
   }

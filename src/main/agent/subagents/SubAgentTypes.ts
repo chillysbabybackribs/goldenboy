@@ -12,6 +12,7 @@ export type SubAgentSpawnInput = {
   providerId?: ProviderId | 'auto';
   modelId?: string;
   allowedTools?: 'all' | AgentToolName[];
+  parentAllowedTools?: 'all' | AgentToolName[];
   canSpawnSubagents?: boolean;
   timeoutMs?: number;
   onStatus?: (status: string) => void;

@@ -1,13 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { executeBrowserOperation, recordTabFinding, setPinned, listPages } = vi.hoisted(() => ({
-  executeBrowserOperation: vi.fn(),
-  recordTabFinding: vi.fn(),
-  setPinned: vi.fn(),
-  listPages: vi.fn(() => []),
-}));
-
-vi.mock('../browser/BrowserService', () => ({
+const { browserService } = vi.hoisted(() => ({
   browserService: {
     executeInPage: vi.fn(),
     isCreated: vi.fn(() => true),
@@ -32,6 +25,29 @@ vi.mock('../browser/BrowserService', () => ({
       },
     ]),
     getState: vi.fn(() => ({ activeTabId: 'tab_1', navigation: { url: 'https://example.com', title: 'Example' } })),
+    recordTabFinding: vi.fn(),
+  },
+}));
+
+const { executeBrowserOperation, recordTabFinding } = vi.hoisted(() => ({
+  executeBrowserOperation: vi.fn(),
+  recordTabFinding: vi.fn(),
+}));
+const { runRegisteredBrowserWorkflow, listRegisteredBrowserWorkflows } = vi.hoisted(() => ({
+  runRegisteredBrowserWorkflow: vi.fn(),
+  listRegisteredBrowserWorkflows: vi.fn(() => [
+    {
+      id: 'yahoo-local-badge',
+      description: 'Inject a local Yahoo badge',
+      version: '1.0.0',
+      allowedTools: ['browser.navigate', 'browser.wait_for', 'browser.evaluate_js'],
+    },
+  ]),
+}));
+
+vi.mock('../browser/BrowserService', () => ({
+  browserService: {
+    ...browserService,
     recordTabFinding,
   },
 }));
@@ -44,32 +60,9 @@ const EXPECTED_TAB_ECHO = {
 };
 
 vi.mock('../browser/browserOperations', () => ({ executeBrowserOperation }));
-
-vi.mock('../browserKnowledge/PageKnowledgeStore', () => ({
-  pageKnowledgeStore: {
-    setPinned,
-    listPages,
-    listSections: vi.fn(() => []),
-    listPagesForTab: vi.fn(() => []),
-    search: vi.fn(() => []),
-    readChunk: vi.fn(() => null),
-    answerFromCache: vi.fn(() => ({ question: '', answerable: false, matches: [], suggestedChunkIds: [], tokenEstimate: 0 })),
-    getStats: vi.fn(() => ({
-      pageCount: 0,
-      chunkCount: 0,
-      totalTokenEstimate: 0,
-      lastCachedPage: null,
-      searchCount: 0,
-      searchHitCount: 0,
-      searchMissCount: 0,
-      chunkReadCount: 0,
-    })),
-    cachePage: vi.fn(),
-    clearAll: vi.fn(() => ({ pageCount: 0, chunkCount: 0 })),
-    removePagesForTab: vi.fn(() => ({ pageCount: 0, chunkCount: 0 })),
-    markTabClosed: vi.fn(() => ({ pageCount: 0 })),
-    flushPendingSaves: vi.fn(),
-  },
+vi.mock('./workflows', () => ({
+  runRegisteredBrowserWorkflow,
+  listRegisteredBrowserWorkflows,
 }));
 
 import { buildWaitForTextExpression, createBrowserToolDefinitions } from './tools/browser';
@@ -89,9 +82,8 @@ describe('createBrowserToolDefinitions', () => {
   beforeEach(() => {
     executeBrowserOperation.mockReset();
     recordTabFinding.mockReset();
-    setPinned.mockReset();
-    listPages.mockReset();
-    listPages.mockReturnValue([]);
+    runRegisteredBrowserWorkflow.mockReset();
+    listRegisteredBrowserWorkflows.mockClear();
   });
 
   it('routes browser.navigate through the browser operation layer', async () => {
@@ -259,6 +251,77 @@ describe('createBrowserToolDefinitions', () => {
     ]);
   });
 
+  it('supports browser.close_tab with all=true by enumerating the current tab inventory', async () => {
+    browserService.getTabs.mockReturnValue([
+      {
+        id: 'tab_1',
+        navigation: {
+          url: 'https://example.com',
+          title: 'Example',
+          canGoBack: false,
+          canGoForward: false,
+          isLoading: false,
+          loadingProgress: null,
+          favicon: '',
+          lastNavigationAt: null,
+        },
+        status: 'ready',
+        zoomLevel: 0,
+        muted: false,
+        isAudible: false,
+        createdAt: 1,
+      },
+      {
+        id: 'tab_2',
+        navigation: {
+          url: 'https://example.org',
+          title: 'Example Org',
+          canGoBack: false,
+          canGoForward: false,
+          isLoading: false,
+          loadingProgress: null,
+          favicon: '',
+          lastNavigationAt: null,
+        },
+        status: 'ready',
+        zoomLevel: 0,
+        muted: false,
+        isAudible: false,
+        createdAt: 2,
+      },
+    ]);
+    executeBrowserOperation.mockResolvedValue({
+      summary: 'Closed tab',
+      data: { remainingTabs: 1 },
+    });
+
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.close_tab');
+    expect(tool).toBeTruthy();
+
+    const result = await tool!.execute(
+      { all: true },
+      { runId: 'run_close_all', agentId: 'agent_close_all', mode: 'unrestricted-dev' },
+    );
+
+    expect(executeBrowserOperation).toHaveBeenNthCalledWith(1, {
+      kind: 'browser.close-tab',
+      payload: { tabId: 'tab_1' },
+    });
+    expect(executeBrowserOperation).toHaveBeenNthCalledWith(2, {
+      kind: 'browser.close-tab',
+      payload: { tabId: 'tab_2' },
+    });
+    expect(result).toEqual({
+      summary: 'Closed all 2 browser tabs',
+      data: {
+        tabIds: ['tab_1', 'tab_2'],
+        all: true,
+        activeTabId: 'tab_1',
+        tabs: browserService.getTabs(),
+      },
+    });
+  });
+
   it('no longer exposes browser.tabs — tab state lives in the per-turn prompt and the tab-echo on mutating tool responses', () => {
     const names = createBrowserToolDefinitions().map(tool => tool.name);
     expect(names).not.toContain('browser.tabs');
@@ -342,70 +405,37 @@ describe('createBrowserToolDefinitions', () => {
     expect(recordTabFinding).toHaveBeenCalledWith(expect.objectContaining({ severity: 'info' }));
   });
 
-  it('browser.pin_page protects a cached page from LRU eviction', async () => {
-    setPinned.mockReturnValue({
-      id: 'page_abc',
-      tabId: 'tab_1',
-      url: 'https://example.com/a',
-      title: 'Page A',
-      tier: 'readability',
-      contentHash: 'abc',
-      chunkIds: ['c1', 'c2'],
-      headings: [],
-      createdAt: 1,
-      updatedAt: 2,
-      pinned: true,
+  it('routes browser.run_workflow through the registered workflow runner', async () => {
+    runRegisteredBrowserWorkflow.mockResolvedValue({
+      summary: 'Workflow yahoo-local-badge completed 4 steps',
+      data: {
+        workflowId: 'yahoo-local-badge',
+        success: true,
+        completedStepIds: ['open_yahoo', 'wait_for_header', 'inject_badge', 'verify_badge'],
+      },
     });
 
-    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.pin_page');
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.run_workflow');
     expect(tool).toBeTruthy();
 
+    const context = { runId: 'run_wf', agentId: 'agent_wf', mode: 'unrestricted-dev' as const, taskId: 'task_wf' };
     const result = await tool!.execute(
-      { pageId: 'page_abc' },
-      { runId: 'run_pin', agentId: 'agent_pin', mode: 'unrestricted-dev' },
+      { workflowId: 'yahoo-local-badge', inputs: { badgeText: 'TESTED' } },
+      context,
     );
 
-    expect(setPinned).toHaveBeenCalledWith('page_abc', true);
-    expect(result.summary).toContain('Pinned cached page');
+    expect(runRegisteredBrowserWorkflow).toHaveBeenCalledWith({
+      workflowId: 'yahoo-local-badge',
+      workflowInputs: { badgeText: 'TESTED' },
+      context,
+    });
+    expect(result.summary).toBe('Workflow yahoo-local-badge completed 4 steps');
     expect(result.data).toMatchObject({
-      pageId: 'page_abc',
-      pinned: true,
-      url: 'https://example.com/a',
+      workflowId: 'yahoo-local-badge',
+      success: true,
+      activeTabId: 'tab_1',
     });
-  });
-
-  it('browser.pin_page accepts pinned=false to unpin', async () => {
-    setPinned.mockReturnValue({
-      id: 'page_abc',
-      tabId: 'tab_1',
-      url: 'https://example.com/a',
-      title: 'Page A',
-      tier: 'readability',
-      contentHash: 'abc',
-      chunkIds: [],
-      headings: [],
-      createdAt: 1,
-      updatedAt: 2,
-      pinned: false,
-    });
-
-    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.pin_page');
-    await tool!.execute(
-      { pageId: 'page_abc', pinned: false },
-      { runId: 'run_unpin', agentId: 'agent_unpin', mode: 'unrestricted-dev' },
-    );
-
-    expect(setPinned).toHaveBeenCalledWith('page_abc', false);
-  });
-
-  it('browser.pin_page rejects unknown pageIds', async () => {
-    setPinned.mockReturnValue(null);
-    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.pin_page');
-    await expect(
-      tool!.execute(
-        { pageId: 'page_missing' },
-        { runId: 'run_x', agentId: 'agent_x', mode: 'unrestricted-dev' },
-      ),
-    ).rejects.toThrow(/unknown cached pageid/i);
+    expect(Array.isArray(result.data.availableWorkflows)).toBe(true);
+    expect(result.data.availableWorkflows).toHaveLength(1);
   });
 });

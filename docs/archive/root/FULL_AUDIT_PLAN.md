@@ -1,5 +1,7 @@
 # Full Audit Plan
 
+Status: archived planning document. Kept for historical audit context, not as a live execution plan.
+
 ## Objective
 Produce a verified end-to-end audit of the V2 agent stack, focusing on correctness, model/provider behavior, runtime enforcement, tool execution, and any gaps between intended architecture and observed implementation.
 

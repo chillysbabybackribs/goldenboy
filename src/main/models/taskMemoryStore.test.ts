@@ -71,6 +71,34 @@ describe('TaskMemoryStore', () => {
     expect(store.hasPlan('task-3')).toBe(true);
   });
 
+  it('auto-captures 3+ step user lists into an active checklist and scratchpad', () => {
+    const store = new TaskMemoryStore();
+    store.recordUserPrompt('task-3b', [
+      'Prompt optimization queue:',
+      '1. Add structured build verification',
+      '2. Add structured test verification',
+      '3. Persist active-plan scratchpad state',
+    ].join('\n'));
+
+    const snapshot = store.getPlanSnapshot('task-3b');
+    const context = store.buildContext('task-3b');
+    const scratchpadPath = path.join(userDataDir, 'task-scratchpads', 'task-3b.md');
+
+    expect(snapshot?.activeChecklist).toMatchObject({
+      planName: 'Prompt optimization queue',
+      currentItemId: '1',
+      items: [
+        { id: '1', text: 'Add structured build verification', status: 'pending' },
+        { id: '2', text: 'Add structured test verification', status: 'pending' },
+        { id: '3', text: 'Persist active-plan scratchpad state', status: 'pending' },
+      ],
+    });
+    expect(context).toContain('### Active Checklist');
+    expect(context).toContain('[pending] 2. Add structured test verification');
+    expect(fs.existsSync(scratchpadPath)).toBe(true);
+    expect(fs.readFileSync(scratchpadPath, 'utf-8')).toContain('## Active Checklist');
+  });
+
   it('builds a focused plan continuation context with the latest milestone first', () => {
     const store = new TaskMemoryStore();
     store.recordPlan('task-4', 'Objective: coordinate execution.', {
@@ -164,6 +192,175 @@ describe('TaskMemoryStore', () => {
     ]);
     expect(snapshot?.completedSubagents).toEqual([
       { role: 'review', task: 'Review orchestration scope' },
+    ]);
+  });
+
+  it('surfaces active checklist items in the plan snapshot for continuity', () => {
+    const store = new TaskMemoryStore();
+    store.recordPlan('task-6', 'Captured checklist: Slice 1 | items=3', {
+      category: 'plan',
+      stage: 'checklist-captured',
+      planId: 'plan_1',
+      planName: 'Slice 1',
+      currentItemId: '1',
+      items: [
+        { id: '1', text: 'Add structured build tool', status: 'completed' },
+        { id: '2', text: 'Add structured test tool', status: 'pending' },
+        { id: '3', text: 'Add scratchpad recall', status: 'pending' },
+      ],
+      nextAction: 'Add structured test tool',
+    });
+
+    const context = store.buildPlanContext('task-6');
+    const snapshot = store.getPlanSnapshot('task-6');
+
+    expect(context).toContain('Next action: Add structured test tool');
+    expect(snapshot?.activeChecklist?.items[1]).toMatchObject({
+      id: '2',
+      text: 'Add structured test tool',
+      status: 'pending',
+    });
+  });
+
+  it('progresses the active checklist one item at a time', () => {
+    const store = new TaskMemoryStore();
+    store.recordUserPrompt('task-7', [
+      'Slice 1:',
+      '1. Add structured build tool',
+      '2. Add structured test tool',
+      '3. Add scratchpad recall',
+    ].join('\n'));
+
+    const started = store.beginActiveChecklistItem('task-7', 'user said continue');
+    const afterStart = store.getPlanSnapshot('task-7');
+    const completed = store.completeActiveChecklistItem('task-7', 'implementation turn succeeded');
+    const afterComplete = store.getPlanSnapshot('task-7');
+
+    expect(started).toMatchObject({
+      id: '1',
+      text: 'Add structured build tool',
+      status: 'in_progress',
+    });
+    expect(afterStart?.activeChecklist?.items[0]).toMatchObject({
+      id: '1',
+      status: 'in_progress',
+    });
+    expect(completed).toEqual({
+      completedItemId: '1',
+      nextItemId: '2',
+    });
+    expect(afterComplete?.activeChecklist).toMatchObject({
+      currentItemId: '2',
+    });
+    expect(afterComplete?.activeChecklist?.items).toEqual([
+      expect.objectContaining({ id: '1', status: 'completed' }),
+      expect.objectContaining({ id: '2', status: 'in_progress' }),
+      expect.objectContaining({ id: '3', status: 'pending' }),
+    ]);
+  });
+
+  it('can target a specific checklist item without rewriting the whole list', () => {
+    const store = new TaskMemoryStore();
+    store.recordUserPrompt('task-8', [
+      'Slice 1:',
+      '1. Add structured build tool',
+      '2. Add structured test tool',
+      '3. Add scratchpad recall',
+    ].join('\n'));
+
+    const targeted = store.beginSpecificChecklistItem('task-8', '2', { reason: 'user said do #2' });
+    const afterTarget = store.getPlanSnapshot('task-8');
+    const completed = store.completeActiveChecklistItem('task-8', 'item 2 done');
+    const afterComplete = store.getPlanSnapshot('task-8');
+
+    expect(targeted).toMatchObject({
+      id: '2',
+      text: 'Add structured test tool',
+      status: 'in_progress',
+    });
+    expect(afterTarget?.activeChecklist?.items).toEqual([
+      expect.objectContaining({ id: '1', status: 'pending' }),
+      expect.objectContaining({ id: '2', status: 'in_progress' }),
+      expect.objectContaining({ id: '3', status: 'pending' }),
+    ]);
+    expect(completed).toEqual({
+      completedItemId: '2',
+      nextItemId: '3',
+    });
+    expect(afterComplete?.activeChecklist?.items).toEqual([
+      expect.objectContaining({ id: '1', status: 'pending' }),
+      expect.objectContaining({ id: '2', status: 'completed' }),
+      expect.objectContaining({ id: '3', status: 'in_progress' }),
+    ]);
+  });
+
+  it('can skip earlier pending checklist items when retargeting ahead', () => {
+    const store = new TaskMemoryStore();
+    store.recordUserPrompt('task-9', [
+      'Slice 1:',
+      '1. Add structured build tool',
+      '2. Add structured test tool',
+      '3. Add scratchpad recall',
+    ].join('\n'));
+
+    const targeted = store.beginSpecificChecklistItem('task-9', '3', {
+      skipPriorPending: true,
+      reason: 'user said skip 1 and 2, start 3',
+    });
+    const snapshot = store.getPlanSnapshot('task-9');
+
+    expect(targeted).toMatchObject({
+      id: '3',
+      status: 'in_progress',
+    });
+    expect(snapshot?.activeChecklist?.items).toEqual([
+      expect.objectContaining({ id: '1', status: 'dropped' }),
+      expect.objectContaining({ id: '2', status: 'dropped' }),
+      expect.objectContaining({ id: '3', status: 'in_progress' }),
+    ]);
+  });
+
+  it('can target a checklist item by text from the user prompt', () => {
+    const store = new TaskMemoryStore();
+    store.recordUserPrompt('task-10', [
+      'Slice 1:',
+      '1. Add structured build tool',
+      '2. Add structured test tool',
+      '3. Add scratchpad recall',
+    ].join('\n'));
+
+    const targeted = store.beginChecklistItemForPrompt('task-10', 'do the scratchpad one', 'user prompt');
+    const snapshot = store.getPlanSnapshot('task-10');
+
+    expect(targeted).toMatchObject({
+      id: '3',
+      text: 'Add scratchpad recall',
+      status: 'in_progress',
+    });
+    expect(snapshot?.activeChecklist?.currentItemId).toBe('3');
+  });
+
+  it('can skip a named earlier step and start a later named one', () => {
+    const store = new TaskMemoryStore();
+    store.recordUserPrompt('task-11', [
+      'Slice 1:',
+      '1. Add structured build tool',
+      '2. Add structured test tool',
+      '3. Add scratchpad recall',
+    ].join('\n'));
+
+    const targeted = store.beginChecklistItemForPrompt('task-11', 'skip the build step and do tests', 'user prompt');
+    const snapshot = store.getPlanSnapshot('task-11');
+
+    expect(targeted).toMatchObject({
+      id: '2',
+      text: 'Add structured test tool',
+      status: 'in_progress',
+    });
+    expect(snapshot?.activeChecklist?.items).toEqual([
+      expect.objectContaining({ id: '1', status: 'dropped' }),
+      expect.objectContaining({ id: '2', status: 'in_progress' }),
+      expect.objectContaining({ id: '3', status: 'pending' }),
     ]);
   });
 });

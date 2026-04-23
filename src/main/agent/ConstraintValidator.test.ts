@@ -48,6 +48,53 @@ describe('ConstraintValidator', () => {
     ]));
   });
 
+  it('accepts the required homepage survivor when closing the last remaining tab', () => {
+    const result = validateToolResult(
+      'browser.close_tab',
+      {
+        summary: 'Closed 1 browser tab',
+        data: {
+          tabIds: ['tab-2'],
+          activeTabId: 'tab-2',
+          tabs: [{ id: 'tab-2', url: 'https://www.google.com/' }],
+        },
+      },
+      { tabId: 'tab-2' },
+    );
+
+    expect(result?.status).toBe('VALID');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'tab_closed',
+        status: 'PASS',
+      }),
+    ]));
+  });
+
+  it('validates browser close_tab with all=true from the returned tabIds', () => {
+    const result = validateToolResult(
+      'browser.close_tab',
+      {
+        summary: 'Closed all 3 browser tabs',
+        data: {
+          tabIds: ['tab-1', 'tab-2', 'tab-3'],
+          all: true,
+          activeTabId: 'tab-3',
+          tabs: [{ id: 'tab-3', url: 'https://www.google.com/' }],
+        },
+      },
+      { all: true },
+    );
+
+    expect(result?.status).toBe('VALID');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'tab_closed',
+        status: 'PASS',
+      }),
+    ]));
+  });
+
   it('validates browser activate_tab against activeTabId', () => {
     const result = validateToolResult(
       'browser.activate_tab',
@@ -168,6 +215,102 @@ describe('ConstraintValidator', () => {
     expect(result?.constraints).toEqual(expect.not.arrayContaining([
       expect.objectContaining({
         name: 'output_error_signals',
+      }),
+    ]));
+  });
+
+  it('validates structured repository build results', () => {
+    const result = validateToolResult(
+      'terminal.build_repo',
+      {
+        summary: 'Built repository with npm run build (exit 0)',
+        data: {
+          exitCode: 0,
+          buildVerified: true,
+          buildCommand: 'npm run build',
+        },
+      },
+      {},
+    );
+
+    expect(result?.status).toBe('VALID');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'exit_code',
+        status: 'PASS',
+      }),
+      expect.objectContaining({
+        name: 'build_verified',
+        status: 'PASS',
+      }),
+    ]));
+  });
+
+  it('marks structured repository build invalid when verification metadata is missing', () => {
+    const result = validateToolResult(
+      'terminal.build_repo',
+      {
+        summary: 'Built repository with npm run build (exit 0)',
+        data: {
+          exitCode: 0,
+        },
+      },
+      {},
+    );
+
+    expect(result?.status).toBe('INCOMPLETE');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'build_verified',
+        status: 'UNKNOWN',
+      }),
+    ]));
+  });
+
+  it('validates structured repository test results', () => {
+    const result = validateToolResult(
+      'terminal.test_repo',
+      {
+        summary: 'Tested repository with npm test (exit 0)',
+        data: {
+          exitCode: 0,
+          testVerified: true,
+          testCommand: 'npm test',
+        },
+      },
+      {},
+    );
+
+    expect(result?.status).toBe('VALID');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'exit_code',
+        status: 'PASS',
+      }),
+      expect.objectContaining({
+        name: 'test_verified',
+        status: 'PASS',
+      }),
+    ]));
+  });
+
+  it('marks structured repository test invalid when verification metadata is missing', () => {
+    const result = validateToolResult(
+      'terminal.test_repo',
+      {
+        summary: 'Tested repository with npm test (exit 0)',
+        data: {
+          exitCode: 0,
+        },
+      },
+      {},
+    );
+
+    expect(result?.status).toBe('INCOMPLETE');
+    expect(result?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'test_verified',
+        status: 'UNKNOWN',
       }),
     ]));
   });

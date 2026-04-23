@@ -1,5 +1,7 @@
 # Task Status Indicator — Design Spec
 
+> Historical note: this dated UI spec is preserved as design history. The current renderer implementation is authoritative for shipped behavior.
+
 **Date:** 2026-04-13
 **Status:** Approved
 
@@ -38,7 +40,6 @@ Runtime progress events are mapped to short friendly phrases before display. Raw
 | `filesystem.index_workspace` | `indexing workspace` |
 | `filesystem.answer_from_cache` | `checking file cache` |
 | `Calling browser.navigate` | `navigating` |
-| `browser.search_page_cache` / `browser.read_cached_chunk` | `reading page cache` |
 | `browser.research_search` / `browser.search_web` | `searching the web` |
 | `browser.extract_page` | `reading page` |
 | `terminal.exec` | `running command` |

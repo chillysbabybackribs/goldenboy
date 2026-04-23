@@ -1,5 +1,7 @@
 # Codex Speed Optimization Log
 
+Status: archived historical changelog. Entries describe point-in-time optimizations and may not reflect the current runtime structure.
+
 ## Optimization #1: Lazy-Load Prompt Assembly ✅ COMPLETED
 
 **Status:** Complete and measured  

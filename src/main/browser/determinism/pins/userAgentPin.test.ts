@@ -16,7 +16,6 @@ function makeCtx(overrides: Partial<PinContext['capabilities']> = {}, userAgent:
       removeInsertedCss: vi.fn(),
       setViewport: vi.fn(),
       clearViewport: vi.fn(),
-      registerRequestBlocker: vi.fn(),
       isTabAlive: vi.fn(() => true),
       ...overrides,
     } as PinContext['capabilities'],

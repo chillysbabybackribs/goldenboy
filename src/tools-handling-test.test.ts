@@ -15,9 +15,9 @@ const MOCK_BROWSER_TOOLS = [
   { name: 'browser.research_search', description: 'Research search' },
   { name: 'browser.click', description: 'Click element' },
   { name: 'browser.type', description: 'Type text' },
-  { name: 'browser.cache_current_page', description: 'Cache current page' },
-  { name: 'browser.search_page_cache', description: 'Search page cache' },
-  { name: 'browser.read_cached_chunk', description: 'Read cached chunk' },
+  { name: 'browser.extract_page', description: 'Extract page content' },
+  { name: 'browser.summarize_page', description: 'Summarize page' },
+  { name: 'browser.record_finding', description: 'Pin research finding into task memory' },
 ];
 
 const MOCK_FILESYSTEM_TOOLS = [

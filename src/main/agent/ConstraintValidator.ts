@@ -6,6 +6,7 @@ import {
   ResultValidation,
   ValidationStatus,
 } from './AgentTypes';
+import { createDefaultSettings } from '../../shared/types/browser';
 
 // ---------------------------------------------------------------------------
 // Constraint extraction & deterministic validation
@@ -169,6 +170,58 @@ function checkOwnershipFromGhOutput(result: AgentToolResult, input: unknown): Co
   };
 }
 
+function checkRepoBuildVerified(result: AgentToolResult): ConstraintVerdict {
+  const verified = result.data.buildVerified;
+  if (verified === true) {
+    return {
+      name: 'build_verified',
+      status: 'PASS',
+      observed: 'repository build command executed and reported verification metadata',
+      expected: 'structured repository build verification',
+    };
+  }
+  if (verified === false) {
+    return {
+      name: 'build_verified',
+      status: 'FAIL',
+      observed: 'repository build tool reported unverified build result',
+      expected: 'structured repository build verification',
+    };
+  }
+  return {
+    name: 'build_verified',
+    status: 'UNKNOWN',
+    observed: 'repository build result did not include verification metadata',
+    expected: 'structured repository build verification',
+  };
+}
+
+function checkRepoTestVerified(result: AgentToolResult): ConstraintVerdict {
+  const verified = result.data.testVerified;
+  if (verified === true) {
+    return {
+      name: 'test_verified',
+      status: 'PASS',
+      observed: 'repository test command executed and reported verification metadata',
+      expected: 'structured repository test verification',
+    };
+  }
+  if (verified === false) {
+    return {
+      name: 'test_verified',
+      status: 'FAIL',
+      observed: 'repository test tool reported unverified test result',
+      expected: 'structured repository test verification',
+    };
+  }
+  return {
+    name: 'test_verified',
+    status: 'UNKNOWN',
+    observed: 'repository test result did not include verification metadata',
+    expected: 'structured repository test verification',
+  };
+}
+
 function checkBrowserNavigationTarget(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
   const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
   const requestedUrl = typeof obj.url === 'string' ? obj.url : null;
@@ -261,10 +314,17 @@ function checkBrowserCreateTab(result: AgentToolResult): ConstraintVerdict | nul
 
 function checkBrowserClosedTabs(result: AgentToolResult, input: unknown): ConstraintVerdict | null {
   const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
-  const requested = [
+  const requestedFromInput = [
     ...(typeof obj.tabId === 'string' ? [obj.tabId] : []),
     ...(Array.isArray(obj.tabIds) ? obj.tabIds.filter((value): value is string => typeof value === 'string') : []),
   ];
+  const closeAll = obj.all === true;
+  const requestedFromResult = Array.isArray(result.data.tabIds)
+    ? result.data.tabIds.filter((value): value is string => typeof value === 'string')
+    : [];
+  const requested = closeAll && requestedFromInput.length === 0
+    ? requestedFromResult
+    : requestedFromInput;
   if (requested.length === 0) return null;
 
   const tabs = Array.isArray(result.data.tabs) ? result.data.tabs : null;
@@ -280,6 +340,32 @@ function checkBrowserClosedTabs(result: AgentToolResult, input: unknown): Constr
   const survivors = requested.filter((tabId) =>
     tabs.some((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).id === tabId),
   );
+
+  const defaultHomepage = createDefaultSettings().homepage;
+  const remainingTab = tabs.length === 1 && tabs[0] && typeof tabs[0] === 'object'
+    ? tabs[0] as Record<string, unknown>
+    : null;
+  const remainingTabId = typeof remainingTab?.id === 'string' ? remainingTab.id : '';
+  const remainingTabUrl = typeof remainingTab?.url === 'string'
+    ? remainingTab.url
+    : typeof remainingTab?.navigation === 'object' && remainingTab.navigation !== null && typeof (remainingTab.navigation as Record<string, unknown>).url === 'string'
+      ? (remainingTab.navigation as Record<string, unknown>).url as string
+      : '';
+  const normalizedRemainingUrl = remainingTabUrl.replace(/\/+$/, '');
+  const normalizedHomepageUrl = defaultHomepage.replace(/\/+$/, '');
+  const defaultHomepageSurvivor = survivors.length === 1
+    && tabs.length === 1
+    && survivors[0] === remainingTabId
+    && normalizedRemainingUrl === normalizedHomepageUrl;
+
+  if (defaultHomepageSurvivor) {
+    return {
+      name: 'tab_closed',
+      status: 'PASS',
+      observed: `browser retained the required default homepage tab ${remainingTabId} at ${remainingTabUrl || defaultHomepage}`,
+      expected: `all requested tabs closed except the default homepage survivor (${defaultHomepage})`,
+    };
+  }
 
   return {
     name: 'tab_closed',
@@ -512,6 +598,20 @@ const TERMINAL_EXEC_CONSTRAINTS: ConstraintExtractor = (result, input) => {
   return verdicts;
 };
 
+const TERMINAL_BUILD_REPO_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  verdicts.push(checkExitCode(result));
+  verdicts.push(checkRepoBuildVerified(result));
+  return verdicts;
+};
+
+const TERMINAL_TEST_REPO_CONSTRAINTS: ConstraintExtractor = (result, _input) => {
+  const verdicts: ConstraintVerdict[] = [];
+  verdicts.push(checkExitCode(result));
+  verdicts.push(checkRepoTestVerified(result));
+  return verdicts;
+};
+
 const BROWSER_NAVIGATE_CONSTRAINTS: ConstraintExtractor = (result, input) => {
   const verdicts: ConstraintVerdict[] = [];
   const obj = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -569,6 +669,8 @@ const BROWSER_SELECT_OPTION_CONSTRAINTS: ConstraintExtractor = (result, input) =
 // Map tool names to their constraint extractors
 const TOOL_CONSTRAINTS = new Map<AgentToolName, ConstraintExtractor>([
   ['terminal.exec', TERMINAL_EXEC_CONSTRAINTS],
+  ['terminal.build_repo', TERMINAL_BUILD_REPO_CONSTRAINTS],
+  ['terminal.test_repo', TERMINAL_TEST_REPO_CONSTRAINTS],
   ['browser.navigate', BROWSER_NAVIGATE_CONSTRAINTS],
   ['browser.research_search', RESEARCH_SEARCH_CONSTRAINTS],
   ['browser.create_tab', BROWSER_CREATE_TAB_CONSTRAINTS],

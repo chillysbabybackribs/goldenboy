@@ -7,7 +7,7 @@ describe('localeTimezonePin', () => {
   it('sends Emulation.setLocaleOverride + setTimezoneOverride + setEmulatedMedia, and reverts all three', async () => {
     const send = vi.fn(async () => ({}));
     const detach = vi.fn(async () => {});
-    const attach = vi.fn(async () => ({ send, detach }));
+    const attach = vi.fn(async () => ({ send, on: vi.fn(), off: vi.fn(), detach }));
     const ctx: PinContext = {
       tabId: 'tab_1',
       config: resolveConfig({ locale: 'fr-FR', timezone: 'Europe/Paris', reduceMotion: true }),
@@ -19,7 +19,6 @@ describe('localeTimezonePin', () => {
         removeInsertedCss: vi.fn(),
         setViewport: vi.fn(),
         clearViewport: vi.fn(),
-        registerRequestBlocker: vi.fn(),
         isTabAlive: vi.fn(() => true),
       } as PinContext['capabilities'],
     };
@@ -44,7 +43,7 @@ describe('localeTimezonePin', () => {
 
   it('skips setEmulatedMedia when reduceMotion is false', async () => {
     const send = vi.fn(async () => ({}));
-    const attach = vi.fn(async () => ({ send, detach: vi.fn(async () => {}) }));
+    const attach = vi.fn(async () => ({ send, on: vi.fn(), off: vi.fn(), detach: vi.fn(async () => {}) }));
     const ctx: PinContext = {
       tabId: 'tab_1',
       config: resolveConfig({ reduceMotion: false }),
@@ -56,7 +55,6 @@ describe('localeTimezonePin', () => {
         removeInsertedCss: vi.fn(),
         setViewport: vi.fn(),
         clearViewport: vi.fn(),
-        registerRequestBlocker: vi.fn(),
         isTabAlive: vi.fn(() => true),
       } as PinContext['capabilities'],
     };

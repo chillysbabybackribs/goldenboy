@@ -16,14 +16,13 @@ function makeCtx(): {
     tabId: 'tab_1',
     config: resolveConfig({ viewport: { width: 1024, height: 768, deviceScaleFactor: 2 } }),
     capabilities: {
-      attachCdp: vi.fn(async () => ({ send: cdpSend, detach: vi.fn(async () => {}) })),
+      attachCdp: vi.fn(async () => ({ send: cdpSend, on: vi.fn(), off: vi.fn(), detach: vi.fn(async () => {}) })),
       setUserAgent: vi.fn(),
       restoreUserAgent: vi.fn(),
       insertCss: vi.fn(),
       removeInsertedCss: vi.fn(),
       setViewport,
       clearViewport,
-      registerRequestBlocker: vi.fn(),
       isTabAlive: vi.fn(() => true),
     } as PinContext['capabilities'],
   };

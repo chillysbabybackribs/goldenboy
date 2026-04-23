@@ -1,20 +1,12 @@
-# V2 Workspace
+# Goldenboy
 
-V2 Workspace is an Electron desktop app for running AI tasks against three live surfaces at once:
+Goldenboy is a local Electron desktop app that pairs a chat-driven command center with an embedded multi-tab browser and a real terminal backed by `node-pty`. A Codex-backed agent runtime invokes host-managed tools to operate the browser, filesystem, and terminal during a single task.
 
-- a chat-driven command center
-- an embedded multi-tab browser
-- a real terminal backed by `node-pty`
+It is designed for hands-on local workflows where the model can reason in chat, inspect the browser, and use the terminal in the same turn.
 
-It is designed for hands-on local workflows where the model can reason in chat, inspect the browser, and use the terminal during the same task.
+The UI is plain HTML/CSS + TypeScript compiled with `tsc`. There is no bundler and no UI framework.
 
-The current codebase supports:
-
-- Codex via the local `codex` CLI
-- Haiku via the Anthropic API
-- Gemini via the Google Gemini API
-
-The UI stack is plain HTML/CSS plus TypeScript compiled with `tsc`. This is not a React app.
+For agent contract, runtime rules, and file map, see [AGENTS.md](./AGENTS.md).
 
 ## Quick Start
 
@@ -25,88 +17,61 @@ npm install
 npm start
 ```
 
-If you want the Haiku or Gemini providers, copy `.env.example` to `.env` and set the relevant API keys.
+If you want local environment overrides, copy `.env.example` to `.env`.
 
 ## What The App Does
 
-- Opens two windows: `Command Center` and `Execution`
-- Lets you chat with an agent, attach files, and keep task history
-- Gives the agent host-managed browser, filesystem, terminal, runtime, and sub-agent tools
-- Persists browser session data, bookmarks, settings, tasks, token counters, and chat memory across launches
-- Restores browser state and terminal context on the next run
+- Opens two windows: `Command Center` and `Execution`.
+- Lets you chat with an agent, attach files, and keep task history.
+- Gives the agent host-managed browser, filesystem, terminal, runtime, and sub-agent tools.
+- Persists browser session data, bookmarks, settings, tasks, token counters, and chat memory across launches.
+- Restores browser state and terminal context on the next run.
 
-## Current Architecture
+## Architecture
+
+Codex is the sole model runtime. There is no provider routing or cross-provider fallback.
+Deterministic workflow helpers may still exist under `src/main/agent/workflows/`, but they are not part of the normal live `AgentRuntime` path.
 
 ```text
 Electron main process
 ├─ AgentModelService
-│  ├─ CodexProvider -> codex exec --json --model gpt-5.4
-│  ├─ HaikuProvider -> Anthropic SDK
-│  └─ GeminiProvider -> Gemini API client
-├─ AgentRuntime + tool packs + provider tool runtime
+│  └─ AppServerBackedProvider -> codex app-server (ws) via the host tool bridge
+├─ AgentRuntime + AgentToolExecutor + ConstraintValidator
 ├─ BrowserService
-│  ├─ persistent browser session
+│  ├─ persistent browser session (partition persist:workspace-browser)
 │  ├─ tabs, bookmarks, downloads, extensions, diagnostics
-│  └─ browser perception / page analysis / page knowledge cache
+│  └─ browser perception / page analysis / browsing-history store
 ├─ TerminalService
-│  └─ plain PTY shell session, no tmux
+│  └─ direct PTY shell session (no tmux)
 ├─ ChatKnowledgeStore / TaskMemoryStore / FileKnowledgeStore / PageKnowledgeStore
 └─ IPC + event router + persisted app state
 
 Renderer windows
-├─ command/
-│  └─ chat UI, task history, model selection, logs, token usage
-└─ execution/
-   └─ browser chrome + embedded browser + terminal pane
+├─ command/     chat UI, task history, logs, token usage
+└─ execution/   browser chrome + embedded browser + terminal pane
 ```
+
+Codex is driven by the locally running `codex app-server` process. The `codex` CLI is only probed on startup to confirm availability; it is not used for task execution.
 
 ## Requirements
 
-- Node.js 18+ and npm
-- `codex` available on your `PATH`
-- a working `codex` authentication setup
-- optional: `ANTHROPIC_API_KEY` if you want the Haiku provider
-- optional: `GEMINI_API_KEY` if you want the Gemini provider
+- Node.js 20+ (Node 22+ recommended — the runtime uses the native `WebSocket` global).
+- `codex` available on your `PATH`.
+- A working `codex` authentication setup.
 
 ## Environment
 
-The app works without extra environment variables for the default Codex flow, but these are the important ones:
+The app works without extra environment variables for the default Codex flow. These are the ones that matter:
 
 ```bash
 # Optional: override the detected repository root
-export V2_WORKSPACE_ROOT=/absolute/path/to/your/repo
-
-# Optional: enables the Haiku provider
-export ANTHROPIC_API_KEY=your_key_here
-
-# Optional: enables the Gemini provider
-export GEMINI_API_KEY=your_key_here
-
-# Optional: override the Haiku model id
-export ANTHROPIC_MODEL=claude-haiku-4-5-20251001
-
-# Optional: override Gemini router targets
-export GEMINI_MODEL_DEFAULT=gemini-2.5-flash
-export GEMINI_MODEL_COMPLEX=gemini-2.5-pro
-export GEMINI_MODEL_FAST=gemini-2.5-flash
-export GEMINI_MODEL_LITE=gemini-2.5-flash-lite
-export GEMINI_ROUTER_STRATEGY=balanced
-
-# Optional: explicit Gemini fallback order for research-sidecar JSON tasks
-export GEMINI_MODELS=gemini-2.5-flash-lite,gemini-2.5-flash,gemini-2.5-pro
+export GOLDENBOY_WORKSPACE_ROOT=/absolute/path/to/your/repo
 
 # Optional: useful on machines with GPU rendering issues
-export V2_DISABLE_HARDWARE_ACCELERATION=1
+export GOLDENBOY_DISABLE_HARDWARE_ACCELERATION=1
 ```
 
-The Haiku and Gemini providers also read `.env` in the project root, so putting provider keys there works too.
 Use [.env.example](./.env.example) as the template for a local `.env` file.
-
-Gemini router strategies:
-
-- `cheap`: bias toward `LITE` and `FAST`, only escalate on clearly complex tasks
-- `balanced`: default behavior, uses task kind plus prompt complexity
-- `quality`: escalate earlier to `DEFAULT` and `COMPLEX`
 
 ## Install
 
@@ -114,10 +79,10 @@ Gemini router strategies:
 git clone https://github.com/chillysbabybackribs/goldenboy.git
 cd goldenboy
 npm install
-cp .env.example .env  # optional: only if you want local provider env vars
+cp .env.example .env  # optional: only if you want local env overrides
 ```
 
-Before launching, make sure `codex --version` works in your shell if you plan to use Codex.
+Before launching, make sure `codex --version` works in your shell.
 
 ## Run
 
@@ -138,13 +103,13 @@ npm run dev
 ## Useful Scripts
 
 ```bash
-npm test
-npm run build
+npm test                 # Vitest unit/integration tests
+npm test -- path/to/file.test.ts
+npm run build            # compile main + preload + renderer
 npm run build:main
 npm run build:preload
 npm run build:renderer
 npm run copy:html
-npm run benchmark:tools
 npm run clean
 ```
 
@@ -161,26 +126,9 @@ On launch, Electron creates two windows:
 
 The execution window initializes the embedded browser and starts or reconnects the terminal session automatically.
 
-### 2. Choose how model routing should work
+### 2. Codex runtime
 
-In the `Command Center`, the top compose bar has provider buttons:
-
-- `Codex`
-- `HAIKU`
-- `GEMINI`
-
-Behavior:
-
-- click a provider button once to force that provider
-- click the same button again to return to `Default`
-
-Default routing is prompt-based:
-
-- research-style prompts prefer `haiku` when it is available
-- implementation, debug, review, and orchestration prompts prefer Codex
-- if the preferred provider is unavailable, routing falls back across Codex, Haiku, and Gemini based on availability
-
-If `codex` is unavailable, Codex will not be selectable. If `ANTHROPIC_API_KEY` is missing, Haiku will not be available. If `GEMINI_API_KEY` is missing, Gemini will not be available.
+The command center shows Codex runtime status in the footer. The app invokes Codex for every task. If Codex is unavailable, model tasks cannot run until Codex is fixed.
 
 ### 3. Start a task
 
@@ -188,10 +136,10 @@ Type into the chat box and press `Enter`, or click the send button.
 
 What happens:
 
-- if no task is active, the app creates one automatically from the first prompt
-- the prompt is written into chat history and task memory
-- the selected provider is invoked
-- live progress appears in the chat stream and the logs panel
+- If no task is active, the app creates one automatically from the first prompt.
+- The prompt is written into chat history and task memory.
+- The Codex runtime is invoked.
+- Live progress appears in the chat stream and the logs panel.
 
 Use `Shift+Enter` for a newline in the prompt.
 
@@ -211,7 +159,7 @@ Use `HISTORY` in the command window to:
 - switch the active task
 - clear the active task with `NEW CHAT`
 
-`NEW CHAT` does not delete prior tasks. It simply clears the current active task so the next prompt starts a fresh one.
+`NEW CHAT` does not delete prior tasks — it clears the active task so the next prompt starts a fresh one.
 
 ### 6. Watch the execution surfaces
 
@@ -220,60 +168,31 @@ The `Execution` window contains:
 - a browser pane with tabs and navigation controls
 - a terminal pane
 
-The browser pane includes:
+The browser pane includes back / forward / reload / stop, address bar, bookmark button, zoom controls, DevTools toggle, and a menu panel with history, bookmarks, downloads, diagnostics, extensions, and settings.
 
-- back / forward / reload / stop
-- address bar
-- bookmark button
-- zoom controls
-- DevTools toggle
-- menu panel with history, bookmarks, downloads, diagnostics, extensions, and settings
-
-The terminal pane:
-
-- starts a shell with `node-pty`
-- uses the current shell from `SHELL` on Unix or `COMSPEC` on Windows
-- restores the last known working directory when possible
-- supports restart and collapse/expand from the pane header
+The terminal pane starts a shell with `node-pty`, uses the current shell from `SHELL` on Unix or `COMSPEC` on Windows, restores the last known working directory when possible, and supports restart and collapse/expand from the pane header.
 
 ### 7. Use the browser manually when needed
 
-The embedded browser is a real persistent Electron session. It keeps:
+The embedded browser is a real persistent Electron session. It keeps tabs, history, bookmarks, cookies/storage, and extension state.
 
-- tabs
-- history
-- bookmarks
-- cookies and storage
-- extension state
-
-Useful browser actions:
+Useful shortcuts:
 
 - type a URL into the address bar
-- use `Cmd/Ctrl+L` to focus the address bar
-- use `Cmd/Ctrl+F` for find-in-page
-- use `Cmd/Ctrl+T` for a new tab
-- use `Cmd/Ctrl+W` to close the active tab
+- `Cmd/Ctrl+L` — focus the address bar
+- `Cmd/Ctrl+F` — find in page
+- `Cmd/Ctrl+T` — new tab
+- `Cmd/Ctrl+W` — close the active tab
 
 The browser runtime can also import Chrome cookies into the app session when available.
 
 ### 8. Use the terminal manually when needed
 
-The terminal is live and interactive. You can:
-
-- type directly into it
-- restart it from the execution window
-- let the agent run terminal actions through the host tool runtime
-
-This codebase does not use tmux for the active terminal surface. It is a direct PTY session.
+The terminal is live and interactive. You can type directly into it, restart it from the execution window, or let the agent run terminal actions through the host tool runtime. The active terminal surface is a direct PTY session — not tmux.
 
 ### 9. Stop a running task
 
-If a model run is active, the command window shows a `STOP` button.
-
-Pressing it calls the provider cancel path:
-
-- Codex runs are aborted by killing the current `codex` subprocess
-- Haiku runs are aborted by stopping the Anthropic stream
+If a model run is active, the command window shows a `STOP` button. Pressing it closes the active app-server run and cancels any in-flight tool calls.
 
 ### 10. Read logs and token counters
 
@@ -281,14 +200,9 @@ The command window always shows:
 
 - a logs panel on the right
 - cumulative input/output token counters
-- provider status in the footer
+- Codex runtime status in the footer
 
-Use this to debug:
-
-- provider availability
-- prompt-budget logs
-- browser/runtime initialization
-- failed runs or tool errors
+Use this to debug runtime availability, prompt-budget logs, browser/runtime initialization, and failed runs or tool errors.
 
 ## Persistence
 
@@ -307,24 +221,16 @@ On restart:
 - active running tasks are restored as completed state records, not resumed live
 - browser tabs and session state are restored
 
-## Accuracy Notes About The Current Codebase
+## Accuracy Notes
 
-- Codex is not a direct SDK integration here. It is run through `codex exec`.
-- Haiku is the only provider using the Anthropic SDK directly.
+- Codex is driven by the locally running `codex app-server` process; the `codex` CLI is only probed on startup.
 - The renderer stack is vanilla TypeScript/HTML/CSS, not React.
 - The browser session uses Electron persistent partition `persist:workspace-browser`.
-- The terminal service is plain PTY-based and not tmux-backed.
-
-## Benchmarks And Tests
-
-- Browser capability notes live in [docs/archive/root/BROWSER_BENCHMARKS.md](./docs/archive/root/BROWSER_BENCHMARKS.md)
-- Tool-pack benchmarking is exposed through `npm run benchmark:tools`
-- Unit and integration coverage is in `vitest`
+- The terminal service is PTY-based and not tmux-backed.
 
 ## Troubleshooting
 
 - If Codex is unavailable, check that `codex --version` works and that your Codex CLI is authenticated.
-- If Haiku is unavailable, set `ANTHROPIC_API_KEY`.
-- If the app opens in the wrong workspace, set `V2_WORKSPACE_ROOT`.
-- If Electron rendering is unstable or black, try `V2_DISABLE_HARDWARE_ACCELERATION=1`.
+- If the app opens in the wrong workspace, set `GOLDENBOY_WORKSPACE_ROOT`.
+- If Electron rendering is unstable or black, try `GOLDENBOY_DISABLE_HARDWARE_ACCELERATION=1`.
 - If UI changes do not appear, rerun `npm start` or use `npm run dev` so renderer assets are rebuilt and recopied.

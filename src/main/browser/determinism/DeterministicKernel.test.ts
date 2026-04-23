@@ -6,14 +6,18 @@ import { KernelError } from './kernelTypes';
 
 function makeCaps(overrides: Partial<KernelCapabilities> = {}): KernelCapabilities {
   return {
-    attachCdp: vi.fn(async () => ({ send: vi.fn(async () => ({})), detach: vi.fn(async () => {}) })),
+    attachCdp: vi.fn(async () => ({
+      send: vi.fn(async () => ({})),
+      on: vi.fn(),
+      off: vi.fn(),
+      detach: vi.fn(async () => {}),
+    })),
     setUserAgent: vi.fn(async () => 'prev-ua'),
     restoreUserAgent: vi.fn(async () => {}),
     insertCss: vi.fn(async () => 'css-key'),
     removeInsertedCss: vi.fn(async () => {}),
     setViewport: vi.fn(async () => {}),
     clearViewport: vi.fn(async () => {}),
-    registerRequestBlocker: vi.fn(async () => ({ dispose: vi.fn() })),
     isTabAlive: vi.fn(() => true),
     ...overrides,
   };

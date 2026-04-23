@@ -3,7 +3,7 @@ import * as path from 'path';
 import { app } from 'electron';
 import { AppState, createDefaultAppState, ExecutionSplitState, TaskRecord } from '../../shared/types/appState';
 import { PhysicalWindowRole } from '../../shared/types/windowRoles';
-import { isProviderId, ProviderId } from '../../shared/types/model';
+import { isProviderId } from '../../shared/types/model';
 
 const STATE_FILE = 'workspace-state.json';
 
@@ -39,31 +39,18 @@ function normalizeTaskTokenUsage(value: unknown): AppState['taskTokenUsage'] {
     const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
     const apiCalls = typeof usage.apiCalls === 'number' ? usage.apiCalls : 0;
     const updatedAt = typeof usage.updatedAt === 'number' ? usage.updatedAt : Date.now();
-    const lastProviderId = (typeof usage.lastProviderId === 'string' && isProviderId(usage.lastProviderId))
-      ? usage.lastProviderId
-      : null;
-
-    const providerBreakdown: Partial<Record<ProviderId, { inputTokens: number; outputTokens: number; apiCalls: number }>> = {};
-    const rawBreakdown = (usage.providerBreakdown && typeof usage.providerBreakdown === 'object')
-      ? usage.providerBreakdown as Record<string, unknown>
-      : {};
-    for (const [providerId, rawProviderUsage] of Object.entries(rawBreakdown)) {
-      if (!isProviderId(providerId) || !rawProviderUsage || typeof rawProviderUsage !== 'object') continue;
-      const providerUsage = rawProviderUsage as Record<string, unknown>;
-      providerBreakdown[providerId] = {
-        inputTokens: typeof providerUsage.inputTokens === 'number' ? providerUsage.inputTokens : 0,
-        outputTokens: typeof providerUsage.outputTokens === 'number' ? providerUsage.outputTokens : 0,
-        apiCalls: typeof providerUsage.apiCalls === 'number' ? providerUsage.apiCalls : 0,
-      };
-    }
+    const cachedInputTokens = typeof usage.cachedInputTokens === 'number' ? usage.cachedInputTokens : 0;
+    const cacheCreationInputTokens = typeof usage.cacheCreationInputTokens === 'number'
+      ? usage.cacheCreationInputTokens
+      : 0;
 
     result[taskId] = {
       inputTokens,
       outputTokens,
       apiCalls,
       updatedAt,
-      lastProviderId,
-      providerBreakdown,
+      cachedInputTokens,
+      cacheCreationInputTokens,
     };
   }
   return result;

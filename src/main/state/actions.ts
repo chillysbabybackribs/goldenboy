@@ -50,7 +50,6 @@ export type Action =
   | {
       type: ActionType.ACCUMULATE_TASK_TOKEN_USAGE;
       taskId: string;
-      providerId: ProviderId;
       inputTokens: number;
       outputTokens: number;
       apiCalls: number;

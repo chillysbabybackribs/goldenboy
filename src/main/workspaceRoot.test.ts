@@ -13,7 +13,7 @@ describe('workspaceRoot', () => {
     expect(resolveAppWorkspaceRoot(fromDir, '')).toBe(path.resolve(__dirname, '..', '..'));
   });
 
-  it('prefers V2_WORKSPACE_ROOT when provided', () => {
+  it('prefers GOLDENBOY_WORKSPACE_ROOT when provided', () => {
     expect(resolveAppWorkspaceRoot('/tmp/anywhere', '/tmp/override-root')).toBe('/tmp/override-root');
   });
 });

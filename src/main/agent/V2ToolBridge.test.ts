@@ -52,7 +52,11 @@ describe('V2ToolBridge', () => {
     fs.writeFileSync(contextPath, JSON.stringify({
       runId: 'run-1', agentId: 'gpt-5.4', taskId: 'task-1', mode: 'unrestricted-dev',
       toolNames: ['filesystem.list'],
-      loadableToolNames: ['filesystem.list'],
+      toolScope: {
+        activeTools: [
+          { name: 'filesystem.list', description: 'List files', inputSchema: { type: 'object', properties: {} } },
+        ],
+      },
     }));
     bridge = new V2ToolBridge(contextPath);
     await bridge.start();
@@ -103,14 +107,31 @@ describe('V2ToolBridge', () => {
     expect(result.content[0].text).toContain('Tool execution error: Tool is not available in this runtime scope: filesystem.read');
   });
 
-  it('tools/list filters to authorized loadable tools when provided', async () => {
+  it('persists widened scope after a tool mutates the runtime tool scope', async () => {
     (agentToolExecutor.list as ReturnType<typeof vi.fn>).mockReturnValue([
-      { name: 'context.load', description: 'Legacy tool scope shim', inputSchema: { type: 'object', properties: {} } },
+      { name: 'repomap.overview', description: 'Repo overview', inputSchema: { type: 'object', properties: {} } },
       { name: 'filesystem.list', description: 'List files', inputSchema: { type: 'object', properties: {} } },
       { name: 'subagent.spawn', description: 'Spawn subagent', inputSchema: { type: 'object', properties: {} } },
     ]);
+    (agentToolExecutor.execute as ReturnType<typeof vi.fn>).mockImplementation(async (_name, _args, context) => {
+      context.toolNames = ['filesystem.list', 'subagent.spawn'];
+      context.toolScope = {
+        activeTools: [
+          { name: 'filesystem.list', description: 'List files', inputSchema: { type: 'object', properties: {} } },
+          { name: 'subagent.spawn', description: 'Spawn subagent', inputSchema: { type: 'object', properties: {} } },
+        ],
+      };
+      return { summary: 'scope widened', data: {} };
+    });
+
+    await httpPost(bridge.getPort(), '/tools/call', {
+      name: 'filesystem__list',
+      arguments: { path: '/tmp' },
+      contextPath,
+    });
+
     const result = await httpPost(bridge.getPort(), '/tools/list', {}) as { tools: Array<{ name: string }> };
-    expect(result.tools.map((tool) => tool.name)).toEqual(['filesystem__list']);
+    expect(result.tools.map((tool) => tool.name)).toEqual(['filesystem__list', 'subagent__spawn']);
   });
 
   it('getPort() returns a non-zero port after start()', () => {

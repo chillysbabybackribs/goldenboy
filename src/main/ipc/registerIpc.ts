@@ -21,6 +21,7 @@ import { agentModelService } from '../agent/AgentModelService';
 import { agentToolExecutor } from '../agent/AgentToolExecutor';
 import { documentAttachmentStore } from '../attachments/DocumentAttachmentStore';
 import { taskMemoryStore } from '../models/taskMemoryStore';
+import { codeHeatmapService } from '../codeHeatmap/CodeHeatmapService';
 import * as path from 'path';
 import * as os from 'os';
 import type { DocumentImportRequest } from '../../shared/types/attachments';
@@ -367,20 +368,12 @@ export function registerIpc(): void {
     return agentModelService.cancel(taskId);
   });
 
-  safeHandle(IPC_CHANNELS.MODEL_GET_PROVIDERS, () => {
-    return agentModelService.getProviderStatuses();
-  });
-
   safeHandle(IPC_CHANNELS.MODEL_GET_TASK_MEMORY, (_event, taskId: string) => {
     return agentModelService.getTaskMemory(taskId);
   });
 
   safeHandle(IPC_CHANNELS.MODEL_RESOLVE, (_event, prompt: string, explicitOwner?: string, options?: AgentInvocationOptions) => {
     return agentModelService.resolve(prompt, explicitOwner, options);
-  });
-
-  safeHandle(IPC_CHANNELS.MODEL_HANDOFF, () => {
-    throw new Error('Model handoff is not implemented in the v2 agent runtime yet.');
   });
 
   safeHandle(
@@ -404,37 +397,8 @@ export function registerIpc(): void {
     },
   );
 
-  // ── Filesystem bridge (unsandboxed, Node fs) ────────────────────────────
-
-  safeHandle(IPC_CHANNELS.FS_READ, (_event, filePath: string) => {
-    return fs.readFileSync(filePath, 'utf-8');
-  });
-
-  safeHandle(IPC_CHANNELS.FS_WRITE, (_event, filePath: string, content: string) => {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content, 'utf-8');
-  });
-
-  safeHandle(IPC_CHANNELS.FS_EXISTS, (_event, filePath: string) => {
-    return fs.existsSync(filePath);
-  });
-
-  safeHandle(IPC_CHANNELS.FS_LIST, (_event, dirPath: string) => {
-    if (!fs.existsSync(dirPath)) return [];
-    return fs.readdirSync(dirPath).map((name: string) => ({
-      name,
-      isDirectory: fs.statSync(path.join(dirPath, name)).isDirectory(),
-    }));
-  });
-
-  safeHandle(IPC_CHANNELS.FS_DELETE, (_event, filePath: string) => {
-    if (fs.existsSync(filePath)) {
-      fs.rmSync(filePath, { recursive: true, force: true });
-    }
-  });
-
-  safeHandle(IPC_CHANNELS.FS_MKDIR, (_event, dirPath: string) => {
-    fs.mkdirSync(dirPath, { recursive: true });
+  safeHandle(IPC_CHANNELS.CODE_HEATMAP_GET_SNAPSHOT, () => {
+    return codeHeatmapService.getSnapshot();
   });
 
   // Debug: test disk extraction on active browser tab

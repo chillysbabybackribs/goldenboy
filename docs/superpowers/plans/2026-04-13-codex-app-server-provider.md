@@ -1,5 +1,7 @@
 # Codex App-Server Provider Implementation Plan
 
+> Historical note: this plan was written before the Codex-only hard trim. Mentions of the legacy secondary-provider runtime, multi-provider startup, or provider comparison reflect the pre-trim architecture and should not be read as current runtime behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the per-turn `codex exec` spawn loop with a persistent `codex app-server` WebSocket connection, giving real token streaming, session continuity, and dramatically lower latency.
@@ -20,7 +22,7 @@
 | Create | `src/main/agent/AppServerProvider.ts` | AgentProvider WebSocket implementation; replaces CodexProvider |
 | Modify | `src/main/agent/AgentModelService.ts` | Startup: wire V2ToolBridge + AppServerProcess + AppServerProvider |
 
-**Do not touch:** AgentRuntime, AgentTypes, AgentToolExecutor, ConstraintValidator, providerToolRuntime, toolPacks, HaikuProvider, providerRouting, chatKnowledgeStore, all tool definitions, shared/types/model.ts.
+**Do not touch:** AgentRuntime, AgentTypes, AgentToolExecutor, ConstraintValidator, providerToolRuntime, toolPacks, the legacy secondary-provider runtime, providerRouting, chatKnowledgeStore, all tool definitions, shared/types/model.ts.
 
 ---
 
@@ -1363,7 +1365,7 @@ init(): void {
     // Async startup — errors are surfaced via provider status
     void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
   }
-  this.initializeHaikuProvider(PROVIDER_CONFIGS[1]);
+  this.initializeLegacySecondaryProvider(PROVIDER_CONFIGS[1]);
 
   if (this.providers.size === 0) {
     this.log('system', 'warn', 'No model providers are available.');
@@ -1451,7 +1453,7 @@ private createProviderInstance(providerId: ProviderId): AgentProvider {
     throw new Error(`Unknown provider configuration: ${providerId}`);
   }
   if (providerId === HAIKU_PROVIDER_ID) {
-    return new HaikuProvider();
+    return new LegacySecondaryProvider();
   }
   // For sub-agent spawning: if app-server provider is running, reuse it (shared WS connection)
   if (this.appServerProvider) {

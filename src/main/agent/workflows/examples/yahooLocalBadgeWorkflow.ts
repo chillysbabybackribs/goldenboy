@@ -1,0 +1,64 @@
+import type { WorkflowDefinition } from '../types';
+
+export const yahooLocalBadgeWorkflow: WorkflowDefinition = {
+  id: 'yahoo-local-badge',
+  version: '1.0.0',
+  description: 'Open Yahoo and inject a local green VERIFIED badge into the page header for the current browser environment only.',
+  allowedTools: [
+    'browser.navigate',
+    'browser.wait_for',
+    'browser.evaluate_js',
+  ],
+  inputs: {
+    url: 'https://www.yahoo.com/',
+    badgeText: 'VERIFIED',
+    badgeColor: '#1f9d55',
+  },
+  heartbeat: {
+    intervalMs: 3000,
+    include: ['step', 'url', 'retryCount', 'lastError'],
+  },
+  checkpoint: {
+    saveAfterEveryStep: true,
+  },
+  escalation: {
+    maxRetriesPerStep: 2,
+    conditions: ['selector_missing', 'unexpected_layout_change', 'evaluate_js_error'],
+  },
+  steps: [
+    {
+      id: 'open_yahoo',
+      kind: 'tool',
+      tool: 'browser.navigate',
+      input: {
+        url: '{{inputs.url}}',
+      },
+      onFailure: 'retry',
+    },
+    {
+      id: 'wait_for_header',
+      kind: 'tool',
+      tool: 'browser.wait_for',
+      input: {
+        selector: 'header',
+        timeoutMs: 10000,
+      },
+      onFailure: 'escalate',
+    },
+    {
+      id: 'inject_badge',
+      kind: 'tool',
+      tool: 'browser.evaluate_js',
+      input: {
+        expression: "(() => { const prior = document.getElementById('goldenboy-embedded-checkmark'); if (prior) prior.remove(); const header = document.querySelector('header'); if (!header) return { inserted: false, reason: 'header not found' }; const badge = document.createElement('div'); badge.id = 'goldenboy-embedded-checkmark'; badge.textContent = '✓ {{inputs.badgeText}}'; Object.assign(badge.style, { display: 'inline-flex', alignItems: 'center', gap: '8px', marginLeft: '16px', padding: '10px 14px', borderRadius: '999px', background: '{{inputs.badgeColor}}', color: '#ffffff', fontWeight: '800', border: '2px solid rgba(255,255,255,0.9)', fontFamily: 'system-ui, sans-serif' }); (header.firstElementChild || header).appendChild(badge); return { inserted: true, text: badge.textContent }; })()",
+      },
+      onFailure: 'escalate',
+    },
+    {
+      id: 'verify_badge',
+      kind: 'assert',
+      expression: "(() => !!document.getElementById('goldenboy-embedded-checkmark'))()",
+      onFailure: 'escalate',
+    },
+  ],
+};

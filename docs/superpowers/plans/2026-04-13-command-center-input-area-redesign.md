@@ -1,5 +1,7 @@
 # Command Center Input Area Redesign — Implementation Plan
 
+> Historical note: this dated UI plan was written before the Codex-only hard trim. Mentions of legacy secondary-provider buttons or multi-provider model toggles describe the old UI state.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the three-zone input footer (top bar + textarea + bottom bar) with a slim two-zone layout: a minimal top bar (single model chip + icon-only history) and a unified bordered input box (textarea + attach buttons + send inside one container), while moving token counts to the status bar.
@@ -16,7 +18,7 @@
 |---|---|
 | `src/renderer/command/index.html` | Replace dual-toggle + token gauge + separate bottom bar with model chip, icon-only history, and unified `cc-compose-box` |
 | `src/renderer/command/command.css` | Remove `.cc-model-toggle*` and `.cc-token-gauge*` blocks; add `.cc-model-chip` and `.cc-compose-box` rules; slim down `.cc-compose-topbar` |
-| `src/renderer/command/command.ts` | Swap DOM refs: `modelToggleGroup/Gpt54Btn/HaikuBtn` → `modelChip`; `tokenGauge/tokenInLabel/tokenOutLabel/tokenResetBtn` → `tokenStatusLabel`; update `syncModelToggleState`, `initializeModelToggle`, `updateTokenUsageDisplay`, and `renderState` to use new elements |
+| `src/renderer/command/command.ts` | Swap DOM refs: `modelToggleGroup/PrimaryBtn/SecondaryBtn` → `modelChip`; `tokenGauge/tokenInLabel/tokenOutLabel/tokenResetBtn` → `tokenStatusLabel`; update `syncModelToggleState`, `initializeModelToggle`, `updateTokenUsageDisplay`, and `renderState` to use new elements |
 
 ---
 
@@ -39,7 +41,7 @@ Replace this entire block:
             <div class="cc-compose-topbar">
               <div class="cc-model-toggle" id="modelToggleGroup" role="group" aria-label="Primary model selection">
                 <button class="cc-model-toggle-btn" id="modelToggleGpt54Btn" type="button" data-owner="gpt-5.4" aria-pressed="false">GPT-5.4</button>
-                <button class="cc-model-toggle-btn" id="modelToggleHaikuBtn" type="button" data-owner="haiku" aria-pressed="false">HAIKU</button>
+                <button class="cc-model-toggle-btn" id="modelToggleSecondaryBtn" type="button" data-owner="legacy-secondary" aria-pressed="false">SECONDARY</button>
               </div>
               <div class="cc-token-gauge" id="tokenGauge">
                 <svg class="cc-token-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -87,7 +89,7 @@ With:
 
 Read lines 50–85 of `src/renderer/command/index.html` and confirm:
 - `modelChip` button is present with `modelChipLabel` span inside
-- No `modelToggleGroup`, `modelToggleGpt54Btn`, `modelToggleHaikuBtn` remain
+- No `modelToggleGroup`, `modelToggleGpt54Btn`, `modelToggleSecondaryBtn` remain
 - No `tokenGauge`, `tokenInLabel`, `tokenOutLabel`, `tokenResetBtn` remain
 - `chatHistoryBtn` still present, text "HISTORY" removed, only SVG inside
 
@@ -492,7 +494,7 @@ const modelChipLabel = document.getElementById('modelChipLabel') as HTMLSpanElem
 const tokenStatusLabel = document.getElementById('tokenStatusLabel')!;
 ```
 
-Also remove `modelToggleGpt54Btn` and `modelToggleHaikuBtn` references if they appear as separate const declarations (search the file — they may only appear inside `syncModelToggleState`).
+Also remove `modelToggleGpt54Btn` and `modelToggleSecondaryBtn` references if they appear as separate const declarations (search the file — they may only appear inside `syncModelToggleState`).
 
 - [ ] **Step 2: Rewrite `syncModelToggleState`**
 

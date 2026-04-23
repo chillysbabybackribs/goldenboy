@@ -95,8 +95,8 @@ function createRoleWindow(role: PhysicalWindowRole): BrowserWindow {
   const bounds = validateBounds(winState.bounds);
 
   const titleMap: Record<PhysicalWindowRole, string> = {
-    command: 'V2 Workspace - Command Center',
-    execution: 'V2 Workspace - Execution',
+    command: 'Goldenboy - Command Center',
+    execution: 'Goldenboy - Execution',
   };
 
   const win = new BrowserWindow({

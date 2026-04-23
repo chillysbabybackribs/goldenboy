@@ -1,15 +1,10 @@
 import { AgentProvider, AgentToolDefinition, AgentToolName } from '../../AgentTypes';
 import { SubAgentManager, type SubAgentUsageRecorder } from '../../subagents/SubAgentManager';
 import { SubAgentSpawnInput } from '../../subagents/SubAgentTypes';
-import {
-  GEMINI_PROVIDER_ID,
-  HAIKU_PROVIDER_ID,
-  PRIMARY_PROVIDER_ID,
-  type ProviderId,
-} from '../../../../shared/types/model';
 import { appStateStore } from '../../../state/appStateStore';
 import { ActionType } from '../../../state/actions';
 import { generateId } from '../../../../shared/utils/ids';
+import { activeToolNames } from '../../toolScopeState';
 
 let sharedManager: SubAgentManager | null = null;
 
@@ -40,23 +35,6 @@ function parseAllowedTools(value: unknown): 'all' | AgentToolName[] | undefined 
   return value.filter((item): item is AgentToolName => typeof item === 'string') as AgentToolName[];
 }
 
-function parseProviderId(value: unknown): ProviderId | 'auto' | undefined {
-  if (value === 'auto') return 'auto';
-  if (value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID) return value;
-  if (value === 'codex') return PRIMARY_PROVIDER_ID;
-  if (value === 'haiku') return HAIKU_PROVIDER_ID;
-  if (value === 'gemini') return GEMINI_PROVIDER_ID;
-  if (value === 'anthropic') return HAIKU_PROVIDER_ID;
-  if (value === 'google') return GEMINI_PROVIDER_ID;
-  return undefined;
-}
-
-function parseModelId(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function logSubAgent(level: 'info' | 'warn' | 'error', message: string): void {
   appStateStore.dispatch({
     type: ActionType.ADD_LOG,
@@ -79,7 +57,7 @@ export function createSubAgentToolDefinitions(
   return [
     {
       name: 'subagent.spawn',
-      description: 'Delegate a bounded subtask to a child agent; the child runs immediately and returns its result. providerId picks the runtime (codex/haiku/gemini); modelId pins a specific model inside that runtime.',
+      description: 'Delegate a bounded subtask to a child agent; the child runs immediately and returns its result.',
       inputSchema: {
         type: 'object',
         required: ['task'],
@@ -88,11 +66,6 @@ export function createSubAgentToolDefinitions(
           role: { type: 'string' },
           mode: { type: 'string', enum: ['unrestricted-dev', 'guarded', 'production'] },
           inheritedContext: { type: 'string', enum: ['full', 'summary', 'none'] },
-          providerId: {
-            type: 'string',
-            enum: ['auto', PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID, 'codex', 'haiku', 'gemini', 'anthropic', 'google'],
-          },
-          modelId: { type: 'string' },
           allowedTools: { oneOf: [{ type: 'string', enum: ['all'] }, { type: 'array', items: { type: 'string' } }] },
           canSpawnSubagents: { type: 'boolean' },
           timeoutMs: { type: 'number' },
@@ -106,9 +79,10 @@ export function createSubAgentToolDefinitions(
           role: typeof obj.role === 'string' ? obj.role : 'subagent',
           mode: obj.mode === 'guarded' || obj.mode === 'production' ? obj.mode : 'unrestricted-dev',
           inheritedContext: obj.inheritedContext === 'full' || obj.inheritedContext === 'none' ? obj.inheritedContext : 'summary',
-          providerId: parseProviderId(obj.providerId),
-          modelId: parseModelId(obj.modelId),
           allowedTools: parseAllowedTools(obj.allowedTools),
+          parentAllowedTools: context.toolScope
+            ? activeToolNames(context.toolScope)
+            : (context.runtimeAllowedTools ?? 'all'),
           canSpawnSubagents: typeof obj.canSpawnSubagents === 'boolean' ? obj.canSpawnSubagents : true,
           timeoutMs: typeof obj.timeoutMs === 'number' ? obj.timeoutMs : undefined,
           onStatus: (status) => context.onProgress?.(status),
@@ -118,7 +92,7 @@ export function createSubAgentToolDefinitions(
         const { record, result } = await manager.run(context.runId, spawnInput);
         logSubAgent(
           result.status === 'completed' ? 'info' : 'warn',
-          `Ran sub-agent ${record.id}: status=${result.status} provider=${record.providerId ?? 'auto'} model=${record.modelId ?? 'default'}`,
+          `Ran sub-agent ${record.id}: status=${result.status}`,
         );
         context.onProgress?.(`subagent-done:${record.id} -> ${result.status}`);
         return {

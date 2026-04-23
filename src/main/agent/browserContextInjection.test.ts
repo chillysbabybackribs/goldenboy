@@ -36,6 +36,7 @@ function makeCachedPage(input: Partial<CachedPageRecord> & { id: string; tabId: 
     headings: input.headings ?? [],
     createdAt: input.createdAt ?? 1,
     updatedAt: input.updatedAt ?? 1,
+    taskId: input.taskId,
   };
 }
 
@@ -121,12 +122,12 @@ describe('buildBrowserContextBlock', () => {
     expect(block).not.toContain('tab-0');
   });
 
-  it('lists recently cached pages by updatedAt desc up to the cap', () => {
+  it('lists recently visited pages by updatedAt desc up to the cap', () => {
     const tabs = [makeTab({ id: 'tab-1' })];
     const pages: CachedPageRecord[] = [
-      makeCachedPage({ id: 'page-a', tabId: 'tab-1', url: 'https://a.example/', title: 'Page A', chunkIds: ['c1'], updatedAt: 100 }),
-      makeCachedPage({ id: 'page-b', tabId: 'tab-1', url: 'https://b.example/', title: 'Page B', chunkIds: ['c1', 'c2'], updatedAt: 300 }),
-      makeCachedPage({ id: 'page-c', tabId: 'tab-1', url: 'https://c.example/', title: 'Page C', chunkIds: [], updatedAt: 200 }),
+      makeCachedPage({ id: 'page-a', tabId: 'tab-1', url: 'https://a.example/', title: 'Page A', updatedAt: 100 }),
+      makeCachedPage({ id: 'page-b', tabId: 'tab-1', url: 'https://b.example/', title: 'Page B', updatedAt: 300 }),
+      makeCachedPage({ id: 'page-c', tabId: 'tab-1', url: 'https://c.example/', title: 'Page C', updatedAt: 200 }),
     ];
     const sources = makeSources({
       getActiveTabId: () => 'tab-1',
@@ -141,6 +142,25 @@ describe('buildBrowserContextBlock', () => {
     expect(block).not.toContain('page-a');
   });
 
+  it('forwards the active taskId to listCachedPages so the source can scope results', () => {
+    const tabs = [makeTab({ id: 'tab-1' })];
+    const capturedFilters: Array<{ taskId?: string } | undefined> = [];
+    const sources = makeSources({
+      getActiveTabId: () => 'tab-1',
+      getTabs: () => tabs,
+      listCachedPages: (filter) => {
+        capturedFilters.push(filter);
+        return [];
+      },
+    });
+
+    buildBrowserContextBlock(sources, { taskId: 'task-active' });
+    expect(capturedFilters).toEqual([{ taskId: 'task-active' }]);
+
+    buildBrowserContextBlock(sources, {});
+    expect(capturedFilters[1]).toBeUndefined();
+  });
+
   it('omits the cached-pages section entirely when there are none', () => {
     const tabs = [makeTab({ id: 'tab-1', url: 'https://example.com/', title: 'Example' })];
     const sources = makeSources({
@@ -150,6 +170,6 @@ describe('buildBrowserContextBlock', () => {
     });
 
     const block = buildBrowserContextBlock(sources);
-    expect(block).not.toContain('Recently cached pages');
+    expect(block).not.toContain('Recently visited pages');
   });
 });

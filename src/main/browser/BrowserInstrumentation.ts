@@ -404,14 +404,14 @@ export class BrowserInstrumentation {
 
   attachTab(tabId: string, webContents: WebContents): void {
     this.tabIdByWebContentsId.set(webContents.id, tabId);
-    webContents.on('console-message', (_event, level, message, lineNumber, sourceId) => {
+    webContents.on('console-message', (event) => {
       this.pushConsoleEvent(tabId, {
         id: generateId('console'),
         tabId,
-        level: toConsoleLevel(level),
-        message,
-        sourceId: sourceId,
-        lineNumber,
+        level: toConsoleLevel(event.level),
+        message: event.message,
+        sourceId: event.sourceId,
+        lineNumber: event.lineNumber,
         timestamp: Date.now(),
       });
     });

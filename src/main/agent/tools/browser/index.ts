@@ -29,6 +29,10 @@ import { viewportPin } from '../../../browser/determinism/pins/viewportPin';
 import { localeTimezonePin } from '../../../browser/determinism/pins/localeTimezonePin';
 import { seedAndClockPin } from '../../../browser/determinism/pins/seedAndClockPin';
 import type { DeterminismConfig } from '../../../browser/determinism/kernelTypes';
+import { sanitizeResearchQuery } from '../../research/querySanitizer';
+import { probeSerps } from '../../research/serpProbe';
+import { scoreCandidates, pickTopX, type ScoredCandidate } from '../../research/candidateScoring';
+import { scoreEvidence, cleanSnippet } from '../../research/scoreEvidence';
 
 const GOOGLE_HOME_URL = 'https://www.google.com/';
 
@@ -180,59 +184,6 @@ export function buildWaitForTextExpression(): string {
 function compactText(text: string | undefined, maxChars: number): string {
   const cleaned = (text || '').replace(/\s+/g, ' ').trim();
   return cleaned.length > maxChars ? `${cleaned.slice(0, maxChars)}...` : cleaned;
-}
-
-function queryTerms(query: string): string[] {
-  const stopWords = new Set(['the', 'and', 'for', 'with', 'from', 'what', 'when', 'where', 'how', 'does', 'are', 'was', 'latest', 'current', 'search', 'look', 'lookup', 'find', 'online']);
-  return Array.from(new Set(
-    query.toLowerCase()
-      .split(/[^a-z0-9.$%-]+/)
-      .filter(term => term.length >= 2 && !stopWords.has(term)),
-  ));
-}
-
-function scoreEvidence(input: {
-  query: string;
-  title?: string;
-  url?: string;
-  summary?: string;
-  keyFacts?: string[];
-  matchSnippets?: string[];
-}): { score: number; reasons: string[]; sufficient: boolean } {
-  const terms = queryTerms(input.query);
-  const titleUrl = `${input.title || ''} ${input.url || ''}`.toLowerCase();
-  const body = `${input.summary || ''} ${(input.keyFacts || []).join(' ')} ${(input.matchSnippets || []).join(' ')}`.toLowerCase();
-  const combined = `${titleUrl} ${body}`;
-  let score = 0;
-  const reasons: string[] = [];
-
-  const matchedTerms = terms.filter(term => combined.includes(term));
-  score += matchedTerms.length * 2;
-  if (matchedTerms.length > 0) reasons.push(`matched terms: ${matchedTerms.slice(0, 6).join(', ')}`);
-
-  const titleMatches = terms.filter(term => titleUrl.includes(term));
-  score += titleMatches.length;
-  if (titleMatches.length > 0) reasons.push('title/url relevance');
-
-  if (/[$€£¥]|(?:usd|eur|gbp)|\b\d+(?:\.\d+)?\s*(?:%|tokens?|million|thousand|per|\/)\b/i.test(body)) {
-    score += 3;
-    reasons.push('numeric/pricing-style evidence');
-  }
-  if (/\b(?:api|pricing|price|cost|rate|input|output|token|tokens|model)\b/i.test(input.query)
-    && /\b(?:api|pricing|price|cost|rate|input|output|token|tokens|model)\b/i.test(body)) {
-    score += 3;
-    reasons.push('query-specific evidence terms');
-  }
-  if ((input.keyFacts || []).length > 0) {
-    score += 2;
-    reasons.push('structured page facts');
-  }
-
-  return {
-    score,
-    reasons,
-    sufficient: score >= 9 || (matchedTerms.length >= Math.min(4, Math.max(2, terms.length)) && score >= 7),
-  };
 }
 
 async function waitForBrowserSettled(timeoutMs = 7000): Promise<void> {
@@ -392,6 +343,217 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
   });
 
+  // Runs the headless-SERP-probe research path. Called from
+  // browser.research_search when probeSerps returned at least one
+  // quality-scored candidate. Auto-navigates the active tab to the
+  // top candidate, opens the rest as new tabs, caches each page,
+  // scores the evidence, and optionally stops early.
+  async function runHeadlessResearchPath(args: {
+    query: string;
+    effectiveQuery: string;
+    sanitize: { sanitized: string; strippedOperators: string[] };
+    probe: Awaited<ReturnType<typeof probeSerps>>;
+    scored: ScoredCandidate[];
+    top: ScoredCandidate[];
+    maxPages: number;
+    stopWhenAnswerFound: boolean;
+    minEvidenceScore: number;
+    context: { taskId?: string; onProgress?: (message: string) => void };
+    progress: (message: string) => void;
+  }): Promise<{ summary: string; data: Record<string, unknown> }> {
+    const {
+      query,
+      effectiveQuery,
+      sanitize,
+      probe,
+      scored,
+      top,
+      maxPages,
+      stopWhenAnswerFound,
+      minEvidenceScore,
+      context,
+      progress,
+    } = args;
+
+    const openedPages: Array<Record<string, unknown>> = [];
+    const skippedResults: Array<Record<string, unknown>> = [];
+    let stoppedEarly = false;
+    let stopReason = '';
+
+    let usedActiveTab = false;
+    const activeTabId = browserService.getState().activeTabId;
+
+    for (let i = 0; i < top.length; i++) {
+      const cand = top[i];
+      progress(`opening candidate ${i + 1}/${top.length} (score ${cand.qualityScore}): ${compactText(cand.title, 80)}`);
+
+      let tabId: string;
+      if (!usedActiveTab && activeTabId) {
+        // Point the visible tab at the top candidate directly — the
+        // user never sees a SERP page. `normalize: false` because
+        // the probe already produced an absolute http(s) URL.
+        await runBrowserOperation(
+          'browser.navigate',
+          { url: cand.url, normalize: false } as unknown as BrowserOperationPayloadMap['browser.navigate'],
+          { invalidateCache: true },
+        );
+        tabId = activeTabId;
+        usedActiveTab = true;
+      } else {
+        const createTabResult = await runBrowserOperation('browser.create-tab', { url: cand.url });
+        const id = typeof createTabResult.data.tabId === 'string' ? createTabResult.data.tabId : '';
+        if (!id) throw new Error(`Browser create-tab did not return a tab id for ${cand.url}`);
+        tabId = id;
+      }
+      await waitForBrowserSettled(10_000);
+
+      const [page, evidence] = await Promise.all([
+        cachePageForTab(pageExtractor, tabId, context.taskId),
+        browserService.extractPageEvidence(tabId),
+      ]);
+      const relevantChunks = pageKnowledgeStore.answerFromCache(effectiveQuery, {
+        tabId,
+        limit: 4,
+        taskId: context.taskId,
+        activeTabId: browserService.getState().activeTabId,
+      });
+      const matchSnippets = relevantChunks.matches.map(m => m.snippet);
+      const score = scoreEvidence({
+        query: effectiveQuery,
+        title: evidence?.title || page.title || cand.title,
+        url: evidence?.url || page.url || cand.url,
+        summary: evidence?.summary,
+        keyFacts: evidence?.keyFacts,
+        matchSnippets,
+      });
+      const sufficient = score.score >= minEvidenceScore || score.sufficient;
+      progress(
+        sufficient
+          ? `candidate ${i + 1} appears sufficient`
+          : `candidate ${i + 1} reviewed; continuing`,
+      );
+
+      openedPages.push({
+        tabId,
+        resultIndex: i + 1,
+        title: evidence?.title || page.title || cand.title,
+        url: evidence?.url || page.url || cand.url,
+        resultSnippet: cleanSnippet(cand.snippet),
+        pageId: page.id,
+        chunkCount: page.chunkIds.length,
+        summary: compactText(evidence?.summary, 360),
+        keyFacts: (evidence?.keyFacts || []).slice(0, 4).map(fact => compactText(fact, 240)),
+        dates: (evidence?.dates || []).slice(0, 4),
+        sourceLinks: (evidence?.sourceLinks || []).slice(0, 4),
+        suggestedChunkIds: relevantChunks.suggestedChunkIds,
+        evidenceScore: score.score,
+        deterministicEvidenceScore: score.score,
+        candidateQualityScore: cand.qualityScore,
+        candidateQualityReasons: cand.qualityReasons,
+        candidateSources: cand.sources,
+        candidateBestRank: cand.bestRank,
+        answerLikely: sufficient,
+        scoreReasons: score.reasons,
+        answerEvidence: relevantChunks.matches.slice(0, 2).map(m => compactText(m.snippet, 320)),
+        topMatches: relevantChunks.matches.slice(0, 3).map(m => ({
+          chunkId: m.chunkId,
+          heading: compactText(m.heading, 100),
+          snippet: compactText(m.snippet, 260),
+          score: m.score,
+        })),
+      });
+
+      if (sufficient && context.taskId) {
+        try {
+          const findingTitle = compactText(
+            evidence?.title || page.title || cand.title,
+            140,
+          );
+          const findingSummary = compactText(
+            evidence?.summary
+              || `Query "${effectiveQuery}" — evidence from ${cand.url}`,
+            500,
+          );
+          const findingEvidence = matchSnippets
+            .slice(0, 4)
+            .map(text => compactText(text, 320));
+          await browserService.recordTabFinding({
+            taskId: context.taskId,
+            tabId,
+            title: findingTitle,
+            summary: findingSummary,
+            severity: 'info',
+            evidence: findingEvidence,
+            snapshotId: null,
+          });
+        } catch {
+          // best-effort; never block the research loop on memory
+          // persistence failure.
+        }
+      }
+
+      if (stopWhenAnswerFound && sufficient) {
+        stoppedEarly = true;
+        stopReason = `Stopped after candidate ${i + 1}; cached evidence score ${score.score} met threshold ${minEvidenceScore}.`;
+        for (let j = i + 1; j < top.length; j++) {
+          skippedResults.push({
+            index: j + 1,
+            title: compactText(top[j].title, 140),
+            url: top[j].url,
+          });
+        }
+        break;
+      }
+    }
+
+    invalidateBrowserCaches();
+    const enginesHit = (Object.keys(probe.engines) as Array<keyof typeof probe.engines>)
+      .filter(k => probe.engines[k].hit).length;
+    const discarded = scored.slice(top.length, top.length + 10).map(c => ({
+      url: c.url,
+      qualityScore: c.qualityScore,
+      sources: c.sources,
+      bestRank: c.bestRank,
+    }));
+    logBrowserCache(
+      `Research probe "${effectiveQuery}" engines=${enginesHit}/3 candidates=${probe.candidates.length} scored=${scored.length} opened=${openedPages.length} stoppedEarly=${stoppedEarly}`,
+    );
+
+    return {
+      summary: `Researched "${effectiveQuery}" via headless SERP probe (${probe.candidates.length} candidate${probe.candidates.length === 1 ? '' : 's'} across ${enginesHit}/3 engines), opened ${openedPages.length} page(s)${stoppedEarly ? ' and stopped early' : ''}`,
+      data: {
+        query,
+        sanitizedQuery: sanitize.sanitized,
+        strippedOperators: sanitize.strippedOperators,
+        stoppedEarly,
+        stopReason: stopReason || null,
+        maxPages,
+        stopWhenAnswerFound,
+        minEvidenceScore,
+        serpProbe: {
+          engines: probe.engines,
+          candidateCount: probe.candidates.length,
+          scoredCount: scored.length,
+          topScored: top.map(c => ({
+            url: c.url,
+            title: compactText(c.title, 140),
+            snippet: cleanSnippet(c.snippet),
+            qualityScore: c.qualityScore,
+            qualityReasons: c.qualityReasons,
+            sources: c.sources,
+            bestRank: c.bestRank,
+          })),
+          discarded,
+        },
+        openedPages,
+        skippedResults,
+        nextStep: openedPages.length > 0
+          ? 'Answer only from openedPages evidence or read suggested chunk ids with browser.read_cached_chunk.'
+          : 'All probe candidates failed to produce evidence; refine the query or set preserveOperators if intentional.',
+      },
+    };
+  }
+
   // NOTE: `browser.tabs` used to live here. It was removed once every mutating
   // browser tool started echoing `{ activeTabId, tabs }` in its response (see
   // `withTabEcho`) and the per-turn `## Browser Overview` block in
@@ -427,7 +589,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.research_search',
-      description: 'Web-research workflow (default): open a search page, parse ranked results, optionally open top results, cache pages, return evidence. mode="open" opens the search page only without ranking/opening results.',
+      description: 'Web-research workflow (default): run a headless multi-engine SERP probe (Google + DDG-lite + Bing in parallel), quality-score all candidates, open the top ones directly in the browser, cache their pages, and return evidence. No Google SERP is ever shown. Pass plain-English queries — operators like site:/inurl:/filetype: are stripped automatically unless preserveOperators=true. mode="open" skips the probe and just opens a search page.',
       inputSchema: {
         type: 'object',
         required: ['query'],
@@ -439,6 +601,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           resultLimit: { type: 'number' },
           stopWhenAnswerFound: { type: 'boolean' },
           minEvidenceScore: { type: 'number' },
+          preserveOperators: { type: 'boolean' },
         },
       },
       async execute(input, context) {
@@ -457,13 +620,43 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           5,
         );
         const stopWhenAnswerFound = obj.stopWhenAnswerFound === false ? false : true;
-        const minEvidenceScore = optionalNumber(obj, 'minEvidenceScore', 9);
+        // Lowered from 9 to 6: the old threshold relied on the pricing
+        // bonus firing and was never reached for non-pricing queries.
+        const minEvidenceScore = optionalNumber(obj, 'minEvidenceScore', 6);
+        const preserveOperators = obj.preserveOperators === true;
         const progress = (message: string): void => {
           context.onProgress?.(`tool-progress:Browser: research "${query}" -> ${message}`);
         };
 
-        progress('opening search results');
-        await runBrowserOperation('browser.search-web', { query }, { invalidateCache: true });
+        const sanitize = sanitizeResearchQuery(query, { preserveOperators });
+        const effectiveQuery = sanitize.sanitized || query;
+        if (sanitize.strippedOperators.length > 0) {
+          progress(`stripped operators: ${sanitize.strippedOperators.join(', ')}`);
+        }
+
+        progress('probing search engines (google + ddg + bing, headless)');
+        const probe = await probeSerps(effectiveQuery);
+        const scored: ScoredCandidate[] = scoreCandidates(effectiveQuery, probe.candidates);
+        const top = pickTopX(scored, maxPages);
+
+        if (top.length > 0) {
+          return runHeadlessResearchPath({
+            query,
+            effectiveQuery,
+            sanitize,
+            probe,
+            scored,
+            top,
+            maxPages,
+            stopWhenAnswerFound,
+            minEvidenceScore,
+            context,
+            progress,
+          });
+        }
+
+        progress('probe returned no candidates; falling back to visible SERP');
+        await runBrowserOperation('browser.search-web', { query: effectiveQuery }, { invalidateCache: true });
 
         const searchState = browserService.getState();
         const searchTabId = searchState.activeTabId;
@@ -475,7 +668,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           browserService.extractSearchResults(searchTabId, resultLimit),
         ]);
         const rankedSearchResults = [...searchResults];
-        const cacheMatches = pageKnowledgeStore.answerFromCache(query, {
+        const cacheMatches = pageKnowledgeStore.answerFromCache(effectiveQuery, {
           tabId: searchTabId,
           limit: 4,
           taskId: context.taskId,
@@ -497,7 +690,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             cachePageForTab(pageExtractor, tabId, context.taskId),
             browserService.extractPageEvidence(tabId),
           ]);
-          const relevantChunks = pageKnowledgeStore.answerFromCache(query, {
+          const relevantChunks = pageKnowledgeStore.answerFromCache(effectiveQuery, {
             tabId,
             limit: 4,
             taskId: context.taskId,
@@ -505,7 +698,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           });
           const matchSnippets = relevantChunks.matches.map(match => match.snippet);
           const score = scoreEvidence({
-            query,
+            query: effectiveQuery,
             title: evidence?.title || page.title || target.title,
             url: evidence?.url || page.url || target.url,
             summary: evidence?.summary,
@@ -523,7 +716,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             resultIndex: target.index,
             title: evidence?.title || page.title || target.title,
             url: evidence?.url || page.url || target.url,
-            resultSnippet: compactText(target.snippet, 180),
+            resultSnippet: cleanSnippet(target.snippet),
             pageId: page.id,
             chunkCount: page.chunkIds.length,
             summary: compactText(evidence?.summary, 360),
@@ -556,7 +749,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
               );
               const findingSummary = compactText(
                 evidence?.summary
-                  || `Query "${query}" — evidence from ${target.url}`,
+                  || `Query "${effectiveQuery}" — evidence from ${target.url}`,
                 500,
               );
               const findingEvidence = matchSnippets
@@ -590,12 +783,19 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         progress(stoppedEarly ? 'stopping after sufficient evidence' : 'research pass complete');
         await runBrowserOperation('browser.activate-tab', { tabId: searchTabId }, { invalidateCache: true });
         invalidateBrowserCaches();
-        logBrowserCache(`Research search "${query}" parsed ${searchResults.length} results, opened ${openedPages.length} page(s), stoppedEarly=${stoppedEarly}`);
+        logBrowserCache(`Research fallback "${effectiveQuery}" parsed ${searchResults.length} results, opened ${openedPages.length} page(s), stoppedEarly=${stoppedEarly}`);
 
         return {
-          summary: `Searched "${query}", found ${searchResults.length} results, opened ${openedPages.length} page(s)${stoppedEarly ? ' and stopped early' : ''}`,
+          summary: `Researched "${effectiveQuery}" via visible-SERP fallback (probe returned no usable candidates), opened ${openedPages.length} page(s)${stoppedEarly ? ' and stopped early' : ''}`,
           data: {
             query,
+            sanitizedQuery: sanitize.sanitized,
+            strippedOperators: sanitize.strippedOperators,
+            serpProbe: {
+              engines: probe.engines,
+              candidateCount: probe.candidates.length,
+              fellBack: true,
+            },
             stoppedEarly,
             stopReason: stopReason || null,
             maxPages,
@@ -612,7 +812,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
               index: result.index,
               title: compactText(result.title, 140),
               url: result.url,
-              snippet: compactText(result.snippet, 180),
+              snippet: cleanSnippet(result.snippet),
             })),
             searchPageSuggestedChunkIds: cacheMatches.suggestedChunkIds,
             openedPages,

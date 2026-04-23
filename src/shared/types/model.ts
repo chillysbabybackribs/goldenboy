@@ -1,44 +1,17 @@
 import type { DocumentInvocationAttachment } from './attachments';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Model Layer Types — Provider registry, routing, handoff, Codex events
+// Model Layer Types — Provider registry, Codex events, and invocation shape
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Provider Identity ────────────────────────────────────────────────────
 
 export const PRIMARY_PROVIDER_ID = 'gpt-5.4' as const;
-export const HAIKU_PROVIDER_ID = 'haiku' as const;
-export const GEMINI_PROVIDER_ID = 'gemini' as const;
-export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID] as const;
+export const PROVIDER_IDS = [PRIMARY_PROVIDER_ID] as const;
 
 export type ProviderId = typeof PROVIDER_IDS[number];
-export type LegacyProviderId = 'codex';
-export type AnyProviderId = ProviderId | LegacyProviderId;
-
-export type ProviderKind = 'cli-process' | 'api-streaming';
 
 export type ProviderStatus = 'available' | 'unavailable' | 'busy' | 'error';
-
-export type ProviderCapability =
-  | 'code-generation'
-  | 'code-editing'
-  | 'shell-execution'
-  | 'repo-analysis'
-  | 'chat'
-  | 'summarization'
-  | 'intent-parsing'
-  | 'plan'
-  | 'planning'
-  | 'synthesis';
-
-// ─── Provider Definition (static, configured at startup) ──────────────────
-
-export type ProviderDefinition = {
-  id: ProviderId;
-  displayName: string;
-  kind: ProviderKind;
-  capabilities: ProviderCapability[];
-};
 
 // ─── Provider Metrics (from Codex /status) ────────────────────────────────
 
@@ -73,11 +46,7 @@ export function createDefaultProviderRuntime(id: ProviderId): ProviderRuntime {
 }
 
 export function isProviderId(value: string): value is ProviderId {
-  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
-}
-
-export function isLegacyProviderId(value: string): value is LegacyProviderId {
-  return value === 'codex';
+  return value === PRIMARY_PROVIDER_ID;
 }
 
 // ─── Task Ownership ───────────────────────────────────────────────────────
@@ -96,8 +65,14 @@ export type AgentTaskKind =
   | 'local-code'
   | 'general';
 
+export type AgentExecutionMode =
+  | 'single-pass'
+  | 'staged'
+  | 'orchestration';
+
 export type AgentTaskProfileOverride = {
   kind?: AgentTaskKind;
+  executionMode?: AgentExecutionMode;
   skillNames?: string[];
   allowedTools?: 'all' | string[];
   canSpawnSubagents?: boolean;
@@ -166,20 +141,6 @@ export type CodexEvent =
 
 // ─── Invocation Types (shared by all gates) ───────────────────────────────
 
-export type InvocationRequest = {
-  taskId: string;
-  prompt: string;
-  context: HandoffPacket | null;
-  memoryContext?: string | null;
-  systemPrompt?: string;
-  cwd?: string;
-  allowedToolNames?: string[];
-  allowedToolBundles?: string[];
-  workflowType?: string;
-  maxTokensOverride?: number;
-  abortSignal: AbortSignal;
-};
-
 export type InvocationProgress =
   | {
       taskId: string;
@@ -209,40 +170,15 @@ export type InvocationResult = {
   success: boolean;
   status?: 'completed' | 'failed' | 'cancelled';
   output: string;
-  artifacts: HandoffArtifact[];
   error?: string;
   usage: { inputTokens: number; outputTokens: number; durationMs: number };
   codexItems?: CodexItem[];
-};
-
-// ─── Handoff Types ────────────────────────────────────────────────────────
-
-export type HandoffArtifactType = 'file_change' | 'command_output' | 'agent_message' | 'error';
-
-export type HandoffArtifact = {
-  type: HandoffArtifactType;
-  label: string;
-  content: string;
-  path?: string;
-};
-
-export type HandoffPacket = {
-  id: string;
-  taskId: string;
-  fromProvider: ProviderId;
-  toProvider: ProviderId;
-  summary: string;
-  artifacts: HandoffArtifact[];
-  recentDecisions: string[];
-  tokenEstimate: number;
-  createdAt: number;
 };
 
 export type TaskMemoryEntryKind =
   | 'user_prompt'
   | 'model_result'
   | 'browser_finding'
-  | 'handoff'
   | 'system';
 
 export type TaskMemoryEntry = {
@@ -257,8 +193,14 @@ export type TaskMemoryEntry = {
 
 export type TaskPlanMetadata = {
   category: 'plan';
+  planId?: string;
+  planName?: string;
+  sourceKind?: TaskMemoryEntryKind;
+  scratchpadPath?: string;
   stage:
     | 'scaffold'
+    | 'checklist-captured'
+    | 'checklist-updated'
     | 'parent-turn-complete'
     | 'parent-turn-failed'
     | 'parent-turn-cancelled'
@@ -266,6 +208,13 @@ export type TaskPlanMetadata = {
     | 'subagent-complete'
     | 'subagent-failed'
     | 'subagent-cancelled';
+  items?: Array<{
+    id: string;
+    text: string;
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'dropped';
+    notes?: string;
+  }>;
+  currentItemId?: string;
   objective?: string;
   tracks?: string[];
   delegation?: string[];
@@ -293,70 +242,3 @@ export function createEmptyTaskMemoryRecord(taskId: string): TaskMemoryRecord {
     entries: [],
   };
 }
-
-// ─── Routing Types ────────────────────────────────────────────────────────
-
-export type RoutingRule = {
-  match: RoutingMatch;
-  assignTo: ProviderId;
-  priority: number;
-};
-
-export type RoutingMatch =
-  | { type: 'capability'; capability: ProviderCapability }
-  | { type: 'explicit'; owner: ProviderId }
-  | { type: 'default' };
-
-// ─── Codex Configuration ──────────────────────────────────────────────────
-
-export type CodexApprovalMode = 'full-auto' | 'dangerously-bypass';
-
-export type CodexInvocationConfig = {
-  approvalMode: CodexApprovalMode;
-  sandbox: 'read-only' | 'workspace-write' | null;
-  timeoutMs: number;
-  ephemeral: boolean;
-};
-
-export const DEFAULT_CODEX_CONFIG: CodexInvocationConfig = {
-  approvalMode: 'dangerously-bypass',
-  sandbox: null,
-  timeoutMs: 300_000,
-  ephemeral: false,
-};
-
-// ─── Haiku Configuration ──────────────────────────────────────────────────
-
-export type HaikuInvocationConfig = {
-  modelId: string;
-  maxTokens: number;
-  streaming: boolean;
-};
-
-export const DEFAULT_HAIKU_CONFIG: HaikuInvocationConfig = {
-  modelId: 'claude-haiku-4-5-20251001',
-  maxTokens: 4096,
-  streaming: true,
-};
-
-export type GeminiInvocationConfig = {
-  defaultModelId: string;
-  complexModelId: string;
-  fastModelId: string;
-  liteModelId: string;
-  maxOutputTokens: number;
-  fastThinkingBudget: number | null;
-  defaultThinkingBudget: number | null;
-  complexThinkingBudget: number | null;
-};
-
-export const DEFAULT_GEMINI_CONFIG: GeminiInvocationConfig = {
-  defaultModelId: 'gemini-2.5-flash',
-  complexModelId: 'gemini-2.5-pro',
-  fastModelId: 'gemini-2.5-flash',
-  liteModelId: 'gemini-2.5-flash-lite',
-  maxOutputTokens: 4096,
-  fastThinkingBudget: -1,
-  defaultThinkingBudget: -1,
-  complexThinkingBudget: -1,
-};

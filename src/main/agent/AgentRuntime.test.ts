@@ -64,6 +64,7 @@ import { agentRunStore } from './AgentRunStore';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { executeProviderToolCall } from './providerToolRuntime';
 import { AgentCancellationError } from './cancellation';
+import { createAnswerSubmitToolDefinitions } from './tools/answerSubmit';
 
 class SuccessfulToolLoopProvider {
   requests: AgentProviderRequest[] = [];
@@ -115,6 +116,58 @@ class FailingToolLoopProvider {
 class CancelledProvider {
   async invoke() {
     throw new AgentCancellationError();
+  }
+}
+
+class RecordingProvider {
+  requests: AgentProviderRequest[] = [];
+
+  async invoke(request: AgentProviderRequest) {
+    this.requests.push(request);
+    return {
+      output: 'provider invoked',
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        durationMs: 1,
+      },
+    };
+  }
+}
+
+class AnswerSubmitProvider {
+  async invoke(request: AgentProviderRequest) {
+    const command = await executeProviderToolCall({
+      providerId: PRIMARY_PROVIDER_ID,
+      request,
+      toolName: 'terminal.exec',
+      toolInput: { command: 'echo ok' },
+    });
+    if (!command.ok) throw new Error(command.errorMessage);
+
+    const toolCalls = agentRunStore.listToolCalls(request.runId);
+    const evidenceId = toolCalls.find((call) => call.toolName === 'terminal.exec')?.id;
+    if (!evidenceId) throw new Error('Missing terminal.exec tool call');
+
+    const submit = await executeProviderToolCall({
+      providerId: PRIMARY_PROVIDER_ID,
+      request,
+      toolName: 'answer.submit',
+      toolInput: {
+        claims: [{ text: 'The command succeeded.', evidence: [{ toolCallId: evidenceId, quote: 'exitCode: 0' }] }],
+        unresolved: [],
+      },
+    });
+    if (!submit.ok) throw new Error(submit.errorMessage);
+
+    return {
+      output: 'provider fallback output',
+      usage: {
+        inputTokens: 3,
+        outputTokens: 2,
+        durationMs: 1,
+      },
+    };
   }
 }
 
@@ -244,6 +297,121 @@ describe('AgentRuntime', () => {
         message: expect.stringContaining('scopedToolNames=terminal.exec'),
       }),
     }));
+  });
+
+  it('auto-runs the deterministic browser-search workflow instead of invoking the provider', async () => {
+    const workflowExecute = vi.fn(async (input: { workflowId: string; inputs: { query: string } }) => ({
+      summary: 'Workflow browser-automation-research completed 3 steps',
+      data: {
+        workflowId: input.workflowId,
+        stepResults: {
+          search_browser_automation: {
+            data: {
+              openedPages: [
+                {
+                  title: 'What is ChromeDriver?',
+                  url: 'https://developer.chrome.com/docs/chromedriver',
+                  summary: 'ChromeDriver implements the W3C WebDriver and WebDriver BiDi standards.',
+                  answerEvidence: [
+                    'ChromeDriver implements the W3C WebDriver and WebDriver BiDi standards.',
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    }));
+
+    agentToolExecutor.register({
+      name: 'browser.run_workflow',
+      description: 'Run deterministic browser workflow',
+      inputSchema: {
+        type: 'object',
+        required: ['workflowId'],
+        properties: {
+          workflowId: { type: 'string' },
+          inputs: { type: 'object' },
+        },
+      },
+      execute: workflowExecute,
+    });
+
+    const provider = new RecordingProvider();
+    const runtime = new AgentRuntime(provider);
+    const statusUpdates: string[] = [];
+    const result = await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: [
+        'Runtime directive: This is a browser-search task.',
+        '',
+        'User request: Search the web for research on browser automation in Chromium and tell me what you find.',
+      ].join('\n'),
+      taskId: 'task-runtime-browser-search-fast-path',
+      taskProfileOverride: { kind: 'browser-search' },
+      allowedTools: ['browser.run_workflow', 'browser.research_search', 'browser.extract_page', 'browser.record_finding'],
+      onStatus: (status) => {
+        statusUpdates.push(status);
+      },
+    });
+
+    expect(provider.requests).toHaveLength(0);
+    expect(workflowExecute).toHaveBeenCalledWith({
+      workflowId: 'browser-automation-research',
+      inputs: {
+        query: 'Search the web for research on browser automation in Chromium and tell me what you find.',
+      },
+    }, expect.objectContaining({
+      taskId: 'task-runtime-browser-search-fast-path',
+    }));
+    expect(result.output).toContain('ChromeDriver implements the W3C WebDriver and WebDriver BiDi standards.');
+    expect(result.output).toContain('https://developer.chrome.com/docs/chromedriver');
+    expect(statusUpdates).toEqual([
+      'tool-start:Browser: run workflow browser-automation-research',
+      'tool-done:Browser: run workflow browser-automation-research -> Workflow browser-automation-research completed 3 steps',
+    ]);
+  });
+
+  it('surfaces a grounded final answer from answer.submit', async () => {
+    agentToolExecutor.register({
+      name: 'terminal.exec',
+      description: 'Run a terminal command',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          command: { type: 'string' },
+        },
+        required: ['command'],
+      },
+      execute: async (input: { command: string }) => ({
+        summary: `Ran ${input.command}`,
+        data: {
+          output: 'ok',
+          exitCode: 0,
+        },
+      }),
+    });
+    agentToolExecutor.register(createAnswerSubmitToolDefinitions()[0]);
+
+    const runtime = new AgentRuntime(new AnswerSubmitProvider());
+    const result = await runtime.run({
+      mode: 'unrestricted-dev',
+      agentId: PRIMARY_PROVIDER_ID,
+      role: 'primary',
+      task: 'Run the command and submit the grounded answer.',
+      taskId: 'task-runtime-final-answer',
+      allowedTools: ['terminal.exec', 'answer.submit'],
+    });
+
+    expect(result.finalAnswer).toMatchObject({
+      claims: [{ text: 'The command succeeded.' }],
+      unresolved: [],
+    });
+    expect(result.output).toContain('The command succeeded.');
+    expect(result.output).toContain('[ref:tool_');
   });
 
   it('forwards maxTokensOverride to the provider request', async () => {
@@ -575,8 +743,6 @@ describe('AgentRuntime', () => {
         title: 'Pricing page',
         tier: 'readability',
         contentHash: 'hash',
-        chunkIds: ['c1', 'c2'],
-        headings: ['Pricing'],
         createdAt: 1,
         updatedAt: 5,
       },
@@ -634,11 +800,11 @@ describe('AgentRuntime', () => {
   it('hard-fails browser tasks when the initial tool scope exposes no browser tools', () => {
     expect(() => assertInitialBrowserScope(
       'Close out the browser tabs except the active one.',
-      ['context.load', 'filesystem.read'],
+      ['filesystem.read', 'terminal.exec'],
     )).toThrow('Browser task blocked: initial MCP tool scope for browser-automation did not expose any browser.* tools.');
   });
 
-  it('uses compact JSON tool payloads for Haiku while preserving dotted tool names', async () => {
+  it('serializes tool payloads without pretty-print whitespace', async () => {
     const tool: AgentToolDefinition = {
       name: 'browser.extract_page',
       description: 'Extract and structure page content using an optional CSS selector or extraction strategy.',
@@ -655,7 +821,7 @@ describe('AgentRuntime', () => {
     agentToolExecutor.register(tool);
 
     let capturedPayload = '';
-    const haikuProvider = {
+    const provider = {
       async invoke(request: AgentProviderRequest) {
         capturedPayload = JSON.stringify(request.tools);
         return {
@@ -665,13 +831,13 @@ describe('AgentRuntime', () => {
       },
     };
 
-    const runtime = new AgentRuntime(haikuProvider);
+    const runtime = new AgentRuntime(provider);
     await runtime.run({
       mode: 'unrestricted-dev',
-      agentId: 'haiku',
+      agentId: 'gpt-5.4',
       role: 'primary',
-      task: 'Verify tool payload optimization for Haiku.',
-      taskId: 'task-haiku-optimization',
+      task: 'Verify tool payload formatting.',
+      taskId: 'task-tool-payload-formatting',
       allowedTools: ['browser.extract_page'],
     });
 

@@ -78,6 +78,14 @@ export function normalizeNavigationTarget(
     };
   }
 
+  const internalPageUrl = normalizeInternalPageUrl(trimmed);
+  if (internalPageUrl) {
+    return {
+      url: internalPageUrl,
+      kind: 'direct-url',
+    };
+  }
+
   if (URL_SCHEME_RE.test(trimmed)) {
     const searchPrefix = SEARCH_ENGINES[input.searchEngine] || SEARCH_ENGINES.google;
     const normalizedByScheme = normalizeExplicitScheme(trimmed, searchPrefix);
@@ -105,6 +113,15 @@ export function normalizeNavigationTarget(
     url: `${prefix}${encodeURIComponent(trimmed)}`,
     kind: 'search',
   };
+}
+
+function normalizeInternalPageUrl(rawInput: string): string | null {
+  const normalized = rawInput.trim().toLowerCase();
+  if (normalized !== 'goldenboy://heatmap' && normalized !== 'goldenboy:heatmap') {
+    return null;
+  }
+  const filePath = path.join(__dirname, '..', '..', '..', 'renderer', 'heatmap', 'index.html');
+  return pathToFileURL(filePath).href;
 }
 
 function normalizeExplicitScheme(trimmed: string, searchPrefix: string): NormalizedNavigationTarget {

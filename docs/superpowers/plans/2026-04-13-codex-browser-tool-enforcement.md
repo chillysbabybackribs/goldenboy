@@ -1,5 +1,7 @@
 # Codex Browser Tool Enforcement Implementation Plan
 
+> Historical note: this dated implementation plan describes a specific rollout step that has already landed. Keep it as historical implementation context, not as a live task list.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Structurally disable codex's native web_search tool for all V2 sessions by passing `config: { web_search: "disabled" }` in `thread/start` and `thread/resume` WebSocket messages.

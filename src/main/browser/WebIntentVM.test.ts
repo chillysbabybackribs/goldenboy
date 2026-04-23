@@ -345,7 +345,7 @@ function readableText(root: HTMLElement | null): string {
 
 describe('WebIntentVM', () => {
   it('runs a semantic login/upload/checkout/extract program on a website fixture', async () => {
-    const fixturePath = path.join(process.cwd(), 'demo-app/public/intent-lab.html');
+    const fixturePath = path.join(process.cwd(), 'src/main/browser/__fixtures__/web-intent/intent-lab.html');
     const adapter = new JsdomIntentAdapter(fixturePath);
     const vm = new WebIntentVM(adapter);
 
@@ -374,7 +374,7 @@ describe('WebIntentVM', () => {
   });
 
   it('runs a semantic e-commerce checkout flow with add-to-cart/cart/checkout-info/finish ops', async () => {
-    const fixturePath = path.join(process.cwd(), 'demo-app/public/checkout-lab.html');
+    const fixturePath = path.join(process.cwd(), 'src/main/browser/__fixtures__/web-intent/checkout-lab.html');
     const adapter = new JsdomIntentAdapter(fixturePath);
     const vm = new WebIntentVM(adapter);
 
@@ -405,7 +405,7 @@ describe('WebIntentVM', () => {
   });
 
   it('runs a semantic drag/drop flow on a website fixture', async () => {
-    const fixturePath = path.join(process.cwd(), 'demo-app/public/drag-lab.html');
+    const fixturePath = path.join(process.cwd(), 'src/main/browser/__fixtures__/web-intent/drag-lab.html');
     const adapter = new JsdomIntentAdapter(fixturePath);
     const vm = new WebIntentVM(adapter);
 
@@ -424,7 +424,7 @@ describe('WebIntentVM', () => {
   });
 
   it('runs a semantic hover flow on a website fixture', async () => {
-    const fixturePath = path.join(process.cwd(), 'demo-app/public/hover-lab.html');
+    const fixturePath = path.join(process.cwd(), 'src/main/browser/__fixtures__/web-intent/hover-lab.html');
     const adapter = new JsdomIntentAdapter(fixturePath);
     const vm = new WebIntentVM(adapter);
 
@@ -443,7 +443,7 @@ describe('WebIntentVM', () => {
   });
 
   it('runs semantic dialog accept flow with prompt text on a website fixture', async () => {
-    const fixturePath = path.join(process.cwd(), 'demo-app/public/dialog-lab.html');
+    const fixturePath = path.join(process.cwd(), 'src/main/browser/__fixtures__/web-intent/dialog-lab.html');
     const adapter = new JsdomIntentAdapter(fixturePath);
     const vm = new WebIntentVM(adapter);
 
@@ -474,7 +474,7 @@ describe('WebIntentVM', () => {
   });
 
   it('runs semantic dialog dismiss flow on a website fixture', async () => {
-    const fixturePath = path.join(process.cwd(), 'demo-app/public/dialog-lab.html');
+    const fixturePath = path.join(process.cwd(), 'src/main/browser/__fixtures__/web-intent/dialog-lab.html');
     const adapter = new JsdomIntentAdapter(fixturePath);
     const vm = new WebIntentVM(adapter);
 

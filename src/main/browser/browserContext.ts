@@ -10,8 +10,10 @@ export const DEFAULT_BROWSER_CONTEXT_ID = 'default';
 export type BrowserContextService = Pick<
   BrowserService,
   | 'acceptDialog'
+  | 'applyVisualMask'
   | 'activateTab'
   | 'captureTabSnapshot'
+  | 'clearVisualMasks'
   | 'completeOperationNetworkScope'
   | 'clearSplitView'
   | 'clickElement'
@@ -38,6 +40,7 @@ export type BrowserContextService = Pick<
   | 'hitTestElement'
   | 'hoverElement'
   | 'isCreated'
+  | 'listVisualMasks'
   | 'beginOperationNetworkScope'
   | 'navigate'
   | 'openSearchResultsTabs'

@@ -12,7 +12,11 @@ export interface BrowserContextSources {
   isBrowserReady: () => boolean;
   getActiveTabId: () => string;
   getTabs: () => TabInfo[];
-  listCachedPages: () => CachedPageRecord[];
+  /**
+   * Optional filter scopes the list to pages tagged for the current task (or
+   * legacy untagged pages). Omitted filter = caller lists everything.
+   */
+  listCachedPages: (filter?: { taskId?: string }) => CachedPageRecord[];
 }
 
 export interface BrowserContextOptions {
@@ -22,6 +26,8 @@ export interface BrowserContextOptions {
   maxCachedPages?: number;
   /** Per-tab URL/title truncation length. Default 80. */
   maxLabelChars?: number;
+  /** When set, forwarded to {@link BrowserContextSources.listCachedPages}. */
+  taskId?: string;
 }
 
 const DEFAULT_MAX_TABS = 8;
@@ -63,7 +69,8 @@ export function buildBrowserContextBlock(
 
   const tabLines = visibleTabs.map((tab) => formatTabLine(tab, activeTabId, maxLabelChars));
 
-  const cachedPages = sources.listCachedPages();
+  const listFilter = options.taskId ? { taskId: options.taskId } : undefined;
+  const cachedPages = sources.listCachedPages(listFilter);
   const cachedPageLines = cachedPages.length > 0
     ? formatCachedPageLines(cachedPages, maxCachedPages, maxLabelChars)
     : [];
@@ -71,6 +78,9 @@ export function buildBrowserContextBlock(
   const lines: string[] = ['## Browser Overview'];
   lines.push(
     `Tabs: ${tabs.length} open${activeTabId ? `; active tab is ${activeTabId}` : ''}.`,
+  );
+  lines.push(
+    'The browser always keeps one default homepage tab open. When asked to "close all tabs", close every non-default tab and treat the remaining homepage tab as expected state, not a failure.',
   );
   lines.push(...tabLines);
   if (hiddenTabCount > 0) {
@@ -83,7 +93,7 @@ export function buildBrowserContextBlock(
   }
   lines.push('');
   lines.push(
-    'Use `browser.search_page_cache` against the cached pages above before re-extracting a tab, `browser.record_finding` to pin answers into task memory, and `browser.pin_page` to protect a cached page (📌) from LRU eviction. Pages marked (closed) outlived their tab — still searchable.',
+    'Use `browser.search_page_cache` against the cached pages above before re-extracting a tab, and `browser.record_finding` to pin answers into task memory instead of re-reading pages next turn.',
   );
   return lines.join('\n');
 }
@@ -101,23 +111,11 @@ function formatCachedPageLines(
   limit: number,
   maxLabelChars: number,
 ): string[] {
-  // Pinned pages bubble to the top so the "protected working set" is
-  // immediately visible; then we fall back to freshest-first. Pages whose
-  // owning tab was closed are still listed (they are still searchable) but
-  // tagged so the model knows they won't echo on browser tool calls.
-  const sorted = [...pages]
-    .sort((a, b) => {
-      const aPinned = a.pinned ? 1 : 0;
-      const bPinned = b.pinned ? 1 : 0;
-      if (aPinned !== bPinned) return bPinned - aPinned;
-      return b.updatedAt - a.updatedAt;
-    })
-    .slice(0, limit);
+  const sorted = [...pages].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
   return sorted.map((page) => {
     const title = truncate((page.title || '').trim(), maxLabelChars) || truncate(page.url, maxLabelChars);
-    const pin = page.pinned ? ' 📌' : '';
-    const closed = page.tabClosedAt ? ' (closed)' : '';
-    return `- ${page.id} (tab ${page.tabId}${closed}, ${page.chunkIds.length} chunks)${pin} — ${title}`;
+    const chunkCount = page.chunkIds?.length ?? 0;
+    return `- ${page.id} (tab ${page.tabId}, ${chunkCount} chunks) — ${title}`;
   });
 }
 

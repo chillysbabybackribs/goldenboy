@@ -3,8 +3,6 @@ import { TerminalSessionState, createDefaultTerminalState, TerminalCommandState,
 import { BrowserState, createDefaultBrowserState } from './browser';
 import { SurfaceActionRecord } from '../actions/surfaceActionTypes';
 import {
-  GEMINI_PROVIDER_ID,
-  HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   ProviderId,
   ProviderRuntime,
@@ -66,15 +64,7 @@ export type TokenUsageCumulative = {
   outputTokens: number;
   /** Provider-reported cache-read tokens (billed at discounted rate). Optional for backwards compatibility. */
   cachedInputTokens?: number;
-  /** Anthropic-only cache-creation tokens. Optional. */
-  cacheCreationInputTokens?: number;
-};
-
-export type TaskTokenUsageProviderBreakdown = {
-  inputTokens: number;
-  outputTokens: number;
-  apiCalls: number;
-  cachedInputTokens?: number;
+  /** Provider-reported cache-creation tokens. Optional. */
   cacheCreationInputTokens?: number;
 };
 
@@ -83,8 +73,6 @@ export type TaskTokenUsage = {
   outputTokens: number;
   apiCalls: number;
   updatedAt: number;
-  lastProviderId: ProviderId | null;
-  providerBreakdown: Partial<Record<ProviderId, TaskTokenUsageProviderBreakdown>>;
   cachedInputTokens?: number;
   cacheCreationInputTokens?: number;
 };
@@ -134,8 +122,6 @@ export function createDefaultAppState(): AppState {
     surfaceActions: [],
     providers: {
       [PRIMARY_PROVIDER_ID]: createDefaultProviderRuntime(PRIMARY_PROVIDER_ID),
-      [HAIKU_PROVIDER_ID]: createDefaultProviderRuntime(HAIKU_PROVIDER_ID),
-      [GEMINI_PROVIDER_ID]: createDefaultProviderRuntime(GEMINI_PROVIDER_ID),
     },
     tokenUsage: { inputTokens: 0, outputTokens: 0 },
     taskTokenUsage: {},

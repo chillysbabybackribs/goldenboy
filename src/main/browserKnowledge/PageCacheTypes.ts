@@ -30,18 +30,6 @@ export type CachedPageRecord = {
   updatedAt: number;
   /** See {@link CachedPageChunk.taskId}. */
   taskId?: string;
-  /**
-   * Pinned pages are exempt from LRU eviction so the model can protect the
-   * 2–3 pages a task actually relies on. Set via `browser.pin_page` or the
-   * store's {@link PageKnowledgeStore.setPinned} helper.
-   */
-  pinned?: boolean;
-  /**
-   * Timestamp stamped on pages whose owning tab has been closed. The page
-   * stays searchable ("I just closed that tab, look it up again") but is
-   * preferred for eviction ahead of live-tab pages once the LRU cap is hit.
-   */
-  tabClosedAt?: number;
 };
 
 export type PageSearchResult = {

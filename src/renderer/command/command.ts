@@ -1,9 +1,6 @@
 import { formatTime, escapeHtml } from '../shared/utils.js';
 import {
-  GEMINI_PROVIDER_ID,
-  HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
-  ProviderId,
   InvocationAttachment,
   ImageInvocationAttachment,
   type TaskMemoryEntry,
@@ -11,7 +8,6 @@ import {
 import type { DocumentImportRequest, DocumentInvocationAttachment } from '../../shared/types/attachments.js';
 import {
   appendCodexItemProgress as appendCodexItemProgressInternal,
-  appendThought as appendThoughtInternal,
   appendToolActivity as appendToolActivityInternal,
   appendToolStatus as appendToolStatusInternal,
   appendToken as appendTokenInternal,
@@ -23,6 +19,12 @@ import {
 } from './live-run.js';
 import { attachmentIconSvg, getAttachmentFileKind } from './attachmentIcons.js';
 import { renderMarkdown } from './markdown.js';
+import {
+  optimizeImageForCodex,
+  extensionForMediaType,
+  normalizeMediaType,
+  type OptimizedImage,
+} from './imageOptimization.js';
 
 const getWorkspaceAPI = () => (window as any).workspaceAPI as WorkspaceAPI | null;
 const getModelAPI = () => getWorkspaceAPI()?.model ?? null;
@@ -59,11 +61,12 @@ const chatEmptyState = document.getElementById('chatEmptyState')!;
 const chatScrollTopBtn = document.getElementById('chatScrollTopBtn') as HTMLButtonElement;
 const chatScrollBottomBtn = document.getElementById('chatScrollBottomBtn') as HTMLButtonElement;
 const chatInput = document.getElementById('chatInput') as HTMLTextAreaElement;
+const visualMaskApplyBtn = document.getElementById('visualMaskApplyBtn') as HTMLButtonElement;
+const visualMaskClearBtn = document.getElementById('visualMaskClearBtn') as HTMLButtonElement;
+const visualMaskStatus = document.getElementById('visualMaskStatus') as HTMLSpanElement;
 const chatNewBtn = document.getElementById('chatNewBtn') as HTMLButtonElement;
 const chatCopyLastBtn = document.getElementById('chatCopyLastBtn') as HTMLButtonElement;
 const modelBtnPrimary = document.getElementById('modelBtnPrimary') as HTMLButtonElement;
-const modelBtnHaiku = document.getElementById('modelBtnHaiku') as HTMLButtonElement;
-const modelBtnGemini = document.getElementById('modelBtnGemini') as HTMLButtonElement;
 const chatZoomOutBtn = document.getElementById('chatZoomOutBtn') as HTMLButtonElement;
 const chatZoomResetBtn = document.getElementById('chatZoomResetBtn') as HTMLButtonElement;
 const chatZoomInBtn = document.getElementById('chatZoomInBtn') as HTMLButtonElement;
@@ -115,7 +118,7 @@ const imgFileInput = document.getElementById('imgFileInput') as HTMLInputElement
 
 let activeTurnWrapper: HTMLElement | null = null;
 
-type SelectableOwner = typeof PRIMARY_PROVIDER_ID | typeof HAIKU_PROVIDER_ID | typeof GEMINI_PROVIDER_ID;
+type SelectableOwner = typeof PRIMARY_PROVIDER_ID;
 type ExplicitSelectableOwner = SelectableOwner;
 type ProviderRuntimeView = {
   status?: string;
@@ -124,13 +127,11 @@ type ProviderRuntimeView = {
   errorDetail?: string | null;
 };
 
-const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID];
+const SELECTABLE_OWNERS: SelectableOwner[] = [PRIMARY_PROVIDER_ID];
 const SELECTED_OWNER_STORAGE_KEY = 'command-center-selected-owner';
 const AGENT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'command-center-agent-sidebar-collapsed';
 const OWNER_LABELS: Record<SelectableOwner, string> = {
   [PRIMARY_PROVIDER_ID]: 'Codex',
-  [HAIKU_PROVIDER_ID]: 'Haiku 4.5',
-  [GEMINI_PROVIDER_ID]: 'Gemini',
 };
 
 function getOwnerDisplayLabel(owner: SelectableOwner): string {
@@ -152,6 +153,7 @@ let chatScrollControlsIdleTimer: number | null = null;
 let lastAgentResponseText = '';
 let chatCopyFeedbackTimer: number | null = null;
 let chatZoom = 1;
+let visualMaskStatusTimer: number | null = null;
 let agentSidebarCollapsed = true;
 const runningTaskIds = new Set<string>();
 let completedExpanded = false;
@@ -176,7 +178,7 @@ function isSelectableOwner(value: string): value is SelectableOwner {
 }
 
 function isExplicitSelectableOwner(value: string): value is ExplicitSelectableOwner {
-  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
+  return value === PRIMARY_PROVIDER_ID;
 }
 
 function getProviderRuntime(state: any, owner: ExplicitSelectableOwner): ProviderRuntimeView | null {
@@ -235,16 +237,9 @@ function normalizeSelectedOwner(nextOwner: SelectableOwner, state: any): Selecta
   return canSelectOwner(state, nextOwner) ? nextOwner : getFallbackSelectableOwner(state, nextOwner);
 }
 
-function getLastUsedOwnerForTask(task: any | null, state: any): SelectableOwner | null {
+function getLastUsedOwnerForTask(task: any | null, _state: any): SelectableOwner | null {
   if (task?.owner && isExplicitSelectableOwner(task.owner)) return task.owner;
-
-  const lastProviderId = task?.id
-    ? state?.taskTokenUsage?.[task.id]?.lastProviderId
-    : null;
-
-  return typeof lastProviderId === 'string' && isExplicitSelectableOwner(lastProviderId)
-    ? lastProviderId
-    : null;
+  return null;
 }
 
 function syncSelectedOwnerForActiveTask(state: any): void {
@@ -279,9 +274,8 @@ function setSelectedOwner(nextOwner: SelectableOwner, state: any = (window as an
 }
 
 function getModelBtn(owner: ExplicitSelectableOwner): HTMLButtonElement {
-  if (owner === PRIMARY_PROVIDER_ID) return modelBtnPrimary;
-  if (owner === HAIKU_PROVIDER_ID) return modelBtnHaiku;
-  return modelBtnGemini;
+  void owner;
+  return modelBtnPrimary;
 }
 
 function isActiveTabRunning(): boolean {
@@ -491,6 +485,53 @@ function initializeCommandBrowserPane(): void {
   if (typeof ResizeObserver !== 'undefined') {
     browserBoundsObserver = new ResizeObserver(() => reportCommandBrowserBounds());
     browserBoundsObserver.observe(commandBrowserSurfaceArea);
+  }
+}
+
+function setVisualMaskStatus(message: string, tone: 'neutral' | 'success' | 'error' = 'neutral'): void {
+  visualMaskStatus.textContent = message;
+  visualMaskStatus.classList.remove('is-success', 'is-error');
+  if (tone === 'success') visualMaskStatus.classList.add('is-success');
+  if (tone === 'error') visualMaskStatus.classList.add('is-error');
+  if (visualMaskStatusTimer !== null) window.clearTimeout(visualMaskStatusTimer);
+  if (!message) return;
+  visualMaskStatusTimer = window.setTimeout(() => {
+    visualMaskStatus.textContent = '';
+    visualMaskStatus.classList.remove('is-success', 'is-error');
+    visualMaskStatusTimer = null;
+  }, 2400);
+}
+
+function setVisualMaskControlsDisabled(disabled: boolean): void {
+  visualMaskApplyBtn.disabled = disabled;
+  visualMaskClearBtn.disabled = disabled;
+}
+
+function showVisualMaskHint(): void {
+  setVisualMaskStatus('Right-click page element -> Blur This Element');
+  if (!commandWindowAPI) return;
+  void commandWindowAPI.addLog('info', 'browser', 'To blur something, right-click the page element in the browser and choose "Blur This Element".');
+}
+
+async function clearVisualMasksFromComposer(): Promise<void> {
+  if (!commandWindowAPI) return;
+
+  setVisualMaskControlsDisabled(true);
+  setVisualMaskStatus('Clearing…');
+  try {
+    const record = await commandWindowAPI.actions.submit({
+      target: 'browser',
+      kind: 'browser.clear-visual-masks',
+      payload: { all: true },
+    });
+    const clearedCount = Number((record.resultData as any)?.clearedCount ?? 0);
+    setVisualMaskStatus(clearedCount > 0 ? `Cleared ${clearedCount}` : 'Nothing to clear', clearedCount > 0 ? 'success' : 'neutral');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    setVisualMaskStatus('Clear failed', 'error');
+    void commandWindowAPI.addLog('error', 'browser', `Failed to clear visual masks: ${message}`);
+  } finally {
+    setVisualMaskControlsDisabled(false);
   }
 }
 
@@ -923,7 +964,7 @@ function isInternalModelText(text: string): boolean {
 }
 
 function shouldShowMemoryEntry(entry: TaskMemoryEntry): boolean {
-  if (entry.kind === 'system' || entry.kind === 'handoff' || entry.kind === 'browser_finding') return false;
+  if (entry.kind === 'system' || entry.kind === 'browser_finding') return false;
   if (entry.kind === 'user_prompt') return !isInternalPromptText(entry.text);
   if (entry.kind === 'model_result') return !isInternalModelText(entry.text);
   return true;
@@ -1147,6 +1188,59 @@ const COPY_CHECK_SVG =
     '<path d="M3.5 8.5 6.75 11.5 12.5 5.25"/>' +
   '</svg>';
 
+/**
+ * Walk every `<pre>` descendant of `root` and make sure it has a
+ * click-to-copy button in the top-right corner. Safe to call repeatedly
+ * (live-run rewrites innerHTML every frame), so we key off a data flag
+ * and a WeakMap to avoid stacking listeners.
+ */
+const CODE_COPY_BTN_ATTR = 'data-chat-code-copy';
+
+function enhanceCodeBlocks(root: HTMLElement): void {
+  const blocks = root.querySelectorAll<HTMLPreElement>('pre');
+  blocks.forEach((pre) => {
+    if (pre.hasAttribute(CODE_COPY_BTN_ATTR)) return;
+    pre.setAttribute(CODE_COPY_BTN_ATTR, 'true');
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chat-code-copy-btn';
+    btn.setAttribute('title', 'Copy code');
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.innerHTML = COPY_ICON_SVG;
+
+    let feedbackTimer: number | null = null;
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      const codeEl = pre.querySelector('code');
+      const text = (codeEl?.textContent ?? pre.textContent ?? '').replace(/\n$/, '');
+      if (!text) return;
+
+      const copied = await copyTextToClipboard(text);
+      if (!copied) {
+        getWorkspaceAPI()?.addLog('error', 'system', 'Failed to copy code block');
+        return;
+      }
+
+      btn.classList.add('chat-code-copy-btn-copied');
+      btn.setAttribute('title', 'Copied');
+      btn.setAttribute('aria-label', 'Copied');
+      btn.innerHTML = COPY_CHECK_SVG;
+      if (feedbackTimer !== null) window.clearTimeout(feedbackTimer);
+      feedbackTimer = window.setTimeout(() => {
+        btn.classList.remove('chat-code-copy-btn-copied');
+        btn.setAttribute('title', 'Copy code');
+        btn.setAttribute('aria-label', 'Copy code');
+        btn.innerHTML = COPY_ICON_SVG;
+        feedbackTimer = null;
+      }, 1200);
+    });
+
+    pre.appendChild(btn);
+  });
+}
+
 function attachResponseCopyButton(msgRoot: HTMLElement, getText: () => string): void {
   msgRoot.querySelector(':scope > .chat-msg-actions')?.remove();
 
@@ -1202,17 +1296,9 @@ function createLiveRunCard(taskId: string, _provider: string, prompt?: string): 
       updateChatScrollControls();
     },
     attachResponseCopyButton,
+    enhanceCodeBlocks,
   }, prompt);
   flushPendingLiveProgress(taskId);
-}
-
-function shouldRenderLiveStatusText(text: string): boolean {
-  if (!text || /^Turn completed/.test(text)) return false;
-  return text !== 'Starting task...'
-    && text !== 'Routing web search for fast browser-first execution.'
-    && text !== 'Opening a dedicated search tab while the first tool call is prepared.'
-    && text !== 'Browser search will open on the first tool call.'
-    && text !== 'Preparing the browser workflow.';
 }
 
 function enqueuePendingLiveProgress(taskId: string, progress: any): void {
@@ -1237,13 +1323,16 @@ function handleLiveProgress(progress: any): void {
     const text = String(progress.data || '');
     if (text.startsWith('tool-start:') || text.startsWith('tool-done:') || text.startsWith('tool-progress:')) {
       appendToolStatusInternal(progress.taskId, text);
+    } else if (text === 'thought-boundary' || text === 'turn-boundary') {
+      appendToolStatusInternal(progress.taskId, text);
     } else if (text.startsWith('Calling ')) {
       appendToolActivity(progress.taskId, 'call', text.replace(/^Calling\s+/, '').replace(/\.\.\.$/, ''));
     } else if (text.startsWith('Tool result: ')) {
       appendToolActivity(progress.taskId, 'result', text.slice('Tool result: '.length));
-    } else if (shouldRenderLiveStatusText(text)) {
-      appendThought(progress.taskId, text);
     }
+    // Other status strings (pre-task setup, informational chatter) are not
+    // rendered in the live card; the thinking line is reserved for Codex
+    // token output routed through `type: 'token'`.
   }
 }
 
@@ -1258,10 +1347,6 @@ function flushPendingLiveProgress(taskId: string): void {
 
 function appendToken(taskId: string, text: string): void {
   appendTokenInternal(taskId, text);
-}
-
-function appendThought(taskId: string, text: string): void {
-  appendThoughtInternal(taskId, text);
 }
 
 function appendToolActivity(taskId: string, kind: 'call' | 'result', text: string): void {
@@ -1289,6 +1374,7 @@ function appendModelMemoryEntry(entry: TaskMemoryEntry): void {
   const el = document.createElement('div');
   el.className = 'chat-msg chat-msg-model chat-msg-done';
   el.innerHTML = `<div class="chat-msg-text chat-markdown">${renderMarkdown(entry.text)}</div>`;
+  enhanceCodeBlocks(el);
   attachResponseCopyButton(el, () => entry.text);
 
   const container = activeTurnWrapper ?? chatInner;
@@ -1379,19 +1465,14 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
-
 function getElectronFilePath(file: File): string | undefined {
-  const candidate = (file as File & { path?: unknown }).path;
-  return typeof candidate === 'string' && candidate.trim() ? candidate : undefined;
-}
-
-function getImageMediaType(file: File): ImageMediaType {
-  const type = file.type.toLowerCase();
-  if (type === 'image/png') return 'image/png';
-  if (type === 'image/gif') return 'image/gif';
-  if (type === 'image/webp') return 'image/webp';
-  return 'image/jpeg';
+  // Prefer the modern webUtils.getPathForFile bridge (Electron 32+). Fall back
+  // to the deprecated File.path property only if the bridge is unavailable
+  // (e.g. running outside Electron in a test harness).
+  const viaPreload = getWorkspaceAPI()?.file?.getPathForFile?.(file);
+  if (typeof viaPreload === 'string' && viaPreload.trim()) return viaPreload;
+  const legacy = (file as File & { path?: unknown }).path;
+  return typeof legacy === 'string' && legacy.trim() ? legacy : undefined;
 }
 
 async function buildAttachments(): Promise<ImageInvocationAttachment[]> {
@@ -1399,16 +1480,45 @@ async function buildAttachments(): Promise<ImageInvocationAttachment[]> {
   if (imageFiles.length === 0) return [];
 
   const results: ImageInvocationAttachment[] = [];
+  let totalOriginal = 0;
+  let totalOptimized = 0;
+  let reencodedCount = 0;
+
   for (const entry of imageFiles) {
-    const data = await fileToBase64(entry.file);
+    const localPath = getElectronFilePath(entry.file);
+    // Reuse the background optimization started at attach-time when
+    // available; fall back to running it synchronously here if the entry
+    // was produced by a path that didn't kick it off (defensive).
+    const optimized = entry.optimizationResult
+      ?? (await (entry.optimization ?? optimizeImageForCodex(entry.file)));
+    entry.optimizationResult = optimized;
+    totalOriginal += optimized.originalBytes;
+    totalOptimized += optimized.optimizedBytes;
+    if (optimized.reencoded) reencodedCount++;
+
     results.push({
       type: 'image',
-      mediaType: getImageMediaType(entry.file),
-      data,
-      name: entry.file.name,
-      path: getElectronFilePath(entry.file),
+      mediaType: optimized.mediaType,
+      data: optimized.data,
+      name: optimized.name,
+      // Keep the local disk path only when we passed the original bytes
+      // through; if we re-encoded in memory, force the provider onto the
+      // data-URL branch so Codex sees the optimized bytes instead of the
+      // (oversized) file on disk.
+      path: optimized.reencoded ? undefined : localPath,
     });
   }
+
+  if (totalOriginal > 0 && totalOptimized < totalOriginal) {
+    const savedBytes = totalOriginal - totalOptimized;
+    const savedKB = Math.round(savedBytes / 1024);
+    const pct = Math.round((savedBytes / totalOriginal) * 100);
+    console.info(
+      `[command] image attachments: re-encoded ${reencodedCount}/${imageFiles.length}, ` +
+      `saved ${savedKB} KB (${pct}% smaller before base64 inflation).`,
+    );
+  }
+
   return results;
 }
 
@@ -1571,7 +1681,9 @@ function syncStopBtn(): void {
   chatStopBtn.hidden = !activeRunning;
   if (!activeRunning) {
     chatStopBtn.disabled = false;
-    chatStopBtn.textContent = 'STOP';
+    chatStopBtn.classList.remove('cc-stop-btn-stopping');
+    chatStopBtn.title = 'Stop task';
+    chatStopBtn.setAttribute('aria-label', 'Stop task');
   }
 }
 
@@ -1580,8 +1692,10 @@ chatStopBtn.addEventListener('click', () => {
   const activeId = getActiveTaskIdFromState();
   if (activeId && runningTaskIds.has(activeId) && modelApi?.cancel) {
     markCancellingInternal(activeId);
-    chatStopBtn.textContent = 'Stopping…';
+    chatStopBtn.classList.add('cc-stop-btn-stopping');
     chatStopBtn.disabled = true;
+    chatStopBtn.title = 'Stopping…';
+    chatStopBtn.setAttribute('aria-label', 'Stopping task');
     void modelApi.cancel(activeId);
   }
 });
@@ -1607,6 +1721,14 @@ chatInput.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
+visualMaskApplyBtn.addEventListener('click', () => {
+  showVisualMaskHint();
+});
+
+visualMaskClearBtn.addEventListener('click', () => {
+  void clearVisualMasksFromComposer();
+});
+
 // Idle-state suggestion chips — fill input on click
 chatEmptyState.addEventListener('click', (e: MouseEvent) => {
   const target = e.target;
@@ -1622,24 +1744,47 @@ chatEmptyState.addEventListener('click', (e: MouseEvent) => {
   chatInput.style.height = `${chatInput.scrollHeight}px`;
 });
 
-// Paste images directly into the textarea
+// Paste images directly into the textarea. Collects every image item on the
+// clipboard in one event so Codex receives all of them as separate input items.
 chatInput.addEventListener('paste', (e: ClipboardEvent) => {
   const items = e.clipboardData?.items;
   if (!items) return;
 
+  const pastedImages: File[] = [];
   for (const item of Array.from(items)) {
-    if (item.type.startsWith('image/')) {
-      e.preventDefault();
-      const file = item.getAsFile();
-      if (file) {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        addFiles(dt.files, 'image');
-      }
-      return;
-    }
+    if (item.kind !== 'file') continue;
+    if (!item.type.startsWith('image/')) continue;
+    const file = item.getAsFile();
+    if (file) pastedImages.push(file);
   }
+
+  if (pastedImages.length === 0) return;
+  e.preventDefault();
+
+  const ts = Date.now();
+  const dt = new DataTransfer();
+  pastedImages.forEach((file, idx) => {
+    dt.items.add(renamePastedImageIfGeneric(file, idx, ts));
+  });
+  addFiles(dt.files, 'image');
 });
+
+function renamePastedImageIfGeneric(file: File, index: number, ts: number): File {
+  const original = file.name?.trim() ?? '';
+  const isGeneric =
+    !original ||
+    original === 'image.png' ||
+    original === 'image.jpg' ||
+    original === 'image.jpeg' ||
+    original.toLowerCase() === 'image';
+  if (!isGeneric) return file;
+
+  const ext = extensionForMediaType(normalizeMediaType(file.type));
+  return new File([file], `pasted-${ts}-${index + 1}.${ext}`, {
+    type: file.type || 'image/png',
+    lastModified: file.lastModified || ts,
+  });
+}
 
 window.addEventListener('keydown', (event: KeyboardEvent) => {
   if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
@@ -1824,14 +1969,13 @@ function readFooterTokenFigures(state: any, owner: SelectableOwner): FooterToken
   const activeTaskId: string | null = state?.activeTaskId ?? null;
   if (!activeTaskId || !isExplicitSelectableOwner(owner)) return EMPTY_FIGURES;
   const task = state?.taskTokenUsage?.[activeTaskId];
-  const breakdown = task?.providerBreakdown?.[owner];
-  if (!breakdown) return EMPTY_FIGURES;
+  if (!task) return EMPTY_FIGURES;
   return {
-    inputTokens: breakdown.inputTokens ?? 0,
-    outputTokens: breakdown.outputTokens ?? 0,
-    cachedInputTokens: breakdown.cachedInputTokens ?? 0,
-    cacheCreationInputTokens: breakdown.cacheCreationInputTokens ?? 0,
-    apiCalls: breakdown.apiCalls ?? 0,
+    inputTokens: task.inputTokens ?? 0,
+    outputTokens: task.outputTokens ?? 0,
+    cachedInputTokens: task.cachedInputTokens ?? 0,
+    cacheCreationInputTokens: task.cacheCreationInputTokens ?? 0,
+    apiCalls: task.apiCalls ?? 0,
   };
 }
 
@@ -2150,8 +2294,6 @@ function getAgentTabProviderLabel(owner: unknown): string {
   if (typeof owner !== 'string') return '';
   if (isExplicitSelectableOwner(owner)) return OWNER_LABELS[owner];
   if (owner.includes('codex') || owner.startsWith('gpt-')) return 'Codex';
-  if (owner.includes('haiku') || owner.includes('claude')) return 'Haiku';
-  if (owner.includes('gemini')) return 'Gemini';
   return owner;
 }
 
@@ -2342,9 +2484,38 @@ interface AttachedFile {
   file: File;
   type: 'document' | 'image';
   previewUrl?: string;
+  /** Promise of the (possibly downscaled) payload we will actually send. */
+  optimization?: Promise<OptimizedImage>;
+  /** Populated once `optimization` resolves so the preview can read it. */
+  optimizationResult?: OptimizedImage;
+  /** Set when optimization rejected so the preview can stop showing "…". */
+  optimizationFailed?: boolean;
 }
 
 const attachedFiles: AttachedFile[] = [];
+
+function renderImageSizeBadge(entry: AttachedFile): string {
+  const original = formatAttachmentSize(entry.file.size);
+  if (entry.optimizationFailed) {
+    return `<span class="cc-preview-size" title="Original size — optimization failed">${escapeHtml(original)}</span>`;
+  }
+  const result = entry.optimizationResult;
+  if (!result) {
+    return `<span class="cc-preview-size cc-preview-size--pending" title="Preparing optimized version\u2026">${escapeHtml(original)} \u2192 \u2026</span>`;
+  }
+  if (!result.reencoded || result.optimizedBytes >= result.originalBytes) {
+    return `<span class="cc-preview-size" title="Sent as-is — already within token budget">${escapeHtml(original)}</span>`;
+  }
+  const optimized = formatAttachmentSize(result.optimizedBytes);
+  const savedPct = Math.round(((result.originalBytes - result.optimizedBytes) / result.originalBytes) * 100);
+  const title = `Will send ${optimized} to Codex (${savedPct}% smaller than ${original})`;
+  return (
+    `<span class="cc-preview-size cc-preview-size--saved" title="${escapeHtml(title)}">` +
+    `${escapeHtml(original)} <span class="cc-preview-size-arrow">\u2192</span> ${escapeHtml(optimized)} ` +
+    `<span class="cc-preview-size-delta">-${savedPct}%</span>` +
+    `</span>`
+  );
+}
 
 function syncAttachmentPreview(): void {
   if (attachedFiles.length === 0) {
@@ -2365,6 +2536,7 @@ function syncAttachmentPreview(): void {
       item.innerHTML =
         `<img src="${entry.previewUrl}" alt="${escapeHtml(entry.file.name)}">` +
         `<span class="cc-preview-name">${escapeHtml(entry.file.name)}</span>` +
+        renderImageSizeBadge(entry) +
         `<button class="cc-preview-remove" data-index="${i}" title="Remove" aria-label="Remove ${escapeHtml(entry.file.name)}">&times;</button>`;
     } else {
       item.classList.add('cc-attach-preview-item--doc');
@@ -2374,6 +2546,7 @@ function syncAttachmentPreview(): void {
         `<div class="cc-attach-preview-icon-wrap">${attachmentIconSvg(kind)}</div>` +
         `<span class="cc-preview-doc-name">${escapeHtml(entry.file.name)}</span>` +
         `</div>` +
+        `<span class="cc-preview-size" title="Document size">${escapeHtml(formatAttachmentSize(entry.file.size))}</span>` +
         `<button class="cc-preview-remove" data-index="${i}" title="Remove" aria-label="Remove ${escapeHtml(entry.file.name)}">&times;</button>`;
     }
 
@@ -2386,6 +2559,24 @@ function addFiles(files: FileList, type: 'document' | 'image'): void {
     const entry: AttachedFile = { file, type };
     if (type === 'image') {
       entry.previewUrl = URL.createObjectURL(file);
+      // Kick off optimization in the background so the preview can show the
+      // final byte count before submit, and submit can reuse the result
+      // without re-decoding the image.
+      const pending = optimizeImageForCodex(file);
+      entry.optimization = pending;
+      pending.then(
+        (result) => {
+          if (!attachedFiles.includes(entry)) return;
+          entry.optimizationResult = result;
+          syncAttachmentPreview();
+        },
+        (err) => {
+          if (!attachedFiles.includes(entry)) return;
+          entry.optimizationFailed = true;
+          console.warn('[command] image optimization failed', err);
+          syncAttachmentPreview();
+        },
+      );
     }
     attachedFiles.push(entry);
   }
@@ -2436,6 +2627,92 @@ attachPreviewList.addEventListener('click', (e: MouseEvent) => {
   if (!removeBtn) return;
   const idx = parseInt(removeBtn.dataset.index || '', 10);
   if (!isNaN(idx)) removeAttachment(idx);
+});
+
+// ─── Drag-and-drop attachments ────────────────────────────────────────────
+//
+// Users can drop image/document files anywhere on the composer. Dropped
+// files are routed by MIME type: image/* → image attachments (optimizer
+// kicks in), everything else → document import.
+//
+// We also catch stray drops on the window so Electron doesn't navigate away
+// if a file is dropped outside the composer target.
+
+const dropTarget: HTMLElement =
+  document.querySelector<HTMLElement>('.cc-compose-shell') ??
+  document.querySelector<HTMLElement>('.cc-input-footer') ??
+  chatInput;
+
+let dragDepth = 0;
+
+function isFileDrag(event: DragEvent): boolean {
+  const types = event.dataTransfer?.types;
+  if (!types) return false;
+  for (let i = 0; i < types.length; i++) {
+    if (types[i] === 'Files') return true;
+  }
+  return false;
+}
+
+function partitionDroppedFiles(files: FileList): { images: File[]; documents: File[] } {
+  const images: File[] = [];
+  const documents: File[] = [];
+  for (const file of Array.from(files)) {
+    if (file.type && file.type.startsWith('image/')) {
+      images.push(file);
+    } else {
+      documents.push(file);
+    }
+  }
+  return { images, documents };
+}
+
+function filesFromList(list: File[]): FileList {
+  const dt = new DataTransfer();
+  for (const file of list) dt.items.add(file);
+  return dt.files;
+}
+
+dropTarget.addEventListener('dragenter', (event: DragEvent) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth++;
+  dropTarget.classList.add('is-dragging');
+});
+
+dropTarget.addEventListener('dragover', (event: DragEvent) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+});
+
+dropTarget.addEventListener('dragleave', (event: DragEvent) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropTarget.classList.remove('is-dragging');
+});
+
+dropTarget.addEventListener('drop', (event: DragEvent) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropTarget.classList.remove('is-dragging');
+  const files = event.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  const { images, documents } = partitionDroppedFiles(files);
+  if (images.length > 0) addFiles(filesFromList(images), 'image');
+  if (documents.length > 0) addFiles(filesFromList(documents), 'document');
+  chatInput.focus();
+});
+
+// Defensive: swallow file drops that land outside the composer so Electron
+// doesn't navigate the window to file:// URLs.
+window.addEventListener('dragover', (event: DragEvent) => {
+  if (isFileDrag(event)) event.preventDefault();
+});
+window.addEventListener('drop', (event: DragEvent) => {
+  if (isFileDrag(event)) event.preventDefault();
 });
 
 // ─── Init ──────────────────────────────────────────────────────────────────

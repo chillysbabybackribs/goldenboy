@@ -1,7 +1,7 @@
 {
-  "name": "v2-workspace",
+  "name": "goldenboy",
   "version": "1.0.0",
-  "description": "Desktop AI workspace with chat, browser, and terminal surfaces",
+  "description": "Goldenboy — local Codex-backed AI workbench with chat, browser, and terminal surfaces",
   "main": "dist/main/main/main.js",
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",
@@ -9,11 +9,11 @@
     "build:renderer": "tsc -p tsconfig.renderer.json",
     "prebuild": "npm run clean",
     "build": "npm run build:main && npm run build:preload && npm run build:renderer && npm run copy:html",
-    "benchmark:tools": "RUN_TOOL_BENCHMARK=1 vitest run src/main/agent/toolPackBenchmark.test.ts --reporter=verbose",
     "copy:html": "node scripts/copy-renderer.js",
     "start": "npm run build && electron .",
     "dev": "node scripts/dev.js",
     "test": "vitest run",
+    "test:e2e:determinism": "node scripts/e2e/determinism/run.js",
     "clean": "rm -rf dist"
   },
   "devDependencies": {
@@ -25,7 +25,6 @@
     "vitest": "^4.1.4"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.88.0",
     "node-pty": "^1.1.0"
   }
 }

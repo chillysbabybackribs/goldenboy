@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { browserService } = vi.hoisted(() => ({
   browserService: {
+    applyVisualMask: vi.fn(),
     beginOperationNetworkScope: vi.fn(),
+    clearVisualMasks: vi.fn(),
     completeOperationNetworkScope: vi.fn(),
     isCreated: vi.fn(() => true),
+    listVisualMasks: vi.fn(),
     navigate: vi.fn(),
     getState: vi.fn(),
     getPageMetadata: vi.fn(),
@@ -208,6 +211,88 @@ describe('executeBrowserOperation', () => {
         tabId: 'tab_split',
         splitLeftTabId: 'tab_left',
         splitRightTabId: 'tab_split',
+      },
+    });
+  });
+
+  it('applies visual masks through the shared executor', async () => {
+    browserService.applyVisualMask.mockResolvedValue({
+      success: true,
+      mask: {
+        id: 'vmask_1',
+        selector: 'article h1',
+        blurPx: 9,
+        createdAt: 1,
+        tabId: 'tab_1',
+        matchCount: 1,
+      },
+      matchedCount: 1,
+      error: null,
+    });
+
+    const result = await executeBrowserOperation({
+      kind: 'browser.apply-visual-mask',
+      payload: { selector: 'article h1', blurPx: 9 },
+    });
+
+    expect(browserService.applyVisualMask).toHaveBeenCalledWith({
+      selector: 'article h1',
+      tabId: undefined,
+      blurPx: 9,
+    });
+    expect(result).toEqual({
+      summary: 'Applied visual mask: article h1',
+      data: {
+        selector: 'article h1',
+        blurPx: 9,
+        result: {
+          success: true,
+          mask: {
+            id: 'vmask_1',
+            selector: 'article h1',
+            blurPx: 9,
+            createdAt: 1,
+            tabId: 'tab_1',
+            matchCount: 1,
+          },
+          matchedCount: 1,
+          error: null,
+        },
+      },
+    });
+  });
+
+  it('lists visual masks through the shared executor', async () => {
+    browserService.listVisualMasks.mockReturnValue([
+      {
+        id: 'vmask_1',
+        selector: 'article h1',
+        blurPx: 7,
+        createdAt: 1,
+        tabId: 'tab_1',
+        matchCount: 1,
+      },
+    ]);
+
+    const result = await executeBrowserOperation({
+      kind: 'browser.list-visual-masks',
+      payload: {},
+    });
+
+    expect(browserService.listVisualMasks).toHaveBeenCalledWith(undefined);
+    expect(result).toEqual({
+      summary: 'Listed 1 visual mask',
+      data: {
+        masks: [
+          {
+            id: 'vmask_1',
+            selector: 'article h1',
+            blurPx: 7,
+            createdAt: 1,
+            tabId: 'tab_1',
+            matchCount: 1,
+          },
+        ],
       },
     });
   });

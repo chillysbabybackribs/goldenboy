@@ -13,11 +13,10 @@ describe('seedAndClockPin (wiring)', () => {
       tabId: 'tab_1',
       config: resolveConfig({ seed: 12345, clock: 1700000000000 }),
       capabilities: {
-        attachCdp: vi.fn(async () => ({ send, detach: vi.fn(async () => {}) })),
+        attachCdp: vi.fn(async () => ({ send, on: vi.fn(), off: vi.fn(), detach: vi.fn(async () => {}) })),
         setUserAgent: vi.fn(), restoreUserAgent: vi.fn(),
         insertCss: vi.fn(), removeInsertedCss: vi.fn(),
         setViewport: vi.fn(), clearViewport: vi.fn(),
-        registerRequestBlocker: vi.fn(),
         isTabAlive: vi.fn(() => true),
       } as PinContext['capabilities'],
     };

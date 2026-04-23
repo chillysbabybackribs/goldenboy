@@ -97,6 +97,13 @@ export class AgentRunStore {
       .map(call => ({ ...call }));
   }
 
+  findLatestToolCall(runId: string, toolName: AgentToolName): AgentToolCallRecord | null {
+    const matches = this.listToolCalls(runId)
+      .filter((call) => call.toolName === toolName)
+      .sort((a, b) => (b.completedAt ?? b.startedAt) - (a.completedAt ?? a.startedAt));
+    return matches[0] ?? null;
+  }
+
   prune(now = Date.now()): void {
     const removableRuns = Array.from(this.runs.values())
       .filter(run => run.status !== 'queued' && run.status !== 'running')

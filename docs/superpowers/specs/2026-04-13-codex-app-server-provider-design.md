@@ -1,5 +1,7 @@
 # Codex App-Server Provider Design
 
+> Historical note: this design document predates the Codex-only hard trim. References to the legacy secondary-provider runtime or a multi-provider runtime describe the old architecture, not the current product.
+
 **Date:** 2026-04-13  
 **Status:** Approved for implementation  
 **Replaces:** `CodexProvider` (spawn-based `codex exec` loop)
@@ -25,7 +27,7 @@ Replace the spawn loop with the `codex app-server` WebSocket protocol — the sa
 
 ## Architecture
 
-Three new components. Everything else (`AgentRuntime`, `AgentModelService`, `agentToolExecutor`, `ConstraintValidator`, `chatKnowledgeStore`, tool packs, `HaikuProvider`) is unchanged.
+Three new components. Everything else (`AgentRuntime`, `AgentModelService`, `agentToolExecutor`, `ConstraintValidator`, `chatKnowledgeStore`, tool packs, the legacy secondary-provider runtime) is unchanged.
 
 ```
 V2 Electron main process
@@ -163,7 +165,7 @@ AgentModelService.init()
        → sends initialize handshake
        → provider status → "available"
 
-  4. HaikuProvider.init() [parallel, unchanged]
+  4. Legacy secondary-provider init [parallel, unchanged]
 
   5. AgentModelService registers AppServerProvider as PRIMARY_PROVIDER_ID
      CodexProvider kept in codebase, gated by CODEX_PROVIDER=exec env flag
@@ -215,7 +217,7 @@ AgentModelService.init()
 - `ConstraintValidator` — unchanged, called by `V2ToolBridge`
 - `chatKnowledgeStore` — unchanged, called by `V2ToolBridge`
 - `toolPacks.ts` — unchanged, expansion logic reused in `AppServerProvider`
-- `HaikuProvider` — unchanged
+- Legacy secondary-provider runtime — unchanged
 - `providerRouting.ts` — unchanged
 - All tool definitions — unchanged
 

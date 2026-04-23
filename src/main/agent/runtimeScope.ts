@@ -4,6 +4,7 @@ import {
   buildTaskProfile,
   looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
+  looksLikeExecutionEscapePrompt,
   looksLikeImplementationTask,
   looksLikeOrchestrationTask,
   looksLikeResearchTask,
@@ -11,10 +12,13 @@ import {
   looksLikeBrowserSearchTask,
   looksLikeDelegationTask,
   looksLikeLocalCodeTask,
+  looksLikeLocalPlanningTask,
+  looksLikeScopingPrompt,
   withBrowserSearchDirective as applyBrowserSearchDirective,
 } from './taskProfile';
 
 export type RuntimeScope = {
+  executionMode: ReturnType<typeof buildTaskProfile>['executionMode'];
   skillNames: string[];
   allowedTools: 'all' | AgentToolName[];
   canSpawnSubagents: boolean;
@@ -32,6 +36,7 @@ export type OrchestrationPlanSnapshot = {
 export function scopeForPrompt(prompt: string, overrides?: AgentTaskProfileOverride): RuntimeScope {
   const profile = buildTaskProfile(prompt, overrides);
   return {
+    executionMode: profile.executionMode,
     skillNames: [...profile.skillNames],
     allowedTools: profile.allowedTools,
     canSpawnSubagents: profile.canSpawnSubagents,
@@ -41,6 +46,18 @@ export function scopeForPrompt(prompt: string, overrides?: AgentTaskProfileOverr
 
 export function withBrowserSearchDirective(prompt: string, overrides?: AgentTaskProfileOverride): string {
   return applyBrowserSearchDirective(prompt, overrides);
+}
+
+export function withExecutionModeDirective(prompt: string, overrides?: AgentTaskProfileOverride): string {
+  const profile = buildTaskProfile(prompt, overrides);
+  if (profile.executionMode === 'staged') {
+    return [
+      'Runtime directive: This work is staged, not single-pass. Before the first write, establish a compact file-level plan and execute in bounded slices with verification between slices.',
+      '',
+      `User request: ${prompt}`,
+    ].join('\n');
+  }
+  return prompt;
 }
 
 export function isOrchestrationExecutionReady(
@@ -58,15 +75,39 @@ export function applyAdaptiveTaskProfileOverride(
   prompt: string,
   overrides?: AgentTaskProfileOverride,
   orchestrationSnapshot?: OrchestrationPlanSnapshot | null,
+  previousUserPrompt?: string | null,
 ): AgentTaskProfileOverride | undefined {
-  void prompt;
-  void orchestrationSnapshot;
-  return overrides;
+  if (!looksLikeExecutionEscapePrompt(prompt)) return overrides;
+
+  const inheritedPrompt = previousUserPrompt?.trim() || null;
+  const inheritedProfile = inheritedPrompt ? buildTaskProfile(inheritedPrompt) : null;
+
+  if (inheritedProfile?.kind === 'orchestration' || isOrchestrationExecutionReady(orchestrationSnapshot)) {
+    return {
+      ...overrides,
+      kind: 'orchestration',
+      executionMode: 'orchestration',
+    };
+  }
+
+  if (inheritedProfile?.kind === 'implementation' || inheritedProfile?.kind === 'debug') {
+    return {
+      ...overrides,
+      kind: inheritedProfile.kind,
+      executionMode: inheritedProfile.executionMode === 'staged' ? 'staged' : 'single-pass',
+    };
+  }
+
+  return {
+    ...overrides,
+    executionMode: 'single-pass',
+  };
 }
 
 export {
   looksLikeBrowserAutomationTask,
   looksLikeDebugTask,
+  looksLikeExecutionEscapePrompt,
   looksLikeImplementationTask,
   looksLikeOrchestrationTask,
   looksLikeResearchTask,
@@ -74,4 +115,6 @@ export {
   looksLikeBrowserSearchTask,
   looksLikeDelegationTask,
   looksLikeLocalCodeTask,
+  looksLikeLocalPlanningTask,
+  looksLikeScopingPrompt,
 };

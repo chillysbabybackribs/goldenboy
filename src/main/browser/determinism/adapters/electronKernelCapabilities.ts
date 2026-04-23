@@ -1,4 +1,4 @@
-import type { KernelCapabilities, CdpHandle } from '../kernelCapabilities';
+import type { CdpEventHandler, CdpHandle, KernelCapabilities } from '../kernelCapabilities';
 import type { BrowserService } from '../../BrowserService';
 
 export interface ElectronKernelCapabilitiesDeps {
@@ -10,7 +10,9 @@ export function createElectronKernelCapabilities(deps: ElectronKernelCapabilitie
 
   const cdpCache = new Map<string, CdpHandle>();
   const previousUserAgents = new Map<string, string>();
-  const blockerRegistry = new WeakMap<Electron.Session, { entries: Set<{ regexes: RegExp[] }> }>();
+  // Tracks sessions that have the Electron-regression webRequest sentinel
+  // installed. See `ensureWebRequestSentinel` below for context.
+  const sentinelSessions = new WeakSet<Electron.Session>();
 
   function requireWebContents(tabId: string): Electron.WebContents {
     const wc = browserService.getTabWebContents(tabId);
@@ -18,10 +20,21 @@ export function createElectronKernelCapabilities(deps: ElectronKernelCapabilitie
     return wc;
   }
 
-  function requireSession(tabId: string): Electron.Session {
-    const ses = browserService.getTabSession(tabId);
-    if (!ses) throw new Error(`determinism: no session for tab ${tabId}`);
-    return ses;
+  /**
+   * Workaround for electron/electron#50678: since Electron v41 (Dec 2025
+   * Chromium bump), attaching `webContents.debugger` and enabling CDP
+   * interception (Fetch/Network) can cause intermittent ERR_FAILED on
+   * main-frame navigations when no WebRequest listener is registered. The
+   * DevTools URL loader creates a header client, but with no WebRequest
+   * listeners the connection is silently dropped. Installing any no-op
+   * WebRequest listener on the session keeps the pipe alive.
+   */
+  function ensureWebRequestSentinel(session: Electron.Session): void {
+    if (sentinelSessions.has(session)) return;
+    try {
+      session.webRequest.onErrorOccurred(() => { /* sentinel — intentionally empty */ });
+      sentinelSessions.add(session);
+    } catch { /* ignore; adapter remains usable without the sentinel */ }
   }
 
   async function attachCdp(tabId: string): Promise<CdpHandle> {
@@ -29,15 +42,48 @@ export function createElectronKernelCapabilities(deps: ElectronKernelCapabilitie
     if (cached) return cached;
 
     const wc = requireWebContents(tabId);
+    ensureWebRequestSentinel(wc.session);
     if (!wc.debugger.isAttached()) {
       wc.debugger.attach('1.3');
     }
+
+    // Dispatch CDP events to per-method handler sets. Register the listener
+    // BEFORE enabling any CDP domain so we don't drop early events.
+    const listeners = new Map<string, Set<CdpEventHandler>>();
+    const onMessage = (_event: unknown, method: string, params: unknown) => {
+      const handlers = listeners.get(method);
+      if (!handlers || handlers.size === 0) return;
+      const payload = (params ?? {}) as Record<string, unknown>;
+      for (const h of handlers) {
+        try {
+          const result = h(payload);
+          if (result && typeof (result as Promise<unknown>).catch === 'function') {
+            (result as Promise<unknown>).catch(() => { /* handler already owns its errors */ });
+          }
+        } catch { /* ignore */ }
+      }
+    };
+    wc.debugger.on('message', onMessage);
+
     await wc.debugger.sendCommand('Page.enable');
     await wc.debugger.sendCommand('Runtime.enable');
 
     const handle: CdpHandle = {
       send: (method, params) => wc.debugger.sendCommand(method, params ?? {}),
+      on: (event, handler) => {
+        let set = listeners.get(event);
+        if (!set) { set = new Set(); listeners.set(event, set); }
+        set.add(handler);
+      },
+      off: (event, handler) => {
+        const set = listeners.get(event);
+        if (!set) return;
+        set.delete(handler);
+        if (set.size === 0) listeners.delete(event);
+      },
       detach: async () => {
+        try { wc.debugger.removeListener('message', onMessage); } catch { /* ignore */ }
+        listeners.clear();
         try { if (wc.debugger.isAttached()) wc.debugger.detach(); } catch { /* ignore */ }
         cdpCache.delete(tabId);
       },
@@ -88,47 +134,8 @@ export function createElectronKernelCapabilities(deps: ElectronKernelCapabilitie
       await cdp.send('Emulation.clearDeviceMetricsOverride', {});
     },
 
-    async registerRequestBlocker(tabId, patterns) {
-      const ses = requireSession(tabId);
-      const regexes = patterns.map(globToRegex);
-      const entry = { regexes };
-      const existing = blockerRegistry.get(ses);
-      if (existing) {
-        existing.entries.add(entry);
-      } else {
-        const entries = new Set<{ regexes: RegExp[] }>([entry]);
-        ses.webRequest.onBeforeRequest(
-          { urls: ['<all_urls>'] },
-          (details, callback) => {
-            let blocked = false;
-            for (const e of entries) {
-              if (e.regexes.some(r => r.test(details.url))) { blocked = true; break; }
-            }
-            callback({ cancel: blocked });
-          },
-        );
-        blockerRegistry.set(ses, { entries });
-      }
-      return {
-        dispose: () => {
-          const record = blockerRegistry.get(ses);
-          if (!record) return;
-          record.entries.delete(entry);
-          if (record.entries.size === 0) {
-            ses.webRequest.onBeforeRequest(null);
-            blockerRegistry.delete(ses);
-          }
-        },
-      };
-    },
-
     isTabAlive(tabId) {
       return browserService.getTabWebContents(tabId) !== null;
     },
   };
-}
-
-function globToRegex(glob: string): RegExp {
-  const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp(`^${escaped}$`);
 }

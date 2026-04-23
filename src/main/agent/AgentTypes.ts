@@ -1,4 +1,5 @@
 import type { CodexItem, InvocationAttachment } from '../../shared/types/model';
+import type { FinalAnswer } from '../../shared/types/finalAnswer';
 
 export type AgentMode = 'unrestricted-dev' | 'guarded' | 'production';
 
@@ -7,6 +8,7 @@ export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'ca
 export type AgentToolStatus = 'running' | 'completed' | 'failed';
 
 export type AgentToolName =
+  | 'answer.submit'
   | 'attachments.list'
   | 'attachments.search'
   | 'attachments.read_chunk'
@@ -18,6 +20,7 @@ export type AgentToolName =
   | 'browser.forward'
   | 'browser.reload'
   | 'browser.create_tab'
+  | 'browser.open_tab'
   | 'browser.close_tab'
   | 'browser.activate_tab'
   | 'browser.click'
@@ -36,6 +39,7 @@ export type AgentToolName =
   | 'browser.wait_for'
   | 'browser.summarize_page'
   | 'browser.evaluate_js'
+  | 'browser.run_workflow'
   | 'browser.run_intent_program'
   | 'browser.get_console_events'
   | 'browser.get_network_events'
@@ -44,7 +48,6 @@ export type AgentToolName =
   | 'browser.read_cached_chunk'
   | 'browser.cache_inventory'
   | 'browser.record_finding'
-  | 'browser.pin_page'
   | 'filesystem.list'
   | 'filesystem.glob'
   | 'filesystem.search'
@@ -57,14 +60,17 @@ export type AgentToolName =
   | 'filesystem.patch'
   | 'filesystem.delete'
   | 'filesystem.move'
+  | 'memory.plan_update'
   | 'terminal.exec'
+  | 'terminal.build_repo'
+  | 'terminal.test_repo'
   | 'terminal.spawn'
   | 'terminal.write'
   | 'terminal.kill'
   | 'terminal.status'
   | 'session.resume_previous'
+  | 'skill.load'
   | 'subagent.spawn'
-  | 'context.load'
   | 'repomap.overview'
   | 'repomap.find_symbol'
   | 'repomap.describe_file'
@@ -106,6 +112,23 @@ export type AgentSkill = {
   name: string;
   path: string;
   body: string;
+  /**
+   * One-line summary of when to use this skill. Shown to the model in the
+   * skill index so it can pick which skill to load for the current task.
+   */
+  description: string;
+  /**
+   * Tool names this skill expects to call. When the model loads this skill via
+   * `skill.load`, the runtime widens the active tool scope to include these
+   * tools, bounded by the runtime's own allowlist (`runtimeScope`).
+   */
+  allowedTools: AgentToolName[];
+  /**
+   * Relevant source files referenced by the skill. Not injected into the
+   * prompt body; kept structured for future file-cache pre-warming, lint, and
+   * auditability.
+   */
+  references: string[];
 };
 
 export type AgentToolContext = {
@@ -117,6 +140,13 @@ export type AgentToolContext = {
   toolNames?: string[];
   onProgress?: (status: string) => void;
   toolScope?: AgentToolScopeState;
+  /**
+   * Upper bound of tools this turn is allowed to call. Set by the runtime from
+   * `AgentRuntimeConfig.allowedTools`. Tools that widen the active scope (e.g.
+   * `skill.load`) must clamp any additions to this set. `'all'` means the
+   * entire registered tool surface is allowed.
+   */
+  runtimeAllowedTools?: 'all' | AgentToolName[];
 };
 
 export type ConstraintStatus = 'PASS' | 'FAIL' | 'UNKNOWN' | 'ESTIMATED' | 'CONDITIONAL';
@@ -162,11 +192,10 @@ export type AgentToolDefinition<TInput = unknown> = {
 /**
  * Prior user/assistant turns for in-chat continuity.
  *
- * Providers that support real multi-turn chat (Haiku/Anthropic, Gemini) should
- * prepend these as real role-tagged messages before the current user turn so
- * the model sees actual chat history instead of an in-context Markdown recap.
- * Providers with server-side thread state (Codex app-server) can ignore this
- * field — their `thread/resume` path already carries history.
+ * Providers without durable server-side thread state would prepend these as
+ * real role-tagged messages before the current user turn so the model sees
+ * actual chat history instead of an in-context Markdown recap. Codex app-server
+ * can ignore this field because `thread/resume` already carries history.
  */
 export type AgentPriorTurn = {
   role: 'user' | 'assistant';
@@ -178,6 +207,9 @@ export type AgentRuntimeConfig = {
   agentId: string;
   role: string;
   task: string;
+  taskProfileOverride?: import('../../shared/types/model').AgentTaskProfileOverride;
+  forceFreshThread?: boolean;
+  suppressTaskMemoryContext?: boolean;
   taskId?: string;
   cwd?: string | null;
   contextPrompt?: string | null;
@@ -201,6 +233,7 @@ export type AgentProviderRequest = {
   agentId: string;
   mode: AgentMode;
   taskId?: string;
+  forceFreshThread?: boolean;
   systemPrompt: string;
   task: string;
   contextPrompt?: string | null;
@@ -209,6 +242,13 @@ export type AgentProviderRequest = {
   maxTokensOverride?: number;
   toolScope: AgentToolScopeState;
   tools: AgentToolSchemaSummary[];
+  /**
+   * Upper bound of tools this turn is allowed to call, mirrored from
+   * `AgentRuntimeConfig.allowedTools`. Used by dynamic-scope tools like
+   * `skill.load` to clamp scope expansion. `'all'` means no cap beyond the
+   * registered tool surface.
+   */
+  runtimeAllowedTools?: 'all' | AgentToolName[];
   attachments?: InvocationAttachment[];
   onToken?: (text: string) => void;
   onStatus?: (status: string) => void;
@@ -218,11 +258,16 @@ export type AgentProviderRequest = {
 export type AgentProviderResult = {
   runId?: string;
   output: string;
+  finalAnswer?: FinalAnswer;
   codexItems?: CodexItem[];
+  /**
+   * Optional provider-specific continuation hint (e.g. output truncated).
+   * When absent, {@link AgentModelService.finishIncompleteResponse} treats
+   * the turn as complete.
+   */
   completion?: {
     completed: boolean;
-    reason?: 'max_tokens' | 'budget_exhausted' | 'stalled' | 'unknown';
-    canContinue?: boolean;
+    canContinue: boolean;
   };
   usage?: {
     inputTokens: number;
@@ -239,9 +284,8 @@ export interface AgentProvider {
   /**
    * Stable identifier for the underlying provider runtime. Optional on the
    * interface for backwards compatibility with older provider adapters, but
-   * modern providers (`codex`, `haiku`, `gemini`, `app-server-backed`) all
-   * expose it so consumers like sub-agent token accounting can attribute
-   * usage correctly.
+   * live provider adapters in this repo should expose it so consumers like
+   * sub-agent token accounting can attribute usage correctly.
    */
   readonly providerId?: string;
   supportsAppToolExecutor?: boolean;

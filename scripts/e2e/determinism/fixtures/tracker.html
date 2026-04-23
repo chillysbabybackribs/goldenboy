@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head><title>determinism-tracker</title></head>
+<body>
+  <h1>tracker probe</h1>
+  <script>
+    window.__trackerProbe = { done: false, ok: null, status: null, error: null };
+    (async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const url = params.get('tracker');
+        if (!url) throw new Error('missing ?tracker= query param');
+        const r = await fetch(url, { cache: 'no-store' });
+        window.__trackerProbe.ok = r.ok;
+        window.__trackerProbe.status = r.status;
+      } catch (e) {
+        window.__trackerProbe.error = String(e && e.message ? e.message : e);
+      } finally {
+        window.__trackerProbe.done = true;
+      }
+    })();
+  </script>
+</body>
+</html>

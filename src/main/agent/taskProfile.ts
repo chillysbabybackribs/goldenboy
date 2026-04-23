@@ -1,9 +1,10 @@
+import type { AgentExecutionMode, AgentTaskKind, AgentTaskProfileOverride } from '../../shared/types/model';
 import type { AgentToolName } from './AgentTypes';
-import type { AgentTaskKind, AgentTaskProfileOverride } from '../../shared/types/model';
 import { shouldUseStrictSourceValidation } from './sourceValidationPolicy';
 
 export type AgentTaskProfile = {
   kind: AgentTaskKind;
+  executionMode: AgentExecutionMode;
   skillNames: string[];
   allowedTools: 'all' | AgentToolName[];
   canSpawnSubagents: boolean;
@@ -21,6 +22,10 @@ const ORCHESTRATION_COMPLEXITY_PATTERNS = [
   /\b(migration|rollout|architecture|system|refactor|decomposition|coordination)\b/,
   /\b(multiple surfaces|multiple areas|several modules|several teams|several components)\b/,
 ] as const;
+const IMPLEMENTATION_INTENT_RE = /\b(implement|build|patch|edit|update|modify|change|refactor|fix|wire|connect|integrate|add|remove|create|write|start)\b/;
+const SCOPING_INTENT_RE = /\b(how do (?:i|we)|what files|which files|where (?:does|would|should)|what would it take|talk through|discuss|brainstorm|approach|plan|design|architecture|scope|scoping)\b/;
+const LARGE_BUILD_RE = /\b(repo-wide|codebase-wide|workspace-wide|cross-cutting|migration|rollout|phased|staged|multi-step|multi phase|refactor)\b/;
+const EXECUTION_ESCAPE_RE = /\b(?:enough(?: already)?|stop planning|quit planning|no more planning|skip the plan|skip planning|just start|start now|go ahead and (?:start|do it|implement)|begin (?:now|implementing)|proceed (?:now|with implementation)|start implementing|just do it)\b/;
 
 function maxTurnsForPrompt(prompt: string): number {
   return shouldUseStrictSourceValidation(prompt)
@@ -33,7 +38,10 @@ export function buildTaskProfile(prompt: string, overrides?: AgentTaskProfileOve
   const base = defaultTaskProfileForKind(kind, prompt);
   return {
     ...base,
-    allowedTools: base.allowedTools,
+    executionMode: overrides?.executionMode ?? base.executionMode,
+    allowedTools: overrides?.allowedTools
+      ? (overrides.allowedTools === 'all' ? 'all' : overrides.allowedTools as AgentToolName[])
+      : base.allowedTools,
     skillNames: overrides?.skillNames ? [...overrides.skillNames] : base.skillNames,
     canSpawnSubagents: overrides?.canSpawnSubagents ?? base.canSpawnSubagents,
     maxToolTurns: overrides?.maxToolTurns ?? base.maxToolTurns,
@@ -44,7 +52,7 @@ export function buildTaskProfile(prompt: string, overrides?: AgentTaskProfileOve
 export function withBrowserSearchDirective(prompt: string, overrides?: AgentTaskProfileOverride): string {
   if (!buildTaskProfile(prompt, overrides).requiresBrowserSearchDirective) return prompt;
   return [
-    'Runtime directive: This is a browser-search task. You must call browser.research_search first with the user query. Let it open/cache one result at a time and stop when enough evidence is found. Use only browser-observed search results, cached page chunks, or pages opened in the owned browser as evidence. Do not answer from model memory or provider-native search.',
+    'Runtime directive: This is a browser-search task. You must call browser.research_search first with the user query. Open results one at a time, and stop as soon as you have enough live evidence to answer. Use only the inline evidence that research_search returns, pages you extracted from the owned browser via browser.extract_page or browser.summarize_page, and findings you persisted with browser.record_finding. Do not answer from model memory or provider-native search, and do not assume prior pages are still readable from the in-app history — re-navigate the tab and re-extract if you need to reread one.',
     '',
     `User request: ${prompt}`,
   ].join('\n');
@@ -68,9 +76,11 @@ function normalizeTaskKind(kind: AgentTaskKind): AgentTaskKind {
 function resolveTaskKind(prompt: string, overrides?: AgentTaskProfileOverride): AgentTaskKind {
   if (overrides?.kind) return normalizeTaskKind(overrides.kind);
   if (looksLikeOrchestrationTask(prompt)) return 'orchestration';
+  if (looksLikeResearchTask(prompt)) return 'research';
   if (looksLikeReviewTask(prompt)) return 'review';
   if (looksLikeDebugTask(prompt)) return 'debug';
   if (looksLikeBrowserAutomationTask(prompt)) return 'browser-automation';
+  if (looksLikeLocalPlanningTask(prompt)) return 'implementation';
   if (looksLikeImplementationTask(prompt)) return 'implementation';
   return 'general';
 }
@@ -79,11 +89,18 @@ function defaultTaskProfileForKind(
   kind: AgentTaskKind,
   prompt: string,
 ): AgentTaskProfile {
+  const executionMode = resolveExecutionMode(kind, prompt);
+  // Skill selection is model-driven via `skill.load`. The classifier still
+  // owns the deterministic scope/budget decisions (allowedTools,
+  // executionMode, canSpawnSubagents, maxToolTurns) but does not pre-load
+  // skills. Callers that need to force a specific skill can still pass
+  // `overrides.skillNames`.
   switch (normalizeTaskKind(kind)) {
     case 'orchestration':
       return {
         kind: 'orchestration',
-        skillNames: ['subagent-coordination'],
+        executionMode,
+        skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: true,
         maxToolTurns: DELEGATION_MAX_TOOL_TURNS,
@@ -92,6 +109,7 @@ function defaultTaskProfileForKind(
     case 'research':
       return {
         kind: 'research',
+        executionMode,
         skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: false,
@@ -101,7 +119,8 @@ function defaultTaskProfileForKind(
     case 'browser-automation':
       return {
         kind: 'browser-automation',
-        skillNames: ['browser-operation'],
+        executionMode,
+        skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
@@ -110,7 +129,8 @@ function defaultTaskProfileForKind(
     case 'implementation':
       return {
         kind: 'implementation',
-        skillNames: ['code-edit', 'typescript-typecheck'],
+        executionMode,
+        skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: DEFAULT_MAX_TOOL_TURNS,
@@ -119,7 +139,8 @@ function defaultTaskProfileForKind(
     case 'debug':
       return {
         kind: 'debug',
-        skillNames: ['code-edit', 'typescript-typecheck', 'test-driven-fix'],
+        executionMode,
+        skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: DEBUG_MAX_TOOL_TURNS,
@@ -128,7 +149,8 @@ function defaultTaskProfileForKind(
     case 'review':
       return {
         kind: 'review',
-        skillNames: ['code-edit', 'test-driven-fix'],
+        executionMode,
+        skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: false,
         maxToolTurns: REVIEW_MAX_TOOL_TURNS,
@@ -138,6 +160,7 @@ function defaultTaskProfileForKind(
     default:
       return {
         kind: 'general',
+        executionMode,
         skillNames: [],
         allowedTools: 'all',
         canSpawnSubagents: false,
@@ -145,6 +168,38 @@ function defaultTaskProfileForKind(
         requiresBrowserSearchDirective: false,
       };
   }
+}
+
+function resolveExecutionMode(kind: AgentTaskKind, prompt: string): AgentExecutionMode {
+  const normalizedKind = normalizeTaskKind(kind);
+  if (normalizedKind === 'orchestration') return 'orchestration';
+  if (normalizedKind === 'implementation' || normalizedKind === 'debug') {
+    if (LARGE_BUILD_RE.test(prompt.toLowerCase())) return 'staged';
+    return 'single-pass';
+  }
+  if (normalizedKind === 'general') return 'single-pass';
+  return 'single-pass';
+}
+
+export function looksLikeScopingPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return SCOPING_INTENT_RE.test(normalized);
+}
+
+export function looksLikeExecutionEscapePrompt(prompt: string): boolean {
+  return EXECUTION_ESCAPE_RE.test(prompt.toLowerCase());
+}
+
+export function looksLikeLocalPlanningTask(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const local = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|typescript|javascript|electron|compile|build|test|watcher|watch|terminal|filesystem)\b/.test(normalized);
+  return local
+    && looksLikeScopingPrompt(prompt)
+    && !looksLikeResearchTask(prompt)
+    && !looksLikeBrowserAutomationTask(prompt)
+    && !looksLikeReviewTask(prompt)
+    && !looksLikeDebugTask(prompt)
+    && !looksLikeOrchestrationTask(prompt);
 }
 
 export function looksLikeOrchestrationTask(prompt: string): boolean {
@@ -160,9 +215,12 @@ export function looksLikeOrchestrationTask(prompt: string): boolean {
 
 export function looksLikeImplementationTask(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
-  const local = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|typescript|javascript|electron|compile|build|test|fix|implement|patch|edit|refactor|terminal|filesystem)\b/.test(normalized);
+  const local = /\b(file|files|codebase|repo|repository|workspace|folder|directory|project|typescript|javascript|electron|compile|build|test|fix|implement|patch|edit|refactor|terminal|filesystem|watch|watcher)\b/.test(normalized);
+  const implementationIntent = IMPLEMENTATION_INTENT_RE.test(normalized);
   const web = /\b(search|look up|lookup|find online|research|google|web search)\b/.test(normalized);
   return local
+    && implementationIntent
+    && (!looksLikeScopingPrompt(prompt) || looksLikeExecutionEscapePrompt(prompt))
     && !web
     && !looksLikeReviewTask(prompt)
     && !looksLikeDebugTask(prompt)
@@ -191,13 +249,14 @@ export function looksLikeBrowserAutomationTask(prompt: string): boolean {
   const tabManagement = /\b(close|close out|close all|switch|activate|focus|reopen|restore|arrange|cleanup|clean up)\b/.test(normalized)
     && /\b(tab|tabs|window|windows)\b/.test(normalized);
   const browserActions = /\b(navigate|go to|open|visit|click|type|fill|submit|login|log in|sign in|upload|download|checkout)\b/.test(normalized);
+  const directNavigationTarget = /\b(?:navigate to|go to|visit|launch)\s+(?:https?:\/\/)?(?:www\.)?[a-z0-9][a-z0-9.-]{1,62}(?:\/\S*)?\b/.test(normalized);
 
   return !localContext
     && !looksLikeResearchTask(prompt)
     && !looksLikeReviewTask(prompt)
     && !looksLikeDebugTask(prompt)
     && !looksLikeOrchestrationTask(prompt)
-    && (tabManagement || (browserSurface && browserActions));
+    && (tabManagement || directNavigationTarget || (browserSurface && browserActions));
 }
 
 export function looksLikeReviewTask(prompt: string): boolean {

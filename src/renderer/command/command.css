@@ -6,7 +6,16 @@
 
 .cc-shell {
   --cc-chat-zoom: 1;
-  --cc-chat-column-width: 75%;
+  --cc-chat-column-width: 84%;
+  --cc-surface-0: #111111;
+  --cc-surface-1: #171717;
+  --cc-surface-2: #1d1d1d;
+  --cc-border-1: rgba(255, 255, 255, 0.08);
+  --cc-border-2: rgba(255, 255, 255, 0.12);
+  --cc-text-1: #ece7dc;
+  --cc-text-2: #d6d0c5;
+  --cc-text-3: #a29d94;
+  --cc-text-4: #77736b;
   --font-reading: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-code: 'IBM Plex Mono', 'Geist Mono', 'SF Mono', monospace;
   display: flex;
@@ -140,6 +149,7 @@
   border-right: none;
 }
 
+
 .cc-main.browser-host-command .cc-left {
   flex: 0 0 50%;
   border-right: 1px solid #1a1a1a;
@@ -208,17 +218,8 @@
   min-height: 76px;
 }
 
-.cc-main.browser-host-command .cc-model-selector {
-  justify-self: center;
-}
-
-.cc-main.browser-host-command .cc-model-btn {
-  padding: 4px 8px;
-  font-size: 10px;
-}
-
 .cc-main.browser-host-command .cc-chat-inner {
-  padding: 20px clamp(20px, 4vw, 48px);
+  padding: 18px clamp(18px, 3.6vw, 38px);
 }
 
 /* The floating attachment preview is positioned absolute and assumes the
@@ -469,11 +470,11 @@
 /* Inner wrapper: grows with content, starts from top */
 .cc-chat-inner {
   min-height: 100%;
-  padding: 24px clamp(48px, 6vw, 100px);
+  padding: 18px clamp(28px, 4.8vw, 68px);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 20px;
+  gap: 14px;
 }
 
 /* ─── Turn Wrapper ────────────────────────────────────────────────────── */
@@ -483,7 +484,7 @@
 .chat-turn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .chat-turn-hidden {
@@ -628,7 +629,7 @@
 .chat-msg {
   font-family: var(--font-reading);
   font-size: calc(15px * var(--cc-chat-zoom));
-  line-height: 1.7;
+  line-height: 1.62;
   white-space: pre-wrap;
   word-break: break-word;
   max-width: 100%;
@@ -637,23 +638,22 @@
 
 .chat-msg-user {
   align-self: flex-start;
-  background: #131313;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 10px 10px 3px 10px;
-  padding: 14px 22px;
-  color: #e0e0dd;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 13px 18px;
+  color: var(--cc-text-2);
   font-family: var(--font-reading);
-  font-size: calc(15px * var(--cc-chat-zoom));
+  font-size: calc(14px * var(--cc-chat-zoom));
   font-weight: 400;
-  letter-spacing: 0.1px;
+  line-height: 1.55;
+  letter-spacing: 0;
   width: var(--cc-chat-column-width);
   max-width: var(--cc-chat-column-width);
   margin-left: calc((100% - var(--cc-chat-column-width)) / 2);
   margin-right: auto;
   box-sizing: border-box;
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
 .chat-msg-model {
@@ -688,10 +688,10 @@
 
 /* Unified response text — one family, one size, one color. */
 .chat-msg-text {
-  color: #c8c8c4;
+  color: var(--cc-text-2);
   font-family: var(--font-reading);
-  font-size: calc(15px * var(--cc-chat-zoom));
-  line-height: 1.7;
+  font-size: calc(14px * var(--cc-chat-zoom));
+  line-height: 1.58;
   letter-spacing: 0;
   font-weight: 400;
   transition:
@@ -703,138 +703,120 @@
   white-space: pre-wrap;
 }
 
-/* ─── Live status line (thinking / tool activity) ─────────────────────── */
+/* ─── Live run card — streaming markdown + phase phrase ──────────────── */
 
-.chat-live-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0;
-  margin: 0 0 12px;
-  font-family: var(--font-reading);
-  font-size: calc(14px * var(--cc-chat-zoom));
-  color: #9a9a94;
-  line-height: 1;
-  overflow: hidden;
-  transition: opacity 160ms ease, height 200ms ease, margin 200ms ease;
+/* Shared shimmer keyframes, used by the phase phrase below. */
+@keyframes chat-live-shimmer {
+  from { background-position: 110% 0; }
+  to { background-position: -110% 0; }
 }
 
-.chat-live-status-hidden {
-  opacity: 0;
-  height: 0;
-  margin: 0;
-  pointer-events: none;
-}
-
-.chat-live-status-text {
-  font-family: var(--font-reading);
-  font-size: calc(14px * var(--cc-chat-zoom));
-  color: #9a9a94;
-  letter-spacing: 0.1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Thinking — three bouncing dots */
-.chat-live-status-thinking .chat-live-status-dot {
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #c8c8c4;
-  opacity: 0.5;
-  animation: chat-live-bounce 1.2s ease-in-out infinite;
-}
-
-.chat-live-status-thinking .chat-live-status-dot:nth-child(2) {
-  animation-delay: 150ms;
-}
-
-.chat-live-status-thinking .chat-live-status-dot:nth-child(3) {
-  animation-delay: 300ms;
-  margin-right: 4px;
-}
-
-/* Tool running — single rotating spinner */
-.chat-live-status-spinner {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(200, 200, 196, 0.25);
-  border-top-color: rgba(200, 200, 196, 0.85);
-  animation: chat-live-spin 700ms linear infinite;
-}
-
-.chat-live-status-stopped .chat-live-status-text {
-  color: #b0706e;
-}
-
-@keyframes chat-live-bounce {
-  0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
-  40% { transform: translateY(-3px); opacity: 0.9; }
-}
-
-@keyframes chat-live-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* ─── Live card — streaming message ──────────────────────────────────── */
-
-.chat-msg-live .chat-msg-text:empty {
-  display: none;
-}
-
-/* ─── Live timeline — interleaved text + tool segments ─────────────────── */
-
-.chat-live-timeline {
+/* The streaming markdown target. On every rAF tick while tokens are
+   arriving, live-run.ts sets `innerHTML = renderMarkdown(buffer)` on
+   this element. It's a normal markdown block — no shimmer, no cursor,
+   no container chrome. When the turn completes the same node is given
+   one authoritative render from `result.output`. */
+.chat-live-response {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  color: var(--cc-text-2);
+  font-family: var(--font-reading);
+  font-size: calc(14px * var(--cc-chat-zoom));
+  line-height: 1.58;
+  margin: 0;
+}
+
+.chat-live-segment {
+  min-width: 0;
 }
 
 .chat-live-segment-text {
-  /* Inherits .chat-msg-text / .chat-markdown styling already. */
-  margin: 0;
+  color: inherit;
 }
 
-/* Intermediate descriptive text — only a segment that is *neither* actively
-   streaming *nor* the final answer reads as a quieter muted status line.
-   The currently-streaming segment and the eventual final segment are both
-   styled identically (see below) so the visual transition from "live
-   streaming" to "final response" is imperceptible — no italic→upright
-   glyph reflow, no brightness jump. */
-.chat-msg-live .chat-live-segment-text:not(.chat-msg-streaming):not(.chat-live-final-response) {
-  color: #9a9a94;
-  font-style: italic;
+.chat-live-segment-tool {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid var(--cc-border-1);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
 }
 
-.chat-msg-live .chat-live-segment-text.chat-live-final-response,
-.chat-live-segment-text.chat-live-final-response {
-  color: #c8c8c4;
-  font-style: normal;
+.chat-live-tool-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  opacity: 0.9;
 }
 
-/* While a descriptive segment is actively streaming, skip the default
-   blinking `|` caret and sweep a soft highlight across the text instead.
-   The gradient's "resting" stops are exactly the final-response color
-   (#c8c8c4) so when the shimmer class is removed on completion, the text
-   keeps the same color and weight — only the brighter sweep band
-   disappears. Font-style stays upright end-to-end to eliminate the tiny
-   horizontal shift italic→upright would otherwise cause. */
-.chat-live-segment-text.chat-msg-streaming {
-  color: #c8c8c4;
-  font-style: normal;
+.chat-live-tool-text {
+  min-width: 0;
+  color: var(--cc-text-2);
+  font-family: var(--font-reading);
+  font-size: calc(13px * var(--cc-chat-zoom));
+  line-height: 1.45;
+}
+
+.chat-live-tool-active .chat-live-tool-indicator {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.7);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.chat-live-tool-active .chat-live-tool-text {
+  color: var(--cc-text-1);
+}
+
+.chat-live-tool-done .chat-live-tool-indicator {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.chat-live-tool-done .chat-live-tool-text {
+  color: var(--cc-text-3);
+}
+
+.chat-live-tool-failed .chat-live-tool-indicator {
+  background: rgba(176, 112, 110, 0.2);
+  border-color: rgba(176, 112, 110, 0.38);
+}
+
+.chat-live-tool-failed .chat-live-tool-text {
+  color: #c58d88;
+}
+
+/* Hide an empty response slot so the card doesn't reserve vertical space
+   before the first token arrives. */
+.chat-live-response:empty {
+  display: none;
+}
+
+/* The single phase phrase that lives below the response while the run
+   is active. This is the ONLY shimmering element in the card — the
+   response body itself never shimmers. Phrase text is driven by the
+   phase state machine in live-run.ts (Planning next moves / Drafting
+   response / Exploring ideas). */
+.chat-live-phase {
+  margin-top: 2px;
+  font-family: var(--font-reading);
+  font-size: calc(12px * var(--cc-chat-zoom));
+  line-height: 1.4;
+  letter-spacing: 0.1px;
   background-image: linear-gradient(
     100deg,
-    #c8c8c4 0%,
-    #c8c8c4 38%,
-    #ffffff 50%,
-    #c8c8c4 62%,
-    #c8c8c4 100%
+    #8a8a84 0%,
+    #8a8a84 38%,
+    #e8e8e4 50%,
+    #8a8a84 62%,
+    #8a8a84 100%
   );
   background-size: 220% 100%;
   background-position: 110% 0;
@@ -844,296 +826,20 @@
   animation: chat-live-shimmer 2.4s linear infinite;
 }
 
-/* Inline code keeps its own fill color so it stays legible while the
-   surrounding prose is shimmering. */
-.chat-live-segment-text.chat-msg-streaming code {
-  -webkit-text-fill-color: #d8d8d4;
-          color: #d8d8d4;
-}
-
-/* Suppress the generic caret pseudo-element on streaming timeline segments. */
-.chat-live-segment-text.chat-msg-streaming::after {
-  content: none;
-}
-
-@keyframes chat-live-shimmer {
-  from { background-position: 110% 0; }
-  to { background-position: -110% 0; }
-}
-
-/* Collapsed "what the agent did" disclosure shown above the final answer
-   once the turn is done. Holds the prior tool rows (and any leftover
-   intermediate text segments) so the history stays available on click. */
-.chat-live-history {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  margin: 0 0 8px;
-  overflow: hidden;
-}
-
-.chat-live-history-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  font-family: var(--font-reading);
-  font-size: calc(12px * var(--cc-chat-zoom));
-  color: #7a7a74;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  outline: none;
-  transition: color 140ms;
-}
-
-.chat-live-history-summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-live-history-summary:hover {
-  color: #a8a8a2;
-}
-
-.chat-live-history-chevron {
-  display: inline-block;
-  font-size: 9px;
-  color: #555;
-  width: 10px;
-  text-align: center;
-  transition: transform 160ms ease;
-}
-
-.chat-live-history[open] .chat-live-history-chevron {
-  transform: rotate(90deg);
-}
-
-.chat-live-history-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 4px 10px 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-/* Text rows inside the history body visually shrink slightly so the
-   disclosure doesn't dominate; the final answer below stays the hero. */
-.chat-live-history-body .chat-live-segment-text {
-  color: #7a7a74;
-  font-style: italic;
-  font-size: calc(13px * var(--cc-chat-zoom));
-}
-
-/* Tool calls live inside a fixed-height, auto-scrolling "pack" so a long-
-   running task (dozens/hundreds of tool invocations) can't push the rest
-   of the chat offscreen. Each consecutive run of tools gets its own pack;
-   a new text segment closes the current pack and opens a fresh one below
-   it so the text → tools → text → tools interleaving is preserved. */
-.chat-live-segment-tool-pack {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  max-height: 240px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  overflow: hidden;
-}
-
-.chat-live-tool-pack-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  font-family: var(--font-mono);
-  font-size: calc(10px * var(--cc-chat-zoom));
-  color: #7a7a74;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  flex-shrink: 0;
-}
-
-.chat-live-tool-pack-label {
-  opacity: 0.85;
-}
-
-.chat-live-tool-pack-count {
-  padding: 1px 6px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #c8c8c4;
-  font-size: calc(10px * var(--cc-chat-zoom));
-  letter-spacing: 0;
-}
-
-.chat-live-tool-pack-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 4px 0;
-  scroll-behavior: smooth;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
-}
-
-.chat-live-tool-pack-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.chat-live-tool-pack-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-}
-
-.chat-live-tool-pack-list::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* When the pack is inside the history disclosure after a turn completes,
-   let it grow naturally — the disclosure itself is what controls the
-   overall height, so removing the cap avoids a double scroll. */
-.chat-live-history-body .chat-live-segment-tool-pack {
-  max-height: none;
-  border: none;
-  background: transparent;
-}
-
-.chat-live-history-body .chat-live-tool-pack-header {
-  display: none;
-}
-
-.chat-live-history-body .chat-live-tool-pack-list {
-  overflow: visible;
-  padding: 0;
-}
-
-.chat-live-tool-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  font-family: var(--font-mono);
-  font-size: calc(12px * var(--cc-chat-zoom));
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-  animation: chat-live-tool-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.chat-live-tool-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: #555;
-}
-
-.chat-live-tool-row-active .chat-live-tool-dot {
-  background: #c8c8c4;
-  animation: chat-tool-dot-pulse 1.2s ease-in-out infinite;
-}
-
-.chat-live-tool-row-active .chat-live-tool-text {
-  color: #d4d4d0;
-}
-
-.chat-live-tool-row-done .chat-live-tool-dot {
-  background: #666;
-}
-
-.chat-live-tool-row-done .chat-live-tool-text {
-  color: #888;
-}
-
-.chat-live-tool-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@keyframes chat-live-tool-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes chat-tool-dot-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-
-/* ─── Retracted tool panel — same slot, collapsed to a summary row ─── */
-
-.chat-live-tools-done {
-  margin: 2px 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  overflow: hidden;
-  transition: max-height 220ms ease, background 220ms ease;
-}
-
-.chat-live-tools-collapsed {
-  /* Replaces the live header + scrolling list with a single-line summary;
-     clicking expands the list in place. */
-}
-
-.chat-live-tools-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  font-family: var(--font-reading);
-  font-size: calc(12px * var(--cc-chat-zoom));
-  color: #7a7a74;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  outline: none;
-  transition: color 140ms;
-}
-
-.chat-live-tools-summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-live-tools-summary:hover {
-  color: #a8a8a2;
-}
-
-.chat-live-tools-summary-chevron {
-  font-size: 9px;
-  color: #555;
-  transition: transform 160ms ease;
-  line-height: 1;
-  width: 10px;
-  text-align: center;
-}
-
-.chat-live-tools-collapsed[open] .chat-live-tools-summary-chevron {
-  transform: rotate(90deg);
-}
-
-.chat-live-tools-summary-text {
-  font-family: var(--font-reading);
-  letter-spacing: 0.2px;
-}
-
-/* When expanded, reveal the preserved tool list (reused from the live panel). */
-.chat-live-tools-collapsed .chat-live-tools-list {
-  max-height: 160px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-  padding: 6px 0;
+/* Cancelled run — swap the shimmer for a plain red-tinted "Stopped". */
+.chat-live-phase-stopped {
+  background: none;
+  -webkit-text-fill-color: #b0706e;
+          color: #b0706e;
+  animation: none;
 }
 
 /* ─── Done response ───────────────────────────────────────────────────── */
 
 .chat-msg-done .chat-msg-text:not(.chat-markdown) {
-  color: #c8c8c4;
-  font-size: calc(15px * var(--cc-chat-zoom));
-  line-height: 1.7;
+  color: var(--cc-text-2);
+  font-size: calc(14px * var(--cc-chat-zoom));
+  line-height: 1.58;
 }
 
 .chat-msg-streaming::after {
@@ -1161,23 +867,38 @@
   font-style: italic;
 }
 
-/* ─── Chat Markdown (unified, flat hierarchy) ─────────────────────────── */
+/* ─── Chat Markdown (enterprise hierarchy) ────────────────────────────── */
 
-/* All block types inherit the body size and color — headings just get weight. */
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3,
 .chat-markdown h4 {
   font-family: var(--font-reading);
-  color: #e4e4de;
-  font-size: calc(15px * var(--cc-chat-zoom));
-  font-weight: 600;
+  color: var(--cc-text-1);
+  font-weight: 620;
   letter-spacing: 0;
-  line-height: 1.5;
-  margin: 14px 0 6px;
+  line-height: 1.3;
+  margin: 18px 0 10px;
   padding: 0;
   border: none;
   text-transform: none;
+}
+
+.chat-markdown h1 {
+  font-size: calc(20px * var(--cc-chat-zoom));
+}
+
+.chat-markdown h2 {
+  font-size: calc(18px * var(--cc-chat-zoom));
+}
+
+.chat-markdown h3 {
+  font-size: calc(16px * var(--cc-chat-zoom));
+}
+
+.chat-markdown h4 {
+  font-size: calc(15px * var(--cc-chat-zoom));
+  letter-spacing: 0;
 }
 
 .chat-markdown h1:first-child,
@@ -1189,32 +910,15 @@
 
 .chat-markdown p {
   font-family: var(--font-reading);
-  font-size: calc(15px * var(--cc-chat-zoom));
-  color: #c8c8c4;
-  line-height: 1.7;
+  font-size: calc(14px * var(--cc-chat-zoom));
+  color: var(--cc-text-2);
+  line-height: 1.58;
+  letter-spacing: 0;
   margin: 0 0 10px;
 }
 
 .chat-markdown p + p {
-  position: relative;
-  margin-top: 18px;
-  padding-top: 18px;
-}
-
-.chat-markdown p + p::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0),
-    rgba(255, 255, 255, 0.12) 10%,
-    rgba(255, 255, 255, 0.12) 90%,
-    rgba(255, 255, 255, 0)
-  );
+  margin-top: 2px;
 }
 
 .chat-markdown p:last-child {
@@ -1223,8 +927,8 @@
 
 .chat-markdown ul,
 .chat-markdown ol {
-  padding-left: 18px;
-  margin: 4px 0 10px;
+  padding-left: 20px;
+  margin: 8px 0 14px;
 }
 
 .chat-markdown ul {
@@ -1235,10 +939,10 @@
 .chat-markdown ul > li,
 .chat-markdown ol > li {
   font-family: var(--font-reading);
-  font-size: calc(15px * var(--cc-chat-zoom));
-  color: #c8c8c4;
-  line-height: 1.7;
-  margin: 4px 0;
+  font-size: calc(14px * var(--cc-chat-zoom));
+  color: var(--cc-text-2);
+  line-height: 1.55;
+  margin: 5px 0;
 }
 
 .chat-markdown ul > li {
@@ -1247,36 +951,42 @@
 }
 
 .chat-markdown ul > li::before {
-  content: '–';
+  content: '•';
   position: absolute;
   left: 0;
-  color: rgba(255, 255, 255, 0.28);
-  font-weight: 400;
+  color: rgba(255, 255, 255, 0.34);
+  font-weight: 500;
 }
 
 .chat-markdown ol > li::marker {
-  color: rgba(255, 255, 255, 0.32);
-  font-weight: 400;
+  color: rgba(255, 255, 255, 0.42);
+  font-weight: 500;
 }
 
 /* Inline code — same size as body, mono font, subtle tint */
 .chat-markdown code {
   font-family: var(--font-code);
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-size: calc(14px * var(--cc-chat-zoom));
-  color: #e4d7a8;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: calc(13px * var(--cc-chat-zoom));
+  color: #d8d1c4;
   letter-spacing: 0;
 }
 
-/* Code blocks */
+/* Code blocks — dark panel to match the agent sidebar, with a fixed
+   scroll height so long snippets don't balloon the chat pane. The copy
+   button sits outside the scrolling area (it's absolutely positioned on
+   the <pre>, while the scroll container is the inner <code>). */
 .chat-markdown pre {
-  margin: 10px 0 14px;
-  border-radius: 6px;
-  background: #0d1117;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  position: relative;
+  margin: 12px 0 14px;
+  border-radius: 12px;
+  background: #151515;
+  border: 1px solid rgba(255, 255, 255, 0.07);
   overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
 }
 
 .chat-markdown pre code {
@@ -1286,16 +996,97 @@
   border: none;
   border-radius: 0;
   font-size: calc(13px * var(--cc-chat-zoom));
-  color: #c8c8c4;
+  color: #d6d6d1;
   line-height: 1.6;
-  overflow-x: auto;
+  max-height: 360px;
+  overflow: auto;
   white-space: pre;
   letter-spacing: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+.chat-markdown pre code::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.chat-markdown pre code::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.chat-markdown pre code::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.chat-markdown pre code::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-markdown pre code::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Click-to-copy button that overlays each fenced code block. */
+.chat-code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(13, 13, 13, 0.9);
+  color: rgba(230, 230, 225, 0.55);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-1px);
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease;
+  z-index: 1;
+}
+
+.chat-markdown pre:hover .chat-code-copy-btn,
+.chat-code-copy-btn:focus-visible,
+.chat-code-copy-btn.chat-code-copy-btn-copied {
+  opacity: 1;
+}
+
+.chat-code-copy-btn:hover {
+  color: #f2f2ec;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.chat-code-copy-btn:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.chat-code-copy-btn-copied,
+.chat-code-copy-btn-copied:hover {
+  color: #9ad9a4;
+  border-color: rgba(154, 217, 164, 0.35);
+  background: rgba(154, 217, 164, 0.08);
+}
+
+.chat-code-copy-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
 }
 
 .chat-markdown strong {
-  font-weight: 600;
-  color: #e4e4de;
+  font-weight: 620;
+  color: #f0f0eb;
 }
 
 .chat-markdown em {
@@ -1305,79 +1096,43 @@
 
 .chat-markdown hr {
   border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  margin: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 18px 0;
 }
 
 .chat-markdown blockquote {
-  margin: 10px 0;
-  padding: 2px 0 2px 12px;
-  border-left: 2px solid rgba(255, 255, 255, 0.1);
-  color: #c8c8c4;
+  margin: 12px 0;
+  padding: 4px 0 4px 14px;
+  border-left: 2px solid rgba(255, 255, 255, 0.14);
+  color: #cfcfc9;
   font-style: normal;
 }
 
 /* ─── Inline file-path references + external links ───────────────────── */
 
-/* `[label](/abs/path:line)` renders as an inline `<details>` chip: the
-   underlined label IS the summary, so the whole thing stays on the same
-   baseline as surrounding prose. Clicking the label reveals a small path
-   pill next to it for copy/paste or external opening. Using `<details>`
-   for the outer element (rather than nesting one inside a `<span>`) is
-   what keeps the flow inline in Chromium — a nested `<details>` is
-   treated as block-level regardless of `display: inline`. */
-.chat-markdown details.chat-file-ref {
-  display: inline;
-}
-
-.chat-markdown .chat-file-ref-text {
-  display: inline;
-  cursor: pointer;
-  list-style: none;
-  color: #d4d4d0;
-  text-decoration: underline;
-  text-decoration-color: rgba(255, 255, 255, 0.18);
-  text-underline-offset: 2px;
-  user-select: text;
-  transition: text-decoration-color 140ms, color 140ms;
-}
-
-.chat-markdown .chat-file-ref-text::-webkit-details-marker,
-.chat-markdown .chat-file-ref-text::marker {
-  display: none;
-  content: '';
-}
-
-.chat-markdown .chat-file-ref-text:hover {
-  color: #ffffff;
-  text-decoration-color: rgba(255, 255, 255, 0.5);
-}
-
-.chat-markdown details.chat-file-ref[open] > .chat-file-ref-text {
-  color: #ffffff;
-  text-decoration-color: rgba(255, 255, 255, 0.5);
-}
-
-.chat-markdown .chat-file-ref-path {
-  display: inline-block;
-  margin: 0 0 0 6px;
-  padding: 1px 6px;
-  font-family: var(--font-mono);
-  font-size: calc(11px * var(--cc-chat-zoom));
-  line-height: 1.5;
-  color: #9a9a94;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+.chat-markdown .chat-file-ref {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  padding: 1px 7px;
+  margin: 0 0.12em;
+  font-family: var(--font-code);
+  font-size: calc(13px * var(--cc-chat-zoom));
+  line-height: 1.45;
+  color: #ddd7bc;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 4px;
   vertical-align: baseline;
-  word-break: break-all;
   user-select: text;
+  white-space: nowrap;
+  box-decoration-break: clone;
 }
 
 .chat-markdown .chat-external-link {
-  color: #d4d4d0;
+  color: #deded8;
   text-decoration: underline;
-  text-decoration-color: rgba(255, 255, 255, 0.25);
+  text-decoration-color: rgba(255, 255, 255, 0.22);
   text-underline-offset: 2px;
 }
 
@@ -2125,7 +1880,7 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 18px clamp(32px, 4vw, 64px) 20px;
+  padding: 14px clamp(20px, 3.2vw, 40px) 14px;
   border-top: none;
   background: transparent;
   flex-shrink: 0;
@@ -2182,7 +1937,7 @@
 
 .cc-compose-shell {
   position: relative;
-  width: 62%;
+  width: min(92%, 1180px);
   max-width: 100%;
   display: flex;
   flex-direction: column;
@@ -2196,34 +1951,65 @@
   pointer-events: auto;
 }
 
+/* Drop zone — activates while a file drag is over the composer. The overlay
+   sits above the input but below the floating popups. */
+.cc-compose-shell.is-dragging::before {
+  content: 'Drop to attach — images are optimized, docs are imported';
+  position: absolute;
+  inset: -6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(122, 180, 122, 0.7);
+  border-radius: 6px;
+  background: rgba(122, 180, 122, 0.08);
+  color: #b7e5b7;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  z-index: 5;
+}
+
 /* ─── Compose Box — unified textarea container ───────────────────────── */
 
 .cc-compose-box {
   position: relative;
-  background: #141414;
-  border: 1.5px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
+  background: var(--cc-surface-1);
+  border: 1px solid var(--cc-border-2);
+  border-radius: 16px;
   overflow: hidden;
   box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.55),
-    0 1px 4px rgba(0, 0, 0, 0.35),
-    inset 0 3px 10px rgba(0, 0, 0, 0.6),
-    inset 0 1px 2px rgba(0, 0, 0, 0.45);
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
   transition: border-color 240ms ease, box-shadow 240ms ease;
   pointer-events: auto;
 }
 
 .cc-compose-box:focus-within {
-  border-color: rgba(160, 160, 160, 0.30);
+  border-color: rgba(255, 255, 255, 0.16);
   box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.55),
-    0 1px 4px rgba(0, 0, 0, 0.35),
-    inset 0 4px 14px rgba(0, 0, 0, 0.65),
-    inset 0 1px 3px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(180, 180, 180, 0.10),
-    0 0 8px rgba(150, 150, 150, 0.08),
-    0 0 3px rgba(180, 180, 180, 0.12);
-  animation: cc-input-glow 2.4s ease-in-out infinite;
+    0 10px 28px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  animation: none;
+}
+
+.cc-compose-model-btn {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.cc-compose-model-btn.cc-model-btn-active {
+  color: var(--cc-text-2);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.cc-compose-model-btn.cc-model-btn-unavailable {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 @keyframes cc-input-glow {
@@ -2238,37 +2024,66 @@
 .cc-compose-utility-actions {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 6px;
+  gap: 6px;
+  margin-left: 8px;
+  flex: 0 0 auto;
 }
 
 .cc-compose-utility-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 24px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: #4d4d4d;
-  background: none;
-  border: none;
-  padding: 0 8px;
+  min-height: 26px;
+  font-family: var(--font-reading);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--cc-text-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 9px;
   cursor: pointer;
-  transition: color 140ms, background 140ms;
+  transition: color 140ms, background 140ms, border-color 140ms;
   -webkit-app-region: no-drag;
   white-space: nowrap;
 }
 
 .cc-compose-utility-btn + .cc-compose-utility-btn {
-  border-left: 1px solid #232323;
+  border-left: none;
 }
 
-.cc-compose-utility-btn:hover { color: #8c8c8c; }
-.cc-compose-utility-btn:active { color: #d0d0d0; }
+.cc-compose-utility-btn:hover {
+  color: var(--cc-text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+.cc-compose-utility-btn:active { color: #f0ece3; }
 .cc-compose-utility-btn.active { color: #e8d98a; }
+
+.cc-compose-mask-utility-btn {
+  color: var(--cc-text-3);
+}
+
+.cc-compose-mask-utility-status {
+  min-width: 0;
+  max-width: 220px;
+  color: var(--cc-text-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-compose-mask-utility-status.is-success {
+  color: #8fd18f;
+}
+
+.cc-compose-mask-utility-status.is-error {
+  color: #e38b8b;
+}
 
 .cc-new-chat-btn {
   white-space: nowrap;
@@ -2280,9 +2095,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  padding: 10px 18px;
+  min-height: 52px;
+  padding: 8px 14px 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.015);
   flex-shrink: 0;
   position: relative;
   z-index: 2;
@@ -2302,11 +2118,11 @@
 .cc-model-selector {
   display: inline-flex;
   align-items: center;
-  background: #181818;
-  border: 1px solid #2a2a2a;
-  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
   padding: 2px;
-  gap: 2px;
+  gap: 0;
   -webkit-app-region: no-drag;
 }
 
@@ -2315,14 +2131,14 @@
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 4px 10px;
-  color: #555;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 4px 12px;
+  color: var(--cc-text-3);
+  font-family: var(--font-reading);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   cursor: pointer;
   transition: background 120ms, color 120ms, border-color 120ms;
   white-space: nowrap;
@@ -2338,9 +2154,9 @@
 }
 
 .cc-model-btn.cc-model-btn-active {
-  background: #252525;
-  border-color: #444;
-  color: #e0e0e0;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--cc-text-1);
   cursor: default;
 }
 
@@ -2374,14 +2190,14 @@
 
 .cc-history-btn-inset {
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: 14px;
+  right: 14px;
   z-index: 1;
-  width: 28px;
-  height: 28px;
-  color: #666;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  width: 30px;
+  height: 30px;
+  color: var(--cc-text-4);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .cc-history-btn-inset svg {
@@ -2463,6 +2279,39 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   background: rgba(0, 0, 0, 0.4);
+}
+
+/* Size badge: original file size, updated with "X → Y (-P%)" once the
+   optimizer has decided how much we can cut for Codex. */
+.cc-attach-preview-item .cc-preview-size {
+  display: block;
+  padding: 2px 8px 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #888;
+  background: rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-attach-preview-item .cc-preview-size--pending {
+  color: #666;
+  font-style: italic;
+}
+
+.cc-attach-preview-item .cc-preview-size--saved {
+  color: #7ec47e;
+}
+
+.cc-attach-preview-item .cc-preview-size-arrow {
+  opacity: 0.6;
+  margin: 0 2px;
+}
+
+.cc-attach-preview-item .cc-preview-size-delta {
+  color: #9adc9a;
+  font-weight: 600;
 }
 
 .cc-attach-preview-item .cc-preview-remove {
@@ -2654,27 +2503,27 @@
 
 .cc-input {
   width: 100%;
-  min-height: 96px;
-  max-height: 280px;
+  min-height: 68px;
+  max-height: 220px;
   resize: none;
   background: transparent;
   border: none;
-  padding: 22px 54px 22px 24px;
-  color: #d4d4d4;
-  font-family: var(--font-mono);
-  font-size: 20px;
+  padding: 16px 52px 12px 16px;
+  color: var(--cc-text-1);
+  font-family: var(--font-reading);
+  font-size: 18px;
   font-weight: 400;
-  letter-spacing: 0.15px;
-  line-height: 1.6;
+  letter-spacing: 0;
+  line-height: 1.5;
   outline: none;
   overflow-y: auto;
-  caret-color: #888;
+  caret-color: #c9c4b8;
 }
 
 .cc-input::placeholder {
-  color: rgba(255, 255, 255, 0.18);
-  font-weight: 300;
-  letter-spacing: 0.4px;
+  color: rgba(255, 255, 255, 0.28);
+  font-weight: 400;
+  letter-spacing: 0;
 }
 
 .cc-attach-group {
@@ -2685,18 +2534,22 @@
 .cc-attach-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 6px;
-  background: none;
-  border: none;
-  color: #4d4d4d;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  justify-content: center;
+  gap: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--cc-text-4);
+  font-family: var(--font-reading);
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   cursor: pointer;
-  transition: color 140ms;
+  transition: color 140ms, background 140ms, border-color 140ms;
   -webkit-app-region: no-drag;
 }
 
@@ -2706,8 +2559,14 @@
   flex-shrink: 0;
 }
 
+.cc-attach-btn span {
+  display: none;
+}
+
 .cc-attach-btn:hover {
-  color: #8c8c8c;
+  color: var(--cc-text-2);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
 }
 
 .cc-attach-btn:active {
@@ -2717,50 +2576,75 @@
 .cc-compose-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   justify-self: end;
+  min-width: 0;
+  flex-wrap: nowrap;
   position: relative;
   z-index: 2;
   pointer-events: auto;
 }
 
-/* ─── Stop Button ────────────────────────────────────────────────────── */
+/* ─── Stop Button — inset white circle with square glyph ─────────────── */
 
 .cc-stop-btn {
-  padding: 5px 12px;
-  background: none;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
-  color: #aaa;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: #efefed;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  color: #111;
   cursor: pointer;
-  transition: color 150ms, border-color 150ms, background 150ms;
+  transition: background 140ms ease, box-shadow 140ms ease, transform 100ms ease;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   -webkit-app-region: no-drag;
 }
 
+.cc-stop-btn-inset {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+}
+
+.cc-stop-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
 .cc-stop-btn:hover {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  background: #ffffff;
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
 
 .cc-stop-btn:active {
-  transform: scale(0.96);
-  color: #fff;
+  transform: scale(0.92);
 }
 
 .cc-stop-btn[hidden] {
   display: none;
 }
 
-.cc-stop-btn:disabled {
-  opacity: 0.5;
+.cc-stop-btn:disabled,
+.cc-stop-btn.cc-stop-btn-stopping {
+  opacity: 0.65;
   cursor: default;
   pointer-events: none;
+}
+
+/* While the stop button is visible (task running), the history icon
+   would sit in the same inset slot — hide it to avoid collision. */
+.cc-stop-btn-inset:not([hidden]) ~ .cc-history-btn-inset {
+  display: none;
 }
 
 
@@ -3334,7 +3218,7 @@
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  margin-top: 6px;
+  margin-top: 4px;
   padding: 0;
   width: 100%;
 }

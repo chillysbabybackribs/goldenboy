@@ -1,14 +1,24 @@
+---
+name: typescript-typecheck
+description: Use when the task involves TypeScript errors, type mismatches, missing types, or any change to typed interfaces, function signatures, or shared types.
+allowed-tools:
+  - terminal.exec
+  - terminal.build_repo
+  - filesystem.read_file_chunk
+  - filesystem.search_file_cache
+  - filesystem.patch
+  - filesystem.read
+references:
+  - tsconfig.json
+  - tsconfig.main.json
+  - tsconfig.preload.json
+  - tsconfig.renderer.json
+  - src/shared/types/
+---
+
 # TypeScript Typecheck
 
 Use this skill when a task involves TypeScript errors, type mismatches, missing types, or any change to typed interfaces, function signatures, or shared types.
-
-## Relevant Files
-
-- `tsconfig.json`
-- `tsconfig.main.json`
-- `tsconfig.preload.json`
-- `tsconfig.renderer.json`
-- `src/shared/types/` — shared contracts across processes
 
 ## Workflow
 
@@ -22,6 +32,12 @@ Use this skill when a task involves TypeScript errors, type mismatches, missing 
 5. Re-run the same scoped typecheck.
 6. Repeat until output is clean.
 7. Do not widen types (`any`, `unknown` casts) to silence errors — fix the root mismatch.
+
+## Rules
+
+- This skill governs typecheck procedure only. It does not decide whether the task should stay plan-only or perform edits.
+- Prefer scoped `tsc` runs before full builds when the failure surface is local.
+- Use `npm run build` only when cross-process typing or final verification is actually needed.
 
 ## Preferred Tools
 
