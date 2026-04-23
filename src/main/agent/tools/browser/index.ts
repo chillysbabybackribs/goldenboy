@@ -5,10 +5,10 @@ import { pageKnowledgeStore } from '../../../browserKnowledge/PageKnowledgeStore
 import { appStateStore } from '../../../state/appStateStore';
 import { ActionType } from '../../../state/actions';
 import { generateId } from '../../../../shared/utils/ids';
-import { geminiSidecar } from '../../GeminiSidecar';
 import { WebIntentInstruction, WebIntentVM } from '../../../browser/WebIntentVM';
 import { agentCache } from '../../AgentCache';
 import { normalizeWebsiteTarget } from '../../../browser/navigationTarget';
+import { listRegisteredBrowserWorkflows, runRegisteredBrowserWorkflow } from '../../workflows';
 import {
   BrowserOperationKind,
   BrowserOperationPayloadMap,
@@ -16,10 +16,48 @@ import {
   executeBrowserOperation,
 } from '../../../browser/browserOperations';
 import type { BrowserFindingSeverity } from '../../../../shared/types/browserIntelligence';
+import {
+  DeterministicTabService,
+  openTabDeterministic,
+} from './openTabDeterministic';
+import { DeterministicKernel } from '../../../browser/determinism/DeterministicKernel';
+import { createElectronKernelCapabilities } from '../../../browser/determinism/adapters/electronKernelCapabilities';
+import { userAgentPin } from '../../../browser/determinism/pins/userAgentPin';
+import { visualPin } from '../../../browser/determinism/pins/visualPin';
+import { networkBlocklistPin } from '../../../browser/determinism/pins/networkBlocklistPin';
+import { viewportPin } from '../../../browser/determinism/pins/viewportPin';
+import { localeTimezonePin } from '../../../browser/determinism/pins/localeTimezonePin';
+import { seedAndClockPin } from '../../../browser/determinism/pins/seedAndClockPin';
+import type { DeterminismConfig } from '../../../browser/determinism/kernelTypes';
 
-const SIDECAR_RANK_TIMEOUT_MS = 1200;
-const SIDECAR_JUDGE_TIMEOUT_MS = 1200;
 const GOOGLE_HOME_URL = 'https://www.google.com/';
+
+let determinismKernel: DeterministicKernel | null = null;
+
+function getKernel(): DeterministicKernel {
+  if (!determinismKernel) {
+    determinismKernel = new DeterministicKernel({
+      capabilities: createElectronKernelCapabilities({ browserService }),
+      pins: [
+        userAgentPin,
+        visualPin,
+        viewportPin,
+        localeTimezonePin,
+        seedAndClockPin,
+        networkBlocklistPin,
+      ],
+    });
+  }
+  return determinismKernel;
+}
+
+function normalizeDeterministicInput(raw: unknown): true | Record<string, unknown> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (raw === true) return true;
+  if (raw === false) return undefined;
+  if (typeof raw === 'object') return raw as Record<string, unknown>;
+  throw new TypeError('browser.open_tab: deterministic must be boolean or an object');
+}
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -41,6 +79,10 @@ function optionalString(input: Record<string, unknown>, key: string): string | u
 function optionalNumber(input: Record<string, unknown>, key: string, fallback: number): number {
   const value = input[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function optionalBoolean(input: Record<string, unknown>, key: string): boolean {
+  return input[key] === true;
 }
 
 function optionalStringArray(input: Record<string, unknown>, key: string): string[] {
@@ -138,35 +180,6 @@ export function buildWaitForTextExpression(): string {
 function compactText(text: string | undefined, maxChars: number): string {
   const cleaned = (text || '').replace(/\s+/g, ' ').trim();
   return cleaned.length > maxChars ? `${cleaned.slice(0, maxChars)}...` : cleaned;
-}
-
-async function resolveWithSoftTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: T,
-): Promise<{ value: T; timedOut: boolean }> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve({ value: fallback, timedOut: true });
-    }, timeoutMs);
-
-    promise
-      .then((value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ value, timedOut: false });
-      })
-      .catch(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ value: fallback, timedOut: false });
-      });
-  });
 }
 
 function queryTerms(query: string): string[] {
@@ -387,7 +400,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
   return [
     {
       name: 'browser.navigate',
-      description: 'Navigate the active tab to a URL. Set normalize=true to treat bare domains (e.g. "example") as "example.com". Use browser.create_tab for a new tab, browser.research_search for search workflows.',
+      description: 'Navigate the active tab to a URL. Set normalize=true to treat bare domains (e.g. "example") as "example.com". Use browser.open_tab (deterministic; supports reuseExisting) for a new tab, browser.research_search for search workflows.',
       inputSchema: {
         type: 'object',
         required: ['url'],
@@ -461,26 +474,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           cachePageForTab(pageExtractor, searchTabId, context.taskId),
           browserService.extractSearchResults(searchTabId, resultLimit),
         ]);
-        const defaultRankedResults = {
-          results: searchResults,
-          modelId: null,
-          reason: null,
-        };
-        const rankedResult = await resolveWithSoftTimeout(
-          geminiSidecar.rankSearchResults(query, searchResults.map(result => ({
-            index: result.index,
-            title: result.title,
-            url: result.url,
-            snippet: result.snippet,
-          }))),
-          SIDECAR_RANK_TIMEOUT_MS,
-          defaultRankedResults,
-        );
-        const ranked = rankedResult.value;
-        const rankedSearchResults = ranked.results.map(result => {
-          const original = searchResults.find(item => item.index === result.index);
-          return original || result;
-        });
+        const rankedSearchResults = [...searchResults];
         const cacheMatches = pageKnowledgeStore.answerFromCache(query, {
           tabId: searchTabId,
           limit: 4,
@@ -518,21 +512,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             keyFacts: evidence?.keyFacts,
             matchSnippets,
           });
-          const judgeResult = await resolveWithSoftTimeout(
-            geminiSidecar.judgeEvidence({
-              query,
-              title: evidence?.title || page.title || target.title,
-              url: evidence?.url || page.url || target.url,
-              summary: evidence?.summary || '',
-              keyFacts: evidence?.keyFacts || [],
-              snippets: matchSnippets,
-            }),
-            SIDECAR_JUDGE_TIMEOUT_MS,
-            null,
-          );
-          const geminiJudge = judgeResult.value;
-          const geminiScore = geminiJudge ? Math.round(geminiJudge.score * 1.2) : null;
-          const sufficient = geminiJudge?.sufficient === true || score.score >= minEvidenceScore || score.sufficient;
+          const sufficient = score.score >= minEvidenceScore || score.sufficient;
           progress(
             sufficient
               ? `result ${target.index} appears sufficient`
@@ -551,13 +531,11 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             dates: (evidence?.dates || []).slice(0, 4),
             sourceLinks: (evidence?.sourceLinks || []).slice(0, 4),
             suggestedChunkIds: relevantChunks.suggestedChunkIds,
-            evidenceScore: geminiScore ?? score.score,
+            evidenceScore: score.score,
             deterministicEvidenceScore: score.score,
             answerLikely: sufficient,
-            scoreReasons: geminiJudge?.reasons.length ? geminiJudge.reasons : score.reasons,
-            judgeModel: geminiJudge?.modelId || null,
-            judgeTimedOut: judgeResult.timedOut,
-            answerEvidence: geminiJudge?.compactEvidence.length ? geminiJudge.compactEvidence : relevantChunks.matches.slice(0, 2).map(match => compactText(match.snippet, 320)),
+            scoreReasons: score.reasons,
+            answerEvidence: relevantChunks.matches.slice(0, 2).map(match => compactText(match.snippet, 320)),
             topMatches: relevantChunks.matches.slice(0, 3).map(match => ({
               chunkId: match.chunkId,
               heading: compactText(match.heading, 100),
@@ -576,17 +554,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
                 evidence?.title || page.title || target.title,
                 140,
               );
-              const judgeSummary = geminiJudge?.compactEvidence?.find(text => typeof text === 'string');
               const findingSummary = compactText(
                 evidence?.summary
-                  || judgeSummary
                   || `Query "${query}" — evidence from ${target.url}`,
                 500,
               );
-              const findingEvidence = (geminiJudge?.compactEvidence?.length
-                ? geminiJudge.compactEvidence
-                : matchSnippets
-              )
+              const findingEvidence = matchSnippets
                 .slice(0, 4)
                 .map(text => compactText(text, 320));
               await browserService.recordTabFinding({
@@ -604,9 +577,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           }
           if (stopWhenAnswerFound && sufficient) {
             stoppedEarly = true;
-            stopReason = geminiJudge?.sufficient
-              ? `Stopped after result ${target.index}; Gemini judged cached evidence sufficient.`
-              : `Stopped after result ${target.index}; cached evidence score ${score.score} met threshold ${minEvidenceScore}.`;
+            stopReason = `Stopped after result ${target.index}; cached evidence score ${score.score} met threshold ${minEvidenceScore}.`;
             skippedResults.push(...rankedSearchResults.slice(openedPages.length, maxPages).map(result => ({
               index: result.index,
               title: compactText(result.title, 140),
@@ -627,14 +598,6 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             query,
             stoppedEarly,
             stopReason: stopReason || null,
-            sidecar: {
-              configured: geminiSidecar.isConfigured(),
-              rankModel: ranked.modelId,
-              rankReason: rankedResult.timedOut
-                ? 'timed out; used browser result order'
-                : ranked.reason,
-              rankTimedOut: rankedResult.timedOut,
-            },
             maxPages,
             stopWhenAnswerFound,
             minEvidenceScore,
@@ -696,7 +659,7 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
     },
     {
       name: 'browser.create_tab',
-      description: 'Create a new browser tab, optionally with a starting URL. Use this when the user asks to open something in a new, separate, or additional tab.',
+      description: 'Create a new browser tab, optionally with a starting URL. Prefer browser.open_tab for normal "open a tab" requests — it verifies postconditions and supports reuseExisting to avoid duplicates. Use browser.create_tab only when you explicitly need a brand-new tab regardless of what is already open.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -719,30 +682,125 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
       },
     },
     {
-      name: 'browser.close_tab',
-      description: 'Close one or more tabs by id. Run browser.get_tabs first if ids are unknown, and again before claiming final state.',
+      name: 'browser.open_tab',
+      description: 'Deterministic tab opener: creates a new tab (optionally at a URL) and verifies the tab exists and is active before returning. With reuseExisting=true, activates an existing tab matching the URL instead of creating a duplicate. With deterministic=true (or a DeterminismConfig object), the new tab is entered into deterministic mode (pinned clock, seed, viewport, locale, UA, animations off) before returning.',
       inputSchema: {
         type: 'object',
         properties: {
-          tabId: { type: 'string' },
-          tabIds: { type: 'array', items: { type: 'string' } },
+          url: { type: 'string' },
+          reuseExisting: { type: 'boolean' },
+          deterministic: {
+            oneOf: [
+              { type: 'boolean' },
+              {
+                type: 'object',
+                properties: {
+                  seed: { type: 'number' },
+                  clock: { oneOf: [{ type: 'number' }, { type: 'string', enum: ['frozen'] }] },
+                  viewport: {
+                    type: 'object',
+                    properties: {
+                      width: { type: 'number' },
+                      height: { type: 'number' },
+                      deviceScaleFactor: { type: 'number' },
+                    },
+                  },
+                  locale: { type: 'string' },
+                  timezone: { type: 'string' },
+                  userAgent: { type: 'string' },
+                  disableAnimations: { type: 'boolean' },
+                  reduceMotion: { type: 'boolean' },
+                  blockNetworkPatterns: { type: 'array', items: { type: 'string' } },
+                },
+              },
+            ],
+          },
         },
       },
       async execute(input) {
         requireBrowserCreated();
         const obj = objectInput(input);
+        const url = optionalString(obj, 'url');
+        const reuseExisting = obj.reuseExisting === true;
+        const deterministic = normalizeDeterministicInput(obj.deterministic);
+
+        const service: DeterministicTabService = {
+          createTab: (targetUrl?: string) => {
+            const tab = browserService.createTab(targetUrl);
+            return { id: tab.id };
+          },
+          activateTab: (tabId: string) => { browserService.activateTab(tabId); },
+          getTabs: () => browserService.getTabs().map(tab => ({
+            id: tab.id,
+            url: tab.navigation.url,
+          })),
+          getActiveTabId: () => browserService.getState().activeTabId,
+        };
+
+        const kernel = deterministic !== undefined ? getKernel() : undefined;
+        const result = await openTabDeterministic(
+          {
+            url,
+            reuseExisting,
+            deterministic: deterministic as (DeterminismConfig | true | undefined),
+          },
+          service,
+          kernel
+            ? {
+              kernel: {
+                enter: (t, c) => kernel.enter(t, c),
+                isDeterministic: (t) => kernel.isDeterministic(t),
+              },
+            }
+            : {},
+        );
+        invalidateBrowserCaches();
+        await waitForBrowserSettled();
+
+        return {
+          summary: result.reused
+            ? `Reused existing tab ${result.tabId}${url ? ` for ${url}` : ''}${result.deterministic ? ' (deterministic)' : ''}`
+            : `Opened tab ${result.tabId}${url ? ` at ${url}` : ''}${result.deterministic ? ' (deterministic)' : ''}`,
+          data: {
+            ...result,
+            activeTabId: browserService.getState().activeTabId,
+            tabs: compactTabInventory(),
+          },
+        };
+      },
+    },
+    {
+      name: 'browser.close_tab',
+      description: 'Close one or more tabs by id, or pass `all: true` to close every open tab and leave only the required default homepage survivor. The browser keeps one default homepage tab open, so closing the last remaining tab resets it to the homepage instead of removing it entirely.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tabId: { type: 'string' },
+          tabIds: { type: 'array', items: { type: 'string' } },
+          all: { type: 'boolean' },
+        },
+      },
+      async execute(input) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const closeAll = optionalBoolean(obj, 'all');
         const tabIds = optionalStringArray(obj, 'tabIds');
         const singleTabId = optionalString(obj, 'tabId');
-        const ids = Array.from(new Set([...(singleTabId ? [singleTabId] : []), ...tabIds]));
-        if (ids.length === 0) throw new Error('Expected tabId or tabIds for browser.close_tab.');
+        const ids = closeAll
+          ? browserService.getTabs().map(tab => tab.id)
+          : Array.from(new Set([...(singleTabId ? [singleTabId] : []), ...tabIds]));
+        if (ids.length === 0) throw new Error('Expected tabId, tabIds, or all=true for browser.close_tab.');
 
         for (const tabId of ids) {
           await runBrowserOperation('browser.close-tab', { tabId }, { invalidateCache: true });
         }
         return {
-          summary: `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`,
+          summary: closeAll
+            ? `Closed all ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`
+            : `Closed ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`,
           data: {
             tabIds: ids,
+            all: closeAll,
             activeTabId: browserService.getState().activeTabId,
             tabs: browserService.getTabs(),
           },
@@ -1147,27 +1205,16 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const obj = objectInput(input);
         const scope = typeof obj.scope === 'string' ? obj.scope : 'stats';
         if (scope === 'pages') {
-          const pages = pageKnowledgeStore.listPages()
-            // Surface pinned pages first, then freshest; the model should
-            // see what it protected before skimming into LRU-tail pages.
-            .sort((a, b) => {
-              const aPinned = a.pinned ? 1 : 0;
-              const bPinned = b.pinned ? 1 : 0;
-              if (aPinned !== bPinned) return bPinned - aPinned;
-              return b.updatedAt - a.updatedAt;
-            })
-            .map(page => ({
-              id: page.id,
-              tabId: page.tabId,
-              url: page.url,
-              title: page.title,
-              tier: page.tier,
-              chunkCount: page.chunkIds.length,
-              headings: page.headings.slice(0, 20),
-              updatedAt: page.updatedAt,
-              pinned: page.pinned === true,
-              tabClosedAt: page.tabClosedAt ?? null,
-            }));
+          const pages = pageKnowledgeStore.listPages().map(page => ({
+            id: page.id,
+            tabId: page.tabId,
+            url: page.url,
+            title: page.title,
+            tier: page.tier,
+            chunkCount: page.chunkIds.length,
+            headings: page.headings.slice(0, 20),
+            updatedAt: page.updatedAt,
+          }));
           return { summary: `Listed ${pages.length} cached pages`, data: { pages } };
         }
         if (scope === 'sections') {
@@ -1232,39 +1279,6 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
             evidenceCount: finding.evidence.length,
             activeTabId: browserService.getState().activeTabId,
             tabs: compactTabInventory(),
-          },
-        };
-      },
-    },
-    {
-      name: 'browser.pin_page',
-      description: 'Protect a cached page from LRU eviction. Call with a pageId from `browser.cache_inventory` (scope="pages") or from a recent `browser.search_page_cache` result. Use this on the 2–3 pages a task depends on so they survive even after the tab is closed. Pass `pinned: false` to unpin.',
-      inputSchema: {
-        type: 'object',
-        required: ['pageId'],
-        properties: {
-          pageId: { type: 'string', description: 'Cached page id (e.g. `page_...`) from `browser.cache_inventory` or a page_cache search result.' },
-          pinned: { type: 'boolean', description: 'Default true. Pass `false` to unpin a previously pinned page.' },
-        },
-      },
-      async execute(input) {
-        const obj = objectInput(input);
-        const pageId = requireString(obj, 'pageId');
-        const pinned = typeof obj.pinned === 'boolean' ? obj.pinned : true;
-        const page = pageKnowledgeStore.setPinned(pageId, pinned);
-        if (!page) {
-          throw new Error(`Unknown cached pageId: ${pageId}`);
-        }
-        logBrowserCache(`${pinned ? 'Pinned' : 'Unpinned'} cached page ${pageId} (${page.url})`);
-        return {
-          summary: `${pinned ? 'Pinned' : 'Unpinned'} cached page: ${page.title || page.url}`,
-          data: {
-            pageId: page.id,
-            tabId: page.tabId,
-            url: page.url,
-            title: page.title,
-            pinned: page.pinned === true,
-            tabClosedAt: page.tabClosedAt ?? null,
           },
         };
       },
@@ -1481,6 +1495,47 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         return {
           summary: `Read ${events.length} network event${events.length === 1 ? '' : 's'} (${failedCount} failed/error responses)`,
           data: { events },
+        };
+      },
+    },
+    {
+      name: 'browser.run_workflow',
+      description: 'Run a registered deterministic browser workflow with a fixed tool allowlist, checkpoints, and escalation hooks.',
+      inputSchema: {
+        type: 'object',
+        required: ['workflowId'],
+        properties: {
+          workflowId: { type: 'string' },
+          inputs: {
+            type: 'object',
+            additionalProperties: {
+              anyOf: [
+                { type: 'string' },
+                { type: 'number' },
+                { type: 'boolean' },
+                { type: 'null' },
+              ],
+            },
+          },
+        },
+      },
+      async execute(input, context) {
+        requireBrowserCreated();
+        const obj = objectInput(input);
+        const workflowId = requireString(obj, 'workflowId');
+        const result = await runRegisteredBrowserWorkflow({
+          workflowId,
+          workflowInputs: obj.inputs,
+          context,
+        });
+        return {
+          summary: result.summary,
+          data: {
+            ...result.data,
+            availableWorkflows: listRegisteredBrowserWorkflows(),
+            activeTabId: browserService.getState().activeTabId,
+            tabs: compactTabInventory(),
+          },
         };
       },
     },
