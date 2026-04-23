@@ -10,6 +10,8 @@ This file is for durable context that should survive beyond a single day.
 
 - Main workspace includes agent operating files such as `AGENTS.md`, `SOUL.md`, and `IDENTITY.md`.
 - Parallel sessions/hooks can land commits on the same branch while an agent is working. Always re-check `git log` and `git status` before assuming a task is unstarted.
+- **Prior status drift:** threads below had been marked COMPLETE in this file while their files were only on disk (not on any branch tip). On 2026-04-23 everything was consolidated into `a2ff860 chore: publish pending workspace state` on `codex/model-auto-handoff` and pushed to origin. The orphaned grounding-gate commits `3cd32bc..86bca7b` remain in the reflog (unreachable, will be gc'd) — their content lives in the consolidated commit. A pre-publish working-tree snapshot is at `refs/backup/pre-publish-1776938727` for emergency recovery.
+- `AgentPromptBuilder`'s `ALWAYS_ON_CONTRACT_SECTIONS` allowlist gates which `AGENTS.md` H2 sections reach the model prompt. `Operating Rules` is in that allowlist; dropping it silently regresses the `browser.research_search` query-hygiene rule (lives under `Operating Rules → Web research`). `sourceValidationPolicy.test.ts` guards this. Regression fixed in `39f6e44` (2026-04-23).
 
 ## Open Threads
 
