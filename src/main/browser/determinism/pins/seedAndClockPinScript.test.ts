@@ -1,22 +1,30 @@
 import { describe, expect, it } from 'vitest';
+import vm from 'node:vm';
 import { buildDeterministicPreloadScript } from './seedAndClockPin';
 
-function evalScript(script: string): typeof globalThis {
-  const sandbox: Record<string, unknown> = {};
-  const glob = {
-    Math: { ...Math },
-    Date,
-    performance: { now: () => 1000 },
-    Object,
+interface EvalResult {
+  Math: typeof Math;
+  Date: typeof Date;
+  performance: { now: () => number };
+}
+
+function evalScript(script: string): EvalResult {
+  // Fresh context per call so globalThis patches don't leak between tests.
+  // `performance.now` is stubbed to a constant so "offset" mode is checkable.
+  let perfCounter = 1000;
+  const context: Record<string, unknown> = {
+    performance: { now: () => ++perfCounter },
     console,
-  } as unknown as typeof globalThis;
-  const wrapped = `(function(globalThis){${script}; return globalThis;})(sandbox);`;
-  const fn = new Function('sandbox', `
-    const { Math, Date, performance, Object, console } = arguments[0];
-    ${script};
-    return { Math, Date, performance };
-  `);
-  return fn(glob) as typeof globalThis;
+  };
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  // Built-in globals like Math/Date aren't enumerable own-properties of the
+  // sandbox object, so fetch them by evaluating their identifiers in-context.
+  return {
+    Math: vm.runInContext('Math', context) as typeof Math,
+    Date: vm.runInContext('Date', context) as typeof Date,
+    performance: context.performance as { now: () => number },
+  };
 }
 
 describe('deterministic preload script (pure JS)', () => {
@@ -33,15 +41,23 @@ describe('deterministic preload script (pure JS)', () => {
   it('returns the frozen wallclock from Date.now() when clock is "frozen"', () => {
     const script = buildDeterministicPreloadScript({ seed: 1, clock: 'frozen', clockBase: 1_700_000_000_000 });
     const { Date: D } = evalScript(script);
-    expect((D as unknown as typeof Date).now()).toBe(1_700_000_000_000);
-    expect(new (D as unknown as typeof Date)().getTime()).toBe(1_700_000_000_000);
+    expect(D.now()).toBe(1_700_000_000_000);
+    expect(new D().getTime()).toBe(1_700_000_000_000);
+  });
+
+  it('leaves multi-arg Date construction untouched (no prototype corruption)', () => {
+    const script = buildDeterministicPreloadScript({ seed: 1, clock: 'frozen', clockBase: 1_700_000_000_000 });
+    const { Date: D } = evalScript(script);
+    // Jan 1 2020 UTC — must return its real timestamp, NOT the pinned clock.
+    const jan1_2020_utc = new D(Date.UTC(2020, 0, 1)).getTime();
+    expect(jan1_2020_utc).toBe(Date.UTC(2020, 0, 1));
   });
 
   it('returns a monotonically-advancing offset clock when clock is a number', () => {
     const script = buildDeterministicPreloadScript({ seed: 1, clock: 'offset', clockBase: 1_700_000_000_000 });
     const { Date: D } = evalScript(script);
-    const t1 = (D as unknown as typeof Date).now();
-    const t2 = (D as unknown as typeof Date).now();
+    const t1 = D.now();
+    const t2 = D.now();
     expect(t2).toBeGreaterThanOrEqual(t1);
   });
 });

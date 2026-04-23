@@ -11,24 +11,27 @@ export interface PreloadScriptOptions {
  * Builds the preload script body that's injected via
  * `Page.addScriptToEvaluateOnNewDocument` at document-start. The script runs
  * in the page's main world before any page script, and patches:
- *   - `Math.random` with a seeded mulberry32 PRNG
- *   - `Date` with a patched constructor + `Date.now` + `Date.prototype.getTime`
- *     that return either the frozen `clockBase` or an offset that advances
- *     monotonically via `performance.now()` relative to enter-time.
+ *   - `Math.random` with a seeded mulberry32 PRNG (locked via defineProperty).
+ *   - `globalThis.Date` with a subclass-style constructor that returns the
+ *     pinned "now" time for zero-arg construction / `Date.now()`, but passes
+ *     multi-arg construction through to the original Date (so legitimate
+ *     arithmetic like `new Date(2020, 0, 1).getTime()` still returns Jan 1
+ *     2020's timestamp, NOT the pinned time).
  *
- * Notes on how this stays robust:
- *  - Uses `Object.defineProperty` so page scripts can't simply reassign.
- *  - Provides a pure-JS fallback for `Math.imul` because the unit test
- *    sandbox spreads `{...Math}` (which drops non-enumerable built-ins).
- *  - Mutates the live `Date` constructor (Date.now, Date.prototype.getTime)
- *    IN ADDITION to replacing `globalThis.Date`, so closures that captured
- *    `Date` before the global swap still see deterministic behavior.
+ * Deliberately NOT patched:
+ *   - `Date.prototype.getTime` / `valueOf` — patching these would corrupt
+ *     every Date instance regardless of how constructed.
+ *   - `OriginalDate.now` — the `globalThis.Date` swap runs before any page
+ *     script (CDP document-start guarantee), so no page closure can capture
+ *     the pre-swap `Date`.
+ *
+ * The `Math.imul` fallback exists so the script is portable to test
+ * sandboxes that strip non-enumerable built-ins via object spread.
  */
 export function buildDeterministicPreloadScript(opts: PreloadScriptOptions): string {
   const { seed, clock, clockBase } = opts;
   return `
 (() => {
-  // Patches Math.random and Date for deterministic behavior.
   const SEED = ${seed >>> 0};
   const CLOCK_BASE = ${clockBase};
   const CLOCK_MODE = ${JSON.stringify(clock)};
@@ -78,28 +81,8 @@ export function buildDeterministicPreloadScript(opts: PreloadScriptOptions): str
   PatchedDate.UTC = OriginalDate.UTC;
   PatchedDate.prototype = OriginalDate.prototype;
 
-  // Belt-and-suspenders: patch the live Date constructor so any closure that
-  // captured \`Date\` before our globalThis swap still sees deterministic time.
   try {
-    Object.defineProperty(OriginalDate, 'now', { value: nowFn, writable: true, configurable: true });
-  } catch (e) { /* ignore */ }
-  try {
-    Object.defineProperty(OriginalDate.prototype, 'getTime', {
-      value: function() { return nowFn(); },
-      writable: true,
-      configurable: true,
-    });
-  } catch (e) { /* ignore */ }
-  try {
-    Object.defineProperty(OriginalDate.prototype, 'valueOf', {
-      value: function() { return nowFn(); },
-      writable: true,
-      configurable: true,
-    });
-  } catch (e) { /* ignore */ }
-
-  try {
-    Object.defineProperty(globalThis, 'Date', { value: PatchedDate, writable: true, configurable: true });
+    Object.defineProperty(globalThis, 'Date', { value: PatchedDate, writable: false, configurable: false });
   } catch (e) {
     try { globalThis.Date = PatchedDate; } catch (e2) { /* ignore */ }
   }
