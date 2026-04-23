@@ -143,6 +143,88 @@ describe('scoreCandidates', () => {
   });
 });
 
+describe('scoreCandidates (phrase / authority / freshness)', () => {
+  it('boosts candidates whose title contains the full query phrase over scattered-term candidates', () => {
+    const scored = scoreCandidates('gpt5 pricing', [
+      makeCandidate({
+        url: 'https://a.example.com/gpt5-pricing',
+        title: 'GPT5 pricing announced',
+        snippet: 'Full breakdown of GPT5 pricing tiers.',
+      }),
+      makeCandidate({
+        url: 'https://b.example.com/gpt5-overview',
+        title: 'GPT5 overview and technical details',
+        snippet: 'Some details on GPT5; pricing is covered separately.',
+      }),
+    ]);
+    const phrase = scored.find(s => s.url.includes('a.example.com'))!;
+    const scattered = scored.find(s => s.url.includes('b.example.com'))!;
+    expect(phrase.qualityScore).toBeGreaterThan(scattered.qualityScore);
+    expect(phrase.qualityReasons.join(' ')).toMatch(/phrase/i);
+  });
+
+  it('gives a modest authority boost to well-known reference hosts', () => {
+    const scored = scoreCandidates('debounce function', [
+      makeCandidate({
+        url: 'https://developer.mozilla.org/en-US/docs/Glossary/Debounce',
+        title: 'Debounce function',
+        snippet: 'MDN reference on debounce function.',
+      }),
+      makeCandidate({
+        url: 'https://random-blog.example/debounce-function',
+        title: 'Debounce function',
+        snippet: 'Random blog post about debounce function.',
+      }),
+    ]);
+    const mdn = scored.find(s => s.url.includes('mozilla.org'))!;
+    const blog = scored.find(s => s.url.includes('random-blog'))!;
+    expect(mdn.qualityScore).toBeGreaterThan(blog.qualityScore);
+    expect(mdn.qualityReasons.join(' ')).toMatch(/authority/i);
+    // Authority bonus must exceed clean-path differential since canonical docs
+    // URLs are often deep and don't qualify for the clean-path bonus.
+    expect(mdn.qualityScore - blog.qualityScore).toBeGreaterThanOrEqual(1);
+  });
+
+  it('gives a docs-subdomain boost when the host starts with docs./api./reference.', () => {
+    const scored = scoreCandidates('widget api', [
+      makeCandidate({
+        url: 'https://docs.example.org/widget-api',
+        title: 'Widget API',
+        snippet: 'Reference for the widget API.',
+      }),
+      makeCandidate({
+        url: 'https://blog.example.org/widget-api-thoughts',
+        title: 'Widget API thoughts',
+        snippet: 'My thoughts on the widget API.',
+      }),
+    ]);
+    const docs = scored.find(s => s.url.includes('docs.'))!;
+    const blog = scored.find(s => s.url.includes('blog.'))!;
+    expect(docs.qualityScore).toBeGreaterThan(blog.qualityScore);
+  });
+
+  it('rewards a current-year marker in URL/title (without penalizing older content)', () => {
+    const year = new Date().getUTCFullYear();
+    const scored = scoreCandidates('widget', [
+      makeCandidate({
+        url: `https://a.example.com/widget/${year}`,
+        title: `Widget review ${year}`,
+        snippet: 'Widget guide.',
+      }),
+      makeCandidate({
+        url: 'https://b.example.com/widget/2015',
+        title: 'Widget review 2015',
+        snippet: 'Widget guide.',
+      }),
+    ]);
+    const fresh = scored.find(s => s.url.includes(`/${year}`))!;
+    const stale = scored.find(s => s.url.includes('/2015'))!;
+    expect(fresh.qualityScore).toBeGreaterThan(stale.qualityScore);
+    // Both should still have a positive score — we never punish older content.
+    expect(stale.qualityScore).toBeGreaterThan(0);
+  });
+});
+
 describe('pickTopX', () => {
   it('returns exactly X candidates', () => {
     const scored = scoreCandidates('x', [

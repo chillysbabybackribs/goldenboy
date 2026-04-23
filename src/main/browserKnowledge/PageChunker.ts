@@ -4,6 +4,14 @@ import { estimateTokens } from './PageCleaner';
 const MAX_CHUNK_CHARS = 1800;
 const MIN_CHUNK_CHARS = 120;
 
+/**
+ * Section headings that almost always mark non-body content. We drop the
+ * matching section entirely unless it's the only section in the page. Match
+ * is case-insensitive + trim-tolerant.
+ */
+const DROP_HEADING_RE =
+  /^(menu|navigation|primary navigation|main navigation|footer|sidebar|related( articles?| posts?| stories?)?|you (may|might) also (like|enjoy)|you might like|recommended( for you)?|trending( now)?|most popular|most read|read next|more stories|editor'?s picks?|comments?|comment section|share( this)?|social|newsletter|subscribe|cookie (notice|banner|policy)|your (privacy|cookie) (choices|preferences)|breadcrumbs?|table of contents|on this page|in this article)$/i;
+
 export function chunkPage(input: {
   pageId: string;
   tabId: string;
@@ -16,10 +24,18 @@ export function chunkPage(input: {
   const chunks: CachedPageChunk[] = [];
   let ordinal = 0;
 
-  for (const section of sections) {
+  const keptSections = sections.length === 1
+    ? sections
+    : sections.filter(section => !shouldDropSection(section));
+
+  for (const section of keptSections) {
     for (const text of splitLongText(section.text, MAX_CHUNK_CHARS)) {
       const trimmed = text.trim();
-      if (trimmed.length < MIN_CHUNK_CHARS && sections.length > 1) continue;
+      if (trimmed.length < MIN_CHUNK_CHARS && keptSections.length > 1) continue;
+      // Density filter: drop chunks that look like nav/link-lists. Applied
+      // only when we have another chunk to fall back to, to avoid wiping the
+      // whole page on aggressive templates.
+      if (isLowDensity(trimmed) && chunks.length > 0) continue;
       chunks.push({
         id: `${input.pageId}_chunk_${ordinal}`,
         pageId: input.pageId,
@@ -53,6 +69,28 @@ export function chunkPage(input: {
   }
 
   return chunks;
+}
+
+function shouldDropSection(section: { heading: string; text: string }): boolean {
+  const heading = section.heading.trim();
+  if (!heading) return false;
+  return DROP_HEADING_RE.test(heading);
+}
+
+/**
+ * Returns true for text that looks like a link list or navigation dump:
+ * mostly short lines, few lines that contain a real sentence (≥5 words). We
+ * require a minimum line count before judging so short real-content sections
+ * don't trip the filter.
+ */
+export function isLowDensity(text: string): boolean {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+  if (lines.length < 4) return false;
+  let wordy = 0;
+  for (const line of lines) {
+    if (line.split(/\s+/).length >= 5) wordy++;
+  }
+  return wordy / lines.length < 0.3;
 }
 
 function splitSections(content: string): Array<{ heading: string; text: string }> {

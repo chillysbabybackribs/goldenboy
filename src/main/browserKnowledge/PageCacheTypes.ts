@@ -32,6 +32,8 @@ export type CachedPageRecord = {
   taskId?: string;
 };
 
+export type PageSearchConfidence = 'high' | 'medium' | 'low';
+
 export type PageSearchResult = {
   chunkId: string;
   pageId: string;
@@ -41,6 +43,12 @@ export type PageSearchResult = {
   heading: string;
   snippet: string;
   score: number;
+  /**
+   * Coarse bucket derived from `score`. The agent uses this to decide whether
+   * a `read_cached_chunk` call is worth the token cost — `low` confidence
+   * chunks are usually not.
+   */
+  confidence: PageSearchConfidence;
   tokenEstimate: number;
 };
 
