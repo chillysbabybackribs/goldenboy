@@ -30,6 +30,7 @@ const PLANNING_CONTRACT_PATH = resolveWorkspacePath('PLANS.md');
 const ALWAYS_ON_CONTRACT_SECTIONS = new Set([
   'Structured Response Format',
   'Application Mental Model',
+  'Operating Rules',
 ]);
 const ALWAYS_ON_PLANNING_SECTIONS = new Set([
   'Planning Workflow',

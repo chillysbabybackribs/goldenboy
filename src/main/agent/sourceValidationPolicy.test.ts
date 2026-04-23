@@ -51,7 +51,7 @@ describe('source validation policy', () => {
     expect(prompt).not.toMatch(/Current date\/time: [A-Z][a-z]+day,/);
     expect(prompt).toContain('Current date/time is provided in the user-turn runtime context below');
     expect(prompt).toContain('## Tool Map');
-    expect(prompt).toContain('Every tool listed in your tool schema is already active for this run');
+    expect(prompt).toContain('Every tool in your schema is already active for this run');
     expect(prompt).not.toContain('## Tool Catalog');
     expect(prompt).not.toContain('context.load');
     expect(prompt).not.toContain('tool-runtime.html');
