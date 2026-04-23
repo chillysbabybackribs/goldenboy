@@ -20,6 +20,7 @@ import {
   DeterministicTabService,
   openTabDeterministic,
 } from './openTabDeterministic';
+import { isTabDeterministic } from './isTabDeterministic';
 import { DeterministicKernel } from '../../../browser/determinism/DeterministicKernel';
 import { createElectronKernelCapabilities } from '../../../browser/determinism/adapters/electronKernelCapabilities';
 import { userAgentPin } from '../../../browser/determinism/pins/userAgentPin';
@@ -135,11 +136,13 @@ function compactTabInventory(): Array<{ id: string; url: string; title: string; 
 }
 
 function withTabEcho(result: BrowserOperationResult): BrowserOperationResult {
+  const activeTabId = browserService.getState().activeTabId;
   return {
     summary: result.summary,
     data: {
       ...result.data,
-      activeTabId: browserService.getState().activeTabId,
+      activeTabId,
+      isDeterministic: isTabDeterministic(activeTabId, determinismKernel),
       tabs: compactTabInventory(),
     },
   };
@@ -871,11 +874,13 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         const url = optionalString(objectInput(input), 'url');
         const result = await runBrowserOperation('browser.create-tab', { url }, { invalidateCache: true });
         await waitForBrowserSettled();
+        const activeTabId = browserService.getState().activeTabId;
         return {
           summary: result.summary,
           data: {
             ...result.data,
-            activeTabId: browserService.getState().activeTabId,
+            activeTabId,
+            isDeterministic: isTabDeterministic(activeTabId, determinismKernel),
             tabs: browserService.getTabs(),
           },
         };
@@ -957,13 +962,15 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         invalidateBrowserCaches();
         await waitForBrowserSettled();
 
+        const activeTabId = browserService.getState().activeTabId;
         return {
           summary: result.reused
             ? `Reused existing tab ${result.tabId}${url ? ` for ${url}` : ''}${result.deterministic ? ' (deterministic)' : ''}`
             : `Opened tab ${result.tabId}${url ? ` at ${url}` : ''}${result.deterministic ? ' (deterministic)' : ''}`,
           data: {
             ...result,
-            activeTabId: browserService.getState().activeTabId,
+            activeTabId,
+            isDeterministic: isTabDeterministic(activeTabId, determinismKernel),
             tabs: compactTabInventory(),
           },
         };
@@ -993,7 +1000,12 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
 
         for (const tabId of ids) {
           await runBrowserOperation('browser.close-tab', { tabId }, { invalidateCache: true });
+          // Drop any kernel registry entry for the closed tab; pins can't be
+          // reverted via CDP once the target is gone, so `purgeTab` (not
+          // `exit`) is the correct cleanup here.
+          determinismKernel?.purgeTab(tabId);
         }
+        const activeTabId = browserService.getState().activeTabId;
         return {
           summary: closeAll
             ? `Closed all ${ids.length} browser tab${ids.length === 1 ? '' : 's'}`
@@ -1001,7 +1013,8 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
           data: {
             tabIds: ids,
             all: closeAll,
-            activeTabId: browserService.getState().activeTabId,
+            activeTabId,
+            isDeterministic: isTabDeterministic(activeTabId, determinismKernel),
             tabs: browserService.getTabs(),
           },
         };
@@ -1021,11 +1034,13 @@ export function createBrowserToolDefinitions(): AgentToolDefinition[] {
         requireBrowserCreated();
         const tabId = requireString(objectInput(input), 'tabId');
         const result = await runBrowserOperation('browser.activate-tab', { tabId }, { invalidateCache: true });
+        const activeTabId = browserService.getState().activeTabId;
         return {
           summary: result.summary,
           data: {
             ...result.data,
-            activeTabId: browserService.getState().activeTabId,
+            activeTabId,
+            isDeterministic: isTabDeterministic(activeTabId, determinismKernel),
             tabs: browserService.getTabs(),
           },
         };

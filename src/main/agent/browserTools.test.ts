@@ -54,6 +54,7 @@ vi.mock('../browser/BrowserService', () => ({
 
 const EXPECTED_TAB_ECHO = {
   activeTabId: 'tab_1',
+  isDeterministic: false,
   tabs: [
     { id: 'tab_1', url: 'https://example.com', title: 'Example', isLoading: false },
   ],
@@ -251,6 +252,28 @@ describe('createBrowserToolDefinitions', () => {
     ]);
   });
 
+  it('stamps isDeterministic on browser.activate_tab responses so the model can see kernel state after switching tabs', async () => {
+    executeBrowserOperation.mockResolvedValue({
+      summary: 'Activated tab tab_1',
+      data: { tabId: 'tab_1' },
+    });
+
+    const tool = createBrowserToolDefinitions().find(item => item.name === 'browser.activate_tab');
+    expect(tool).toBeTruthy();
+
+    const result = await tool!.execute(
+      { tabId: 'tab_1' },
+      { runId: 'run_act', agentId: 'agent_act', mode: 'unrestricted-dev' },
+    );
+
+    expect(result.data).toMatchObject({
+      tabId: 'tab_1',
+      activeTabId: 'tab_1',
+      isDeterministic: false,
+    });
+    expect(Array.isArray(result.data.tabs)).toBe(true);
+  });
+
   it('supports browser.close_tab with all=true by enumerating the current tab inventory', async () => {
     browserService.getTabs.mockReturnValue([
       {
@@ -317,6 +340,7 @@ describe('createBrowserToolDefinitions', () => {
         tabIds: ['tab_1', 'tab_2'],
         all: true,
         activeTabId: 'tab_1',
+        isDeterministic: false,
         tabs: browserService.getTabs(),
       },
     });
