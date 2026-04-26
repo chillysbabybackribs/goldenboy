@@ -1,5 +1,5 @@
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
-import type { AnyProviderId, CodexItem } from '../../shared/types/model';
+import type { CodexItem, ProviderId } from '../../shared/types/model';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import type { AgentProviderRequest, AgentToolName, AgentToolResult } from './AgentTypes';
@@ -15,9 +15,9 @@ const DEFAULT_PROVIDER_EMPTY_RESPONSE = 'The run ended without a text response. 
 type ProviderToolCallItem = Extract<CodexItem, { type: 'mcp_tool_call' }>;
 
 type ExecuteProviderToolCallInput = {
-  providerId: AnyProviderId;
+  providerId: ProviderId;
   request: Pick<AgentProviderRequest, 'runId' | 'agentId' | 'mode' | 'taskId' | 'onStatus' | 'toolScope'>
-    & Partial<Pick<AgentProviderRequest, 'tools'>>;
+    & Partial<Pick<AgentProviderRequest, 'tools' | 'runtimeAllowedTools'>>;
   toolName: AgentToolName;
   toolInput: unknown;
 };
@@ -67,6 +67,7 @@ function resolveToolScope(
 export function describeProviderToolCall(toolName: string, input: unknown): string {
   const args = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
   switch (toolName) {
+    case 'answer.submit': return 'Answer: submit grounded final answer';
     case 'browser.navigate': return `Browser: navigate ${args.url || 'page'}`;
     case 'browser.research_search': return `Browser: research "${args.query || ''}"`;
     case 'browser.click': return `Browser: click ${args.selector || args.text || 'element'}`;
@@ -78,11 +79,13 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'browser.reload': return 'Browser: reload';
     case 'browser.extract_page': return 'Browser: extract page';
     case 'browser.create_tab': return `Browser: create tab ${args.url ? `(${args.url})` : ''}`.trim();
+    case 'browser.open_tab': return `Browser: open tab ${args.url ? `(${args.url})` : ''}${args.reuseExisting ? ' (reuse)' : ''}`.trim();
     case 'browser.close_tab': return 'Browser: close tab';
     case 'browser.activate_tab': return 'Browser: activate tab';
     case 'browser.hover': return `Browser: hover ${args.selector || 'element'}`;
     case 'browser.drag': return 'Browser: drag';
     case 'browser.evaluate_js': return 'Browser: evaluate js';
+    case 'browser.run_workflow': return `Browser: run workflow ${args.workflowId || args.id || ''}`.trim();
     case 'browser.run_intent_program': return 'Browser: run intent program';
     case 'browser.find_element': return `Browser: find ${args.selector || args.text || 'element'}`;
     case 'browser.wait_for': return `Browser: wait for ${args.selector || 'condition'}`;
@@ -103,11 +106,6 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
       const trimmed = title.length > 60 ? `${title.slice(0, 59)}…` : title;
       return `Browser: pin finding "${trimmed}"`;
     }
-    case 'browser.pin_page': {
-      const pageId = typeof args.pageId === 'string' ? args.pageId : '';
-      const pinned = args.pinned === false ? 'Unpin' : 'Pin';
-      return `Browser cache: ${pinned.toLowerCase()} ${pageId}`.trim();
-    }
     case 'filesystem.list': return `Files: list ${args.path || 'directory'}`;
     case 'filesystem.glob': return `Files: glob ${args.pattern || '*'}`;
     case 'filesystem.search': return `Files: search "${args.query || args.pattern || ''}"`;
@@ -120,7 +118,10 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
     case 'filesystem.search_file_cache': return `File cache: ${args.mode === 'answer' ? 'answer' : 'search'} "${args.query || ''}"`;
     case 'filesystem.read_file_chunk': return `File cache: read chunk ${args.chunkId || args.id || ''}`.trim();
     case 'filesystem.cache_inventory': return `File cache: ${args.scope || 'stats'}`;
+    case 'memory.plan_update': return `Memory: plan update ${args.action || ''}`.trim();
     case 'terminal.exec': return `Terminal: run ${args.command || 'command'}`;
+    case 'terminal.build_repo': return 'Terminal: build repository';
+    case 'terminal.test_repo': return 'Terminal: test repository';
     case 'terminal.spawn': return `Terminal: spawn ${args.command || 'process'}`;
     case 'terminal.write': return 'Terminal: write';
     case 'terminal.kill': return 'Terminal: kill';
@@ -132,6 +133,28 @@ export function describeProviderToolCall(toolName: string, input: unknown): stri
       return short.replace(/_/g, ' ');
     }
   }
+}
+
+export function summarizeProviderToolCompletion(result: unknown, isError = false): string {
+  if (isError) {
+    const msg = typeof result === 'string' ? result : '';
+    return msg.length > 80 ? `error: ${msg.slice(0, 77)}...` : `error: ${msg || 'failed'}`;
+  }
+
+  const data = (result && typeof result === 'object') ? result as Record<string, unknown> : {};
+  const validation = (data.validation && typeof data.validation === 'object')
+    ? data.validation as { status?: unknown; summary?: unknown }
+    : null;
+  const summary = typeof data.summary === 'string' ? data.summary : 'done';
+  const trimmedSummary = summary.length > 80 ? `${summary.slice(0, 77)}...` : summary;
+
+  if (validation?.status === 'INVALID') {
+    return `INVALID: ${trimmedSummary}`;
+  }
+  if (validation?.status === 'INCOMPLETE') {
+    return `INCOMPLETE: ${trimmedSummary}`;
+  }
+  return trimmedSummary;
 }
 
 export function encodeToolInput(value: unknown): string {
@@ -176,6 +199,7 @@ export async function executeProviderToolCall(
       toolNames: activeToolNames(toolScope),
       onProgress: input.request.onStatus,
       toolScope,
+      runtimeAllowedTools: input.request.runtimeAllowedTools ?? 'all',
     });
 
     recordToolMemory(input, { result });
@@ -183,7 +207,7 @@ export async function executeProviderToolCall(
     return {
       ok: true,
       result,
-      resultDescription: describeProviderToolResult(result, false),
+      resultDescription: summarizeProviderToolCompletion(result, false),
       toolContent: formatToolResultForModel(result),
     };
   } catch (error) {
@@ -306,15 +330,21 @@ function serializeToolMemory(input: {
     : text;
 }
 
-function describeProviderToolResult(result: unknown, isError: boolean): string {
-  if (isError) {
-    const msg = typeof result === 'string' ? result : '';
-    return msg.length > 80 ? `error: ${msg.slice(0, 77)}...` : `error: ${msg || 'failed'}`;
-  }
-  const data = (result && typeof result === 'object') ? result as Record<string, unknown> : {};
-  const summary = typeof data.summary === 'string' ? data.summary : null;
-  if (summary) {
-    return summary.length > 80 ? `${summary.slice(0, 77)}...` : summary;
-  }
-  return 'done';
+/**
+ * One-line summary of a JSON-schema tool `inputSchema` for prompt budget
+ * estimation (Codex text mode). Not a full schema renderer.
+ */
+export function describeInputSchemaCompact(schema: unknown): string | null {
+  if (!schema || typeof schema !== 'object') return null;
+  const root = schema as Record<string, unknown>;
+  const props = root.properties;
+  if (!props || typeof props !== 'object') return null;
+  const required = new Set(
+    Array.isArray(root.required)
+      ? root.required.filter((key): key is string => typeof key === 'string')
+      : [],
+  );
+  const keys = Object.keys(props as Record<string, unknown>).slice(0, 8);
+  if (keys.length === 0) return null;
+  return keys.map(key => `${key}${required.has(key) ? '!' : '?'}`).join(', ');
 }

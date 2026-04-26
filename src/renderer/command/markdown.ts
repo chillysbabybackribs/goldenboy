@@ -20,9 +20,9 @@
  *   - `**bold**`
  *   - `` `code` ``
  *   - `[text](url)` links, with two renderings:
- *     - absolute file paths (start with `/`) become a compact chip whose path
- *       is hidden behind a `<details>` disclosure so long paths don't clutter
- *       the chat UI (e.g. `[AgentModelService.invoke()](/home/.../file.ts:12)`)
+ *     - absolute file paths (start with `/`) become a compact inline chip
+ *       with the full path available via tooltip
+ *       (e.g. `[AgentModelService.invoke()](/home/.../file.ts:12)`)
  *     - http/https links become real anchors that open in the system browser
  *     - every other scheme is rendered as plain text to avoid injecting
  *       `javascript:` or otherwise unsafe hrefs into the chat surface.
@@ -59,15 +59,7 @@ function applyInlineFormatting(escaped: string): string {
  */
 function renderLink(linkText: string, url: string): string {
   if (FILE_PATH_URL_RE.test(url)) {
-    // The whole chip is a single `<details>` so it flows inline with prose
-    // without Chromium treating a nested `<details>` as a block-level stop.
-    // Clicking the underlined label reveals the path pill next to it.
-    return (
-      `<details class="chat-file-ref">` +
-        `<summary class="chat-file-ref-text" title="${url}">${linkText}</summary>` +
-        `<code class="chat-file-ref-path">${url}</code>` +
-      `</details>`
-    );
+    return `<span class="chat-file-ref" title="${url}" data-file-path="${url}">${linkText}</span>`;
   }
   if (HTTP_URL_RE.test(url)) {
     return `<a href="${url}" class="chat-external-link" target="_blank" rel="noopener">${linkText}</a>`;

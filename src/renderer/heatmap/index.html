@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
+  <title>Code Heatmap</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="heatmap.css">
+</head>
+<body>
+  <main class="heatmap-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Goldenboy internal page</p>
+        <h1>Code Heatmap</h1>
+        <p class="subtitle">Live workspace edit intensity, backed by the main-process watcher and restored like any other browser tab.</p>
+      </div>
+      <div class="hero-meta">
+        <div class="stat">
+          <span class="stat-label">Watcher</span>
+          <strong class="stat-value" id="watcherState">Starting</strong>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Directories</span>
+          <strong class="stat-value" id="directoryCount">0</strong>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Total edits</span>
+          <strong class="stat-value" id="totalEdits">0</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="panel timeline">
+      <div class="panel-header">
+        <h2>Recent activity</h2>
+        <span class="panel-note" id="updatedAt">Waiting for first event</span>
+      </div>
+      <div class="recent-list" id="recentEdits"></div>
+    </section>
+
+    <section class="grid">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Hot files</h2>
+          <span class="panel-note">Highest direct edit volume</span>
+        </div>
+        <div class="heat-list" id="hottestFiles"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Hot directories</h2>
+          <span class="panel-note">Aggregated from file activity</span>
+        </div>
+        <div class="heat-list" id="hottestDirectories"></div>
+      </section>
+    </section>
+  </main>
+
+  <script type="module" src="heatmap.js"></script>
+</body>
+</html>

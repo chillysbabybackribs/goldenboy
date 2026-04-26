@@ -177,6 +177,10 @@ export function initEventRouter(): void {
     broadcastOnChannel('terminal:status', event.payload.session);
   });
 
+  eventBus.on(AppEventType.CODE_HEATMAP_UPDATED, (event) => {
+    broadcastOnChannel('code-heatmap:update', event.payload.snapshot);
+  });
+
   // ── Browser runtime events ─────────────────────────────────────────────
 
   eventBus.on(AppEventType.BROWSER_SURFACE_CREATED, (event) => {

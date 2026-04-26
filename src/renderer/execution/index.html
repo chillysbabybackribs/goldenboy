@@ -9,7 +9,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../shared/styles.css">
-  <link rel="stylesheet" href="../vendor/xterm.css">
   <link rel="stylesheet" href="execution.css">
 </head>
 <body>
@@ -22,6 +21,7 @@
         <div class="tab-list" id="tabList"></div>
         <button class="tab-scroll-btn tab-scroll-right" id="tabScrollRight" title="Scroll tabs right">&#x203A;</button>
         <button class="btn-tab-overflow" id="btnTabOverflow" title="All tabs">&#x25BE;</button>
+        <button class="btn-tab-utility" id="btnOpenHeatmap" title="Open Code Heatmap">Heat</button>
         <button class="btn-tab-new" id="btnNewTab" title="New Tab">+</button>
         <div class="tab-context-menu" id="tabContextMenu" style="display:none">
           <button class="tab-context-item" data-context-action="new-tab-next">New tab next</button>
@@ -66,6 +66,7 @@
           <button class="dropdown-tab active" data-panel="history">History</button>
           <button class="dropdown-tab" data-panel="bookmarks">Bookmarks</button>
           <button class="dropdown-tab" data-panel="downloads">Downloads</button>
+          <button class="dropdown-tab" data-panel="recorder">Recorder</button>
           <button class="dropdown-tab" data-panel="diagnostics">Diagnostics</button>
           <button class="dropdown-tab" data-panel="extensions">Extensions</button>
           <button class="dropdown-tab" data-panel="settings">Settings</button>
@@ -78,39 +79,17 @@
       </div>
     </div>
 
-    <!-- Draggable Splitter -->
-    <div class="splitter" id="splitter"><div class="splitter-handle"></div></div>
-
-    <!-- Terminal Pane -->
-    <div class="pane terminal-pane" id="terminalPane">
-      <div class="pane-header">
-        <div class="pane-identity">
-          <span class="pane-dot terminal"></span>
-          <span class="pane-label">TERMINAL</span>
-        </div>
-        <span class="pane-meta" id="terminalMeta"></span>
-        <span class="pane-status" id="terminalStatus">Idle</span>
-        <button class="btn-pane btn-pane-collapse" id="termCollapseBtn" title="Expand terminal" aria-label="Expand terminal" aria-expanded="false">&#x203A;</button>
-        <button class="btn-pane" id="termRestartBtn" title="Restart terminal">&#x21bb;</button>
-      </div>
-      <div class="pane-content" id="terminalContent">
-        <div id="terminalContainer" class="terminal-surface"></div>
-      </div>
-    </div>
   </div>
 
   <div class="execution-status-bar">
     <span class="status-indicator">
       <span class="status-dot done" id="connectionDot"></span>
-      <span id="connectionLabel">Connected</span>
+      <span id="connectionLabel">Browser attached</span>
     </span>
-    <span id="termSizeLabel"></span>
     <span class="status-spacer"></span>
-    <span id="splitLabel"></span>
+    <span id="browserLocationLabel">Execution window</span>
   </div>
 
-  <script src="../vendor/xterm.js"></script>
-  <script src="../vendor/addon-fit.js"></script>
   <script type="module" src="execution.js"></script>
 </body>
 </html>

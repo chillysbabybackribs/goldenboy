@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <title>determinism-anim</title>
+  <style>
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    #el {
+      width: 40px;
+      height: 40px;
+      background: red;
+      animation: spin 2s linear infinite;
+      transition: background 2s linear;
+    }
+  </style>
+</head>
+<body>
+  <div id="el"></div>
+</body>
+</html>

@@ -8,6 +8,8 @@ import { BrowserActionableElement, BrowserConsoleEvent, BrowserFinding, BrowserF
 import { SurfaceActionInput, SurfaceActionRecord, SurfaceActionKind } from '../actions/surfaceActionTypes';
 import { AgentInvocationOptions, TaskMemoryRecord } from './model';
 import { DocumentImportRequest, DocumentInvocationAttachment } from './attachments';
+import { CodeHeatmapSnapshot } from './codeHeatmap';
+import { ScreenRecorderPendingFile, ScreenRecorderSaveResult, ScreenRecorderSource } from './screenRecorder';
 
 export const IPC_CHANNELS = {
   GET_STATE: 'workspace:get-state',
@@ -100,14 +102,6 @@ export const IPC_CHANNELS = {
   BROWSER_NAV_UPDATE: 'browser:nav-update',
   BROWSER_FIND_UPDATE: 'browser:find-update',
 
-  // Filesystem bridge (unsandboxed, Node fs backed)
-  FS_READ: 'fs:read',
-  FS_WRITE: 'fs:write',
-  FS_EXISTS: 'fs:exists',
-  FS_LIST: 'fs:list',
-  FS_DELETE: 'fs:delete',
-  FS_MKDIR: 'fs:mkdir',
-
   // Debug: disk cache test
   DEBUG_TEST_DISK_EXTRACT: 'debug:test-disk-extract',
 
@@ -117,7 +111,6 @@ export const IPC_CHANNELS = {
   MODEL_GET_PROVIDERS: 'model:get-providers',
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
-  MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
@@ -133,6 +126,11 @@ export const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  SCREEN_RECORDER_SAVE_FILES: 'screen-recorder:save-files',
+
+  CODE_HEATMAP_GET_SNAPSHOT: 'code-heatmap:get-snapshot',
+  CODE_HEATMAP_UPDATE: 'code-heatmap:update',
 } as const;
 
 export interface WorkspaceAPI {
@@ -229,14 +227,13 @@ export interface WorkspaceAPI {
     onFindUpdate(callback: (find: { activeMatch: number; totalMatches: number }) => void): void;
   };
 
-  // Model API (invocation, routing, handoff)
+  // Model API (invocation)
   model: {
     invoke(taskId: string, prompt: string, owner?: string, options?: AgentInvocationOptions): Promise<any>;
     cancel(taskId: string): Promise<boolean>;
     getProviders(): Promise<Record<string, any>>;
     getTaskMemory(taskId: string): Promise<TaskMemoryRecord>;
     resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions): Promise<string>;
-    handoff(taskId: string, from: string, to: string): Promise<any>;
     runIntentProgram(taskId: string, input: { instructions: Array<Record<string, unknown>>; tabId?: string; failFast?: boolean }): Promise<any>;
     onProgress(callback: (progress: any) => void): void;
   };
@@ -253,19 +250,24 @@ export interface WorkspaceAPI {
     onExit(callback: (exitCode: number) => void): void;
   };
 
-  // Filesystem bridge (unsandboxed, Node fs backed)
-  fs: {
-    read(filePath: string): Promise<string>;
-    write(filePath: string, content: string): Promise<void>;
-    exists(filePath: string): Promise<boolean>;
-    list(dirPath: string): Promise<{ name: string; isDirectory: boolean }[]>;
-    delete(filePath: string): Promise<void>;
-    mkdir(dirPath: string): Promise<void>;
+  screenRecorder: {
+    listSources(): Promise<ScreenRecorderSource[]>;
+    saveFiles(files: ScreenRecorderPendingFile[]): Promise<ScreenRecorderSaveResult>;
+  };
+
+  codeHeatmap: {
+    getSnapshot(): Promise<CodeHeatmapSnapshot>;
+    onUpdate(callback: (snapshot: CodeHeatmapSnapshot) => void): void;
   };
 
   // Agent tool bridge — invoke any registered agent tool by name
   tool: {
     invoke(name: string, input: unknown, context?: { taskId?: string; runId?: string }): Promise<{ summary: string; data: Record<string, unknown> }>;
+  };
+
+  // Electron file utilities (exposed via webUtils.getPathForFile in preload)
+  file: {
+    getPathForFile(file: File): string | null;
   };
 
   removeAllListeners(): void;

@@ -47,6 +47,7 @@ import type { BrowserElementState, BrowserPointerHitTestResult } from './Browser
 import { BrowserPageAnalysis } from './BrowserPageAnalysis';
 import type { SearchResultCandidate, PageEvidence } from './BrowserPageAnalysis';
 import { BrowserOverlayManager } from './BrowserOverlayManager';
+import { BrowserVisualMaskManager } from './BrowserVisualMaskManager';
 import { BrowserSettingsService } from './BrowserSettingsService';
 import { BrowserAuthService } from './BrowserAuthService';
 import { BrowserPersistenceService } from './BrowserPersistenceService';
@@ -221,6 +222,16 @@ function shouldSuppressConsoleNoise(event: BrowserConsoleEvent): boolean {
   return host ? isNoisyThirdPartyHost(host) : false;
 }
 
+function shouldSuppressBlockedNavigationError(validatedURL: string, errorDescription: string): boolean {
+  if (!/ERR_BLOCKED_BY_CLIENT/i.test(errorDescription)) return false;
+  return shouldBlockNoisyThirdPartyRequest(validatedURL, 'script')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'image')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'xhr')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'fetch')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'ping')
+    || shouldBlockNoisyThirdPartyRequest(validatedURL, 'subFrame');
+}
+
 export class BrowserService {
   private tabs: Map<string, TabEntry> = new Map();
   private activeTabId: string = '';
@@ -272,6 +283,10 @@ export class BrowserService {
     executeInPage: (expression, tabId) => this.executeInPage(expression, tabId),
     clickElement: (selector, tabId) => this.clickElement(selector, tabId),
     rankActionableElements: (snapshot, options) => this.pageAnalysis.rankActionableElements(snapshot, options),
+  });
+  private visualMaskManager = new BrowserVisualMaskManager({
+    resolveEntry: (tabId) => this.resolveEntry(tabId),
+    executeInPage: (expression, tabId) => this.executeInPage(expression, tabId),
   });
   private pageExtractor: PageExtractor = new PageExtractor(
     (expression, tabId) => this.executeInPage(expression, tabId),
@@ -714,13 +729,9 @@ export class BrowserService {
   private destroyTabEntry(entry: TabEntry): void {
     this.layoutService.detachTab(entry.id, entry.view);
     this.instrumentation.detachTab(entry.id, entry.view.webContents.id);
-    // Closing a tab used to hard-delete every page it cached, which made the
-    // common "I just closed that tab, look it up again" case impossible.
-    // Keep the chunks searchable under their original tabId and just stamp
-    // them as closed — the LRU will evict them ahead of live-tab pages once
-    // the cap is hit, and pinned pages survive indefinitely.
-    pageKnowledgeStore.markTabClosed(entry.id);
+    pageKnowledgeStore.removePagesForTab(entry.id);
     this.lastBackgroundExtractionByTab.delete(entry.id);
+    this.visualMaskManager.removeTab(entry.id);
     this.dialogManager.detachTab(entry.id);
     try { if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close(); } catch {}
   }
@@ -769,6 +780,7 @@ export class BrowserService {
       nav.loadingProgress = null;
       info.status = 'ready';
       this.syncTabAndMaybeNavigation(entry);
+      void this.visualMaskManager.reapplyMasks(entry.id).catch(() => {});
 
       // Background extraction is expensive because it clones and parses the
       // full page DOM after every navigation. Keep browser analysis on-demand.
@@ -841,6 +853,7 @@ export class BrowserService {
 
     wc.on('did-fail-load', (_e: ElectronEvent, errorCode: number, errorDescription: string, validatedURL: string) => {
       if (errorCode === -3) return; // aborted
+      if (shouldSuppressBlockedNavigationError(validatedURL, errorDescription)) return;
       this.lastError = { code: errorCode, description: errorDescription, url: validatedURL, timestamp: Date.now() };
       info.status = 'error';
       this.syncTabAndMaybeNavigation(entry);
@@ -863,6 +876,7 @@ export class BrowserService {
     wc.on('context-menu', (_e: ElectronEvent, params: Electron.ContextMenuParams) => {
       const menu = new Menu();
       const currentUrl = wc.getURL();
+      const activeMaskCount = this.visualMaskManager.listMasks(entry.id).length;
       const canViewSource = !!currentUrl
         && currentUrl !== 'about:blank'
         && !currentUrl.startsWith('devtools://')
@@ -913,6 +927,35 @@ export class BrowserService {
           click: () => clipboard.writeText(params.srcURL),
         }));
       }
+
+      // ── Blur actions ──
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({
+        label: 'Blur This Element',
+        click: () => {
+          void this.applyVisualMaskAtPoint({ x: params.x, y: params.y, tabId: entry.id }).then((result) => {
+            if (!result.success) {
+              this.emitLog('error', `Failed to blur element: ${result.error || 'Unknown error'}`);
+              return;
+            }
+            const targetLabel = result.label || result.selector || 'element';
+            this.emitLog('info', `Blurred ${targetLabel} (${result.matchedCount})`);
+          });
+        },
+      }));
+      menu.append(new MenuItem({
+        label: 'Clear All Blurs',
+        enabled: activeMaskCount > 0,
+        click: () => {
+          void this.clearVisualMasks({ tabId: entry.id, all: true }).then((result) => {
+            if (!result.success) {
+              this.emitLog('error', `Failed to clear blurs: ${result.error || 'Unknown error'}`);
+              return;
+            }
+            this.emitLog('info', result.clearedCount > 0 ? `Cleared ${result.clearedCount} blur mask${result.clearedCount === 1 ? '' : 's'}` : 'Nothing to clear');
+          });
+        },
+      }));
 
       // ── Page actions ──
       menu.append(new MenuItem({ type: 'separator' }));
@@ -991,6 +1034,16 @@ export class BrowserService {
 
   isKnownTabWebContents(webContentsId: number): boolean {
     return this.resolveTabIdByWebContentsId(webContentsId) !== null;
+  }
+
+  public getTabWebContents(tabId: string): Electron.WebContents | null {
+    const entry = this.tabs.get(tabId);
+    return entry ? entry.view.webContents : null;
+  }
+
+  public getTabSession(tabId: string): Electron.Session | null {
+    const entry = this.tabs.get(tabId);
+    return entry ? entry.view.webContents.session : null;
   }
 
   private syncTabAndMaybeNavigation(entry: TabEntry): void {
@@ -1939,6 +1992,74 @@ export class BrowserService {
     error: string | null;
   }> {
     return this.overlayManager.clickRankedAction(input);
+  }
+
+  async applyVisualMask(input: {
+    selector: string;
+    tabId?: string;
+    blurPx?: number;
+  }): Promise<{
+    success: boolean;
+    mask: {
+      id: string;
+      selector: string;
+      blurPx: number;
+      createdAt: number;
+      tabId: string;
+      matchCount: number;
+    } | null;
+    matchedCount: number;
+    error: string | null;
+  }> {
+    return this.visualMaskManager.applyMask(input);
+  }
+
+  async applyVisualMaskAtPoint(input: {
+    x: number;
+    y: number;
+    tabId?: string;
+    blurPx?: number;
+  }): Promise<{
+    success: boolean;
+    mask: {
+      id: string;
+      selector: string;
+      blurPx: number;
+      createdAt: number;
+      tabId: string;
+      matchCount: number;
+    } | null;
+    matchedCount: number;
+    selector: string | null;
+    label: string | null;
+    error: string | null;
+  }> {
+    return this.visualMaskManager.applyMaskAtPoint(input);
+  }
+
+  async clearVisualMasks(input: {
+    tabId?: string;
+    maskId?: string;
+    selector?: string;
+    all?: boolean;
+  }): Promise<{
+    success: boolean;
+    clearedCount: number;
+    remainingCount: number;
+    error: string | null;
+  }> {
+    return this.visualMaskManager.clearMasks(input);
+  }
+
+  listVisualMasks(tabId?: string): Array<{
+    id: string;
+    selector: string;
+    blurPx: number;
+    createdAt: number;
+    tabId: string;
+    matchCount: number;
+  }> {
+    return this.visualMaskManager.listMasks(tabId);
   }
 
   async waitForOverlayState(

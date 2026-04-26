@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../shared/types/model';
+import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 
 const { executeMock, recordToolMessageMock } = vi.hoisted(() => ({
   executeMock: vi.fn(),
@@ -23,6 +23,7 @@ import {
   executeProviderToolCallWithEvents,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
+  summarizeProviderToolCompletion,
 } from './providerToolRuntime';
 
 describe('providerToolRuntime', () => {
@@ -79,6 +80,26 @@ describe('providerToolRuntime', () => {
     );
   });
 
+  it('includes deterministic validation status in tool completion summaries when not VALID', () => {
+    expect(summarizeProviderToolCompletion({
+      summary: 'Navigated to https://www.google.com/',
+      validation: {
+        status: 'INVALID',
+        constraints: [],
+        summary: 'hostname mismatch',
+      },
+    })).toBe('INVALID: Navigated to https://www.google.com/');
+
+    expect(summarizeProviderToolCompletion({
+      summary: 'Read element state',
+      validation: {
+        status: 'INCOMPLETE',
+        constraints: [],
+        summary: 'state could not be confirmed',
+      },
+    })).toBe('INCOMPLETE: Read element state');
+  });
+
   it('emits status and item lifecycle events around tool execution', async () => {
     executeMock.mockResolvedValue({
       summary: 'Listed 3 files',
@@ -89,10 +110,10 @@ describe('providerToolRuntime', () => {
     const itemEvents: Array<{ eventType: string; status: string }> = [];
 
     const result = await executeProviderToolCallWithEvents({
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
       request: {
         runId: 'run-3',
-        agentId: HAIKU_PROVIDER_ID,
+        agentId: PRIMARY_PROVIDER_ID,
         mode: 'unrestricted-dev',
         taskId: 'task-3',
         systemPrompt: 'system',
@@ -159,10 +180,10 @@ describe('providerToolRuntime', () => {
     executeMock.mockRejectedValue(new Error('tool exploded'));
 
     const result = await executeProviderToolCall({
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
       request: {
         runId: 'run-2',
-        agentId: HAIKU_PROVIDER_ID,
+        agentId: PRIMARY_PROVIDER_ID,
         mode: 'unrestricted-dev',
         taskId: 'task-2',
       },
@@ -177,7 +198,7 @@ describe('providerToolRuntime', () => {
     expect(recordToolMessageMock).toHaveBeenCalledWith(
       'task-2',
       expect.stringContaining('"error": "tool exploded"'),
-      HAIKU_PROVIDER_ID,
+      PRIMARY_PROVIDER_ID,
       'run-2',
     );
   });

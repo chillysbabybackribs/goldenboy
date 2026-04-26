@@ -41,6 +41,46 @@ describe('AgentPromptBuilder', () => {
       },
     },
   ];
+  const filesystemTools: AgentToolDefinition[] = [
+    {
+      name: 'filesystem.read',
+      description: 'Read a file from the workspace.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+      async execute() {
+        return {
+          summary: 'read',
+          data: {},
+        };
+      },
+    },
+  ];
+  const answerTools: AgentToolDefinition[] = [
+    ...tools,
+    {
+      name: 'answer.submit',
+      description: 'Submit a grounded final answer.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          claims: { type: 'array' },
+          unresolved: { type: 'array' },
+        },
+        required: ['claims', 'unresolved'],
+      },
+      async execute() {
+        return {
+          summary: 'accepted',
+          data: {},
+        };
+      },
+    },
+  ];
+  const submitOnlyTools: AgentToolDefinition[] = [answerTools[1]];
   const subagentTools: AgentToolDefinition[] = [
     ...tools,
     {
@@ -70,11 +110,11 @@ describe('AgentPromptBuilder', () => {
         mode: 'unrestricted-dev',
         agentId: PRIMARY_PROVIDER_ID,
         role: 'primary',
-        task: 'Plan a repo-wide migration strategy with sub agents',
+        task: 'Split this work across multiple agents and run in parallel',
         taskId: 'task-plans-orchestration',
       },
       skills: [],
-      tools,
+      tools: filesystemTools,
     });
 
     const implementationPrompt = promptBuilder.buildSystemPrompt({
@@ -86,15 +126,56 @@ describe('AgentPromptBuilder', () => {
         taskId: 'task-plans-implementation',
       },
       skills: [],
-      tools,
+      tools: filesystemTools,
     });
 
     expect(orchestrationPrompt).toContain('## Planning Contract');
-    expect(orchestrationPrompt).toContain('## When To Use');
+    expect(orchestrationPrompt).toContain('## Planning Workflow');
     expect(orchestrationPrompt).toContain('## Output Contract');
 
     expect(implementationPrompt).not.toContain('## Planning Contract');
-    expect(implementationPrompt).not.toContain('## When To Use');
+    expect(implementationPrompt).not.toContain('## Planning Workflow');
+  });
+
+  it('surfaces the selected execution mode in the system prompt', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'How do we set up a watcher for this repo and which files would we need to edit?',
+        taskId: 'task-execution-mode-plan-only',
+      },
+      skills: [],
+      tools: filesystemTools,
+    });
+
+    expect(prompt).toContain('## Execution Mode');
+    expect(prompt).toContain('Task kind: implementation');
+    expect(prompt).toContain('Execution mode: single-pass');
+    expect(prompt).toContain('eligible for direct execution');
+  });
+
+  it('uses the runtime task-profile override when surfacing execution mode', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'User request: enough, just start',
+        taskProfileOverride: {
+          kind: 'implementation',
+          executionMode: 'single-pass',
+        },
+        taskId: 'task-execution-mode-override',
+      },
+      skills: [],
+      tools,
+    });
+
+    expect(prompt).toContain('Task kind: implementation');
+    expect(prompt).toContain('Execution mode: single-pass');
+    expect(prompt).toContain('eligible for direct execution');
   });
 
   it('advertises tool categories via the map and forbids shell-based web access', () => {
@@ -113,8 +194,8 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('## Tool Map');
     expect(prompt).toContain('`browser`');
     expect(prompt).toContain('`filesystem`');
-    expect(prompt).toContain('Every tool listed in your tool schema is already active');
-    expect(prompt).toContain('Never use shell/terminal commands to reach the internet');
+    expect(prompt).toContain('Every tool in your schema is already active');
+    expect(prompt).toContain('Use `browser.*` for web work');
   });
 
   it('marks active and inactive categories in the tool map based on the scoped tool list', () => {
@@ -133,6 +214,40 @@ describe('AgentPromptBuilder', () => {
     expect(prompt).toContain('## Tool Map');
     expect(prompt).toContain('`browser` [active]');
     expect(prompt).toContain('`filesystem` [inactive]');
+  });
+
+  it('includes the structured response format guidance from the agent contract', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'Answer a simple question',
+        taskId: 'task-structured-response-format',
+      },
+      skills: [],
+      tools,
+    });
+
+    expect(prompt).toContain('## Structured Response Format');
+    expect(prompt).toContain('Lead with the answer, result, or finding.');
+    expect(prompt).toContain('Do not open by echoing, paraphrasing, or congratulating the user');
+  });
+
+  it('omits the workspace overview when the active tools cannot inspect the repo', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'Just submit a grounded answer',
+        taskId: 'task-no-workspace-overview',
+      },
+      skills: [],
+      tools: submitOnlyTools,
+    });
+
+    expect(prompt).not.toContain('## Workspace Overview');
   });
 
   it('keeps the system prompt byte-stable by excluding the volatile current timestamp for every agent', () => {
@@ -211,6 +326,59 @@ describe('AgentPromptBuilder', () => {
 
     expect(prompt).toContain('## Tool Map');
     expect(prompt).toContain('`subagent`');
-    expect(prompt).toContain('Every tool listed in your tool schema is already active');
+    expect(prompt).toContain('Every tool in your schema is already active');
+  });
+
+  it('adds finalization instructions when answer.submit is in scope', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'Finish with grounded claims',
+        taskId: 'task-finalization',
+      },
+      skills: [],
+      tools: answerTools,
+    });
+
+    expect(prompt).toContain('## Finalizing Your Answer');
+    expect(prompt).toContain('`answer.submit`');
+    expect(prompt).toContain('Every claim must include at least one `evidence` entry');
+    expect(prompt).toContain('Use `unresolved`');
+  });
+
+  it('tells the model to follow loaded skills as the operating procedure', () => {
+    const prompt = promptBuilder.buildSystemPrompt({
+      config: {
+        mode: 'unrestricted-dev',
+        agentId: PRIMARY_PROVIDER_ID,
+        role: 'primary',
+        task: 'Implement a local code change',
+        taskId: 'task-skill-pointer',
+      },
+      skills: [{
+        name: 'code-edit',
+        path: '/tmp/code-edit/SKILL.md',
+        description: 'Use this skill when a task requires patching source files.',
+        allowedTools: ['filesystem.read', 'filesystem.patch'],
+        references: [],
+        body: [
+          '# Code Edit',
+          '',
+          'Use this skill when a task requires patching source files.',
+          '',
+          '## Workflow',
+          '',
+          '1. Read before editing.',
+          '2. Patch narrowly.',
+        ].join('\n'),
+      }],
+      tools,
+    });
+
+    expect(prompt).toContain('## Skills');
+    expect(prompt).toContain('treat them as the operating procedure for the task');
+    expect(prompt).toContain('## Skill: code-edit');
   });
 });

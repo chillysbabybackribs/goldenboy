@@ -15,13 +15,14 @@ import { LogSource } from '../../shared/types/appState';
 import { isProviderId } from '../../shared/types/model';
 import type { AgentProviderRequest } from './AgentTypes';
 import { buildTaskProfile } from './taskProfile';
-import { getChatSessionMemory } from '../chatKnowledge/ChatSessionMemory';
 import { createToolScopeState, listActiveTools } from './toolScopeState';
 import { isAgentCancellationError } from './cancellation';
-import { describeInputSchemaCompact } from './CodexProvider';
+import { describeInputSchemaCompact } from './providerToolRuntime';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { buildBrowserContextBlock, type BrowserContextSources } from './browserContextInjection';
 import { defaultBrowserContextSources } from './defaultBrowserContextSources';
+import type { FinalAnswer } from '../../shared/types/finalAnswer';
+import type { AgentToolResult } from './AgentTypes';
 
 export class AgentRuntime {
   private readonly browserContextSources: BrowserContextSources;
@@ -60,16 +61,19 @@ export class AgentRuntime {
           inputSchema: tool.inputSchema,
         })),
       );
-      assertInitialBrowserScope(config.task, scopedTools.map(tool => tool.name));
+      assertInitialBrowserScope(config.task, scopedTools.map(tool => tool.name), config.taskProfileOverride);
       
-      // OPTIMIZATION: Lazy-load skills.
-      // If config.skillNames is provided, load them for the system prompt.
-      // Otherwise, defer skill loading until the model requests them (via context addendum).
+      // Skill loading is split in two:
+      //   - Eagerly load any skill names the task profile (or caller) has
+      //     high confidence about. These get injected as full bodies.
+      //   - Always load the full skill index (name + description) so the
+      //     model can call `skill.load` to pull additional skills on demand.
       const skillNames = config.skillNames ?? [];
-      const skills = skillNames.length > 0 
+      const skills = skillNames.length > 0
         ? agentSkillLoader.loadSkills(skillNames)
         : [];
-      
+      const availableSkills = agentSkillLoader.listSkills();
+
       const responseStyleAddendum = buildResponseStyleAddendum(config.task);
       const promptConfig: AgentRuntimeConfig = responseStyleAddendum
         ? {
@@ -80,6 +84,7 @@ export class AgentRuntime {
       const promptInput = {
         config: promptConfig,
         skills,
+        availableSkills,
         tools: scopedTools,
       };
       const systemPrompt = agentPromptBuilder.buildSystemPrompt(promptInput);
@@ -90,40 +95,78 @@ export class AgentRuntime {
         systemBreakdown,
         contextPrompt: config.contextPrompt,
         skillCount: skills.length,
+        availableSkillCount: availableSkills.length,
         tools: scopedTools.map(tool => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema,
         })),
-        lazyLoadEnabled: skillNames.length === 0,
       });
       
-      const sessionMemory = getChatSessionMemory();
-      const previousMessages = sessionMemory.getPreviousSessionContext();
-      const sessionContextBlock = sessionMemory.buildContextInjectionString(previousMessages);
       // Datetime + browser overview ride the user turn so the system prompt stays
       // byte-stable for prompt-cache reuse. Browser overview sits before the
       // caller-supplied context so cross-tab working memory survives truncation
       // when the shared cap is tight.
-      const browserContextBlock = buildBrowserContextBlock(this.browserContextSources);
+      const browserContextBlock = buildBrowserContextBlock(
+        this.browserContextSources,
+        config.taskId ? { taskId: config.taskId } : undefined,
+      );
       const taskMemoryBlock = config.taskId ? taskMemoryStore.buildContext(config.taskId) : null;
       const contextPrompt = packContextSections(
         [
           buildCurrentDateTimeLine(config.agentId),
           browserContextBlock,
           config.contextPrompt,
-          sessionContextBlock,
-          taskMemoryBlock,
+          config.suppressTaskMemoryContext ? null : taskMemoryBlock,
         ],
         4_000,
         '\n...[context truncated]',
       );
+
+      if (shouldAutoRunDeterministicBrowserSearch(config.taskProfileOverride)) {
+        const startedAt = Date.now();
+        const workflowId = 'browser-automation-research';
+        config.onStatus?.(`tool-start:Browser: run workflow ${workflowId}`);
+        const workflowResult = await agentToolExecutor.execute(
+          'browser.run_workflow',
+          {
+            workflowId,
+            inputs: {
+              query: extractBrowserSearchQuery(config.task),
+            },
+          },
+          {
+            runId: run.id,
+            agentId: config.agentId,
+            mode: config.mode,
+            taskId: config.taskId,
+            onProgress: config.onStatus,
+            toolScope,
+            runtimeAllowedTools: config.allowedTools ?? 'all',
+          },
+        );
+        config.onStatus?.(`tool-done:Browser: run workflow ${workflowId} -> ${workflowResult.summary}`);
+        const directResult = {
+          output: renderDeterministicBrowserSearchOutput(workflowResult),
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: Date.now() - startedAt,
+          },
+        } satisfies AgentProviderResult;
+        agentRunStore.finishRun(run.id, 'completed', directResult.output.slice(0, 500));
+        return {
+          ...directResult,
+          runId: run.id,
+        };
+      }
 
       const result = await this.provider.invoke({
         runId: run.id,
         agentId: config.agentId,
         mode: config.mode,
         taskId: config.taskId,
+        forceFreshThread: config.forceFreshThread,
         systemPrompt,
         task: config.task,
         contextPrompt,
@@ -132,15 +175,18 @@ export class AgentRuntime {
         maxTokensOverride: config.maxTokensOverride,
         toolScope,
         tools: listActiveTools(toolScope),
+        runtimeAllowedTools: config.allowedTools ?? 'all',
         attachments: config.attachments,
         onToken: config.onToken,
         onStatus: config.onStatus,
         onItem: config.onItem,
       });
 
-      agentRunStore.finishRun(run.id, 'completed', result.output.slice(0, 500));
+      const groundedResult = attachGroundedFinalAnswer(run.id, result);
+
+      agentRunStore.finishRun(run.id, 'completed', groundedResult.output.slice(0, 500));
       return {
-        ...result,
+        ...groundedResult,
         runId: run.id,
       };
     } catch (err) {
@@ -167,6 +213,83 @@ export class AgentRuntime {
   }
 }
 
+function shouldAutoRunDeterministicBrowserSearch(
+  taskProfileOverride?: import('../../shared/types/model').AgentTaskProfileOverride,
+): boolean {
+  return taskProfileOverride?.kind === 'browser-search';
+}
+
+function extractBrowserSearchQuery(task: string): string {
+  const marker = '\nUser request:';
+  const index = task.lastIndexOf(marker);
+  if (index === -1) return task.trim();
+  return task.slice(index + marker.length).trim();
+}
+
+function renderDeterministicBrowserSearchOutput(result: AgentToolResult): string {
+  const stepResults = result.data.stepResults;
+  if (!stepResults || typeof stepResults !== 'object') return result.summary;
+
+  const searchStep = (stepResults as Record<string, unknown>).search_browser_automation;
+  if (!searchStep || typeof searchStep !== 'object') return result.summary;
+
+  const searchData = (searchStep as Record<string, unknown>).data;
+  if (!searchData || typeof searchData !== 'object') return result.summary;
+
+  const openedPages = (searchData as Record<string, unknown>).openedPages;
+  if (!Array.isArray(openedPages) || openedPages.length === 0) return result.summary;
+
+  const firstPage = openedPages[0];
+  if (!firstPage || typeof firstPage !== 'object') return result.summary;
+
+  const page = firstPage as Record<string, unknown>;
+  const answerEvidence = Array.isArray(page.answerEvidence)
+    ? page.answerEvidence.find((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : null;
+  const summary = typeof page.summary === 'string' ? page.summary.trim() : '';
+  const title = typeof page.title === 'string' ? page.title.trim() : '';
+  const url = typeof page.url === 'string' ? page.url.trim() : '';
+  const lines = [answerEvidence || summary || result.summary];
+
+  if (title || url) {
+    lines.push([title, url].filter(Boolean).join(' — '));
+  }
+
+  return lines.filter(Boolean).join('\n\n');
+}
+
+function attachGroundedFinalAnswer(runId: string, result: AgentProviderResult): AgentProviderResult {
+  const latestSubmit = agentRunStore.findLatestToolCall(runId, 'answer.submit');
+  if (!latestSubmit || latestSubmit.status !== 'completed') return result;
+  const output = latestSubmit.output;
+  if (!output || typeof output !== 'object') return result;
+  const data = 'data' in output && output.data && typeof output.data === 'object'
+    ? output.data as Record<string, unknown>
+    : null;
+  const finalAnswer = data?.finalAnswer as FinalAnswer | undefined;
+  if (!finalAnswer) return result;
+
+  return {
+    ...result,
+    output: renderFinalAnswer(finalAnswer),
+    finalAnswer,
+  };
+}
+
+function renderFinalAnswer(finalAnswer: FinalAnswer): string {
+  const claims = finalAnswer.claims.map((claim) => {
+    const refs = claim.evidence
+      .map((ref) => `[ref:${ref.toolCallId.slice(0, 8)}]`)
+      .join(' ');
+    return refs ? `${claim.text} ${refs}` : claim.text;
+  });
+  const unresolved = finalAnswer.unresolved.map((item) => `- ${item.question}: ${item.reason}`);
+  if (unresolved.length === 0) {
+    return claims.join('\n\n').trim();
+  }
+  return `${claims.join('\n\n').trim()}\n\nUnresolved:\n${unresolved.join('\n')}`.trim();
+}
+
 type AgentProviderUsage = NonNullable<AgentProviderResult['usage']>;
 
 export function readPartialUsageFromError(err: unknown): AgentProviderUsage | null {
@@ -187,8 +310,9 @@ export function readPartialUsageFromError(err: unknown): AgentProviderUsage | nu
 export function assertInitialBrowserScope(
   task: string,
   toolNames: AgentProviderRequest['tools'][number]['name'][],
+  taskProfileOverride?: import('../../shared/types/model').AgentTaskProfileOverride,
 ): void {
-  const profile = buildTaskProfile(task);
+  const profile = buildTaskProfile(task, taskProfileOverride);
   if (profile.kind !== 'research' && profile.kind !== 'browser-automation') return;
 
   const hasBrowserTool = toolNames.some((name) => name.startsWith('browser.'));
@@ -242,8 +366,8 @@ function logPromptBudget(
     systemBreakdown?: SystemPromptBreakdown;
     contextPrompt?: string | null;
     skillCount: number;
+    availableSkillCount?: number;
     tools: AgentProviderRequest['tools'];
-    lazyLoadEnabled?: boolean;
   },
 ): void {
   const systemChars = input.systemPrompt.length;
@@ -269,6 +393,7 @@ function logPromptBudget(
         `agent=${config.agentId}`,
         `role=${config.role}`,
         `skills=${input.skillCount}`,
+        `availableSkills=${input.availableSkillCount ?? 0}`,
         `tools=${input.tools.length}`,
         `maxToolTurns=${config.maxToolTurns ?? 'default'}`,
         `systemChars=${systemChars}`,
@@ -281,7 +406,6 @@ function logPromptBudget(
         `totalChars=${totalChars}`,
         `totalEstTokens=${Math.ceil(totalChars / 4)}`,
         input.tools.length > 0 ? `scopedToolNames=${input.tools.map((tool) => tool.name).join(',')}` : 'scopedToolNames=none',
-        input.lazyLoadEnabled ? 'lazyLoad=enabled' : '',
       ].filter(Boolean).join(' '),
     },
   });
@@ -310,17 +434,6 @@ function estimateProviderToolPayloadChars(
   tools: AgentProviderRequest['tools'],
 ): number {
   if (tools.length === 0) return 0;
-  if (agentId === 'haiku') {
-    // OPTIMIZATION: Compact tool schema for Haiku
-    // - Keep dots in tool names (Haiku handles dot notation well)
-    // - Use compact JSON (no pretty-print spaces)
-    // - Store only essential fields: name, description, input_schema
-    return JSON.stringify(tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    }))).length;
-  }
 
   return tools.map((tool) => {
     const sig = describeInputSchemaCompact(tool.inputSchema);
@@ -359,12 +472,10 @@ function filterToolRegistryForConfig(
 
 // Initial tool surface for a run.
 //
-// The long-standing "map-first" / lazy-load behavior used to hide most tools on
-// startup and force the model to bootstrap its own scope via `context.load`.
-// That caused every provider to lose access to tools mid-task whenever the
-// startup regex failed to match intent. It is intentionally removed here.
+// Every registered tool is exposed to the model from the first turn. The
+// legacy lazy-load / map-first bootstrap step is intentionally not present.
 //
-// Rule, applied uniformly to every provider and every invocation:
+// Rule, applied uniformly to every invocation:
 //   - `allowedTools === 'all'` (or unset): expose every registered tool
 //     (minus `subagent.*` if the caller explicitly disabled spawning).
 //   - `allowedTools: AgentToolName[]`: the caller is opting in to a narrow

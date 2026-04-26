@@ -39,6 +39,14 @@ type BrowserTaskMemory = import('../shared/types/browserIntelligence').BrowserTa
 type TaskMemoryEntry = import('../shared/types/model').TaskMemoryEntry;
 type TaskMemoryRecord = import('../shared/types/model').TaskMemoryRecord;
 
+// ─── Code Heatmap ────────────────────────────────────────────────────────
+type CodeHeatmapSnapshot = import('../shared/types/codeHeatmap').CodeHeatmapSnapshot;
+type CodeHeatmapNode = import('../shared/types/codeHeatmap').CodeHeatmapNode;
+
+// ─── Screen Recorder ─────────────────────────────────────────────────────
+type ScreenRecorderSource = import('../shared/types/screenRecorder').ScreenRecorderSource;
+type ScreenRecorderSaveResult = import('../shared/types/screenRecorder').ScreenRecorderSaveResult;
+
 // ─── Workspace API (canonical from ipc.ts) ───────────────────────────────
 type WorkspaceAPI = import('../shared/types/ipc').WorkspaceAPI;
 

@@ -111,6 +111,22 @@ describe('AppServerBackedProvider', () => {
     expect(invokeMock).toHaveBeenCalledWith(request);
   });
 
+  it('supports explicit preconnect before the first invoke', async () => {
+    const provider = new AppServerBackedProvider({
+      providerId: 'gpt-5.4',
+      modelId: 'gpt-5.4',
+      process: {} as any,
+      wsPort: 4321,
+    });
+
+    await provider.preconnect();
+    await provider.invoke(buildRequest());
+
+    expect(constructorSpy).toHaveBeenCalledTimes(1);
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards abort to the connected delegate', async () => {
     const provider = new AppServerBackedProvider({
       providerId: 'gpt-5.4',

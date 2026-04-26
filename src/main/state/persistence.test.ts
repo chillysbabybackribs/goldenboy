@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GEMINI_PROVIDER_ID } from '../../shared/types/model';
+import { PRIMARY_PROVIDER_ID } from '../../shared/types/model';
 
 vi.mock('electron', () => ({
   app: {
@@ -25,7 +25,7 @@ describe('buildInitialState', () => {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   });
 
-  it('restores gemini task ownership from persisted state', () => {
+  it('restores codex task ownership from persisted state', () => {
     const statePath = path.join(userDataDir, 'workspace-state.json');
     fs.writeFileSync(statePath, JSON.stringify({
       executionSplit: { preset: 'balanced', ratio: 0.5 },
@@ -36,9 +36,9 @@ describe('buildInitialState', () => {
       tasks: [
         {
           id: 'task-1',
-          title: 'Gemini task',
+          title: 'Codex task',
           status: 'completed',
-          owner: GEMINI_PROVIDER_ID,
+          owner: PRIMARY_PROVIDER_ID,
           createdAt: 1,
           updatedAt: 2,
         },
@@ -49,7 +49,7 @@ describe('buildInitialState', () => {
     const state = buildInitialState();
 
     expect(state.tasks).toHaveLength(1);
-    expect(state.tasks[0].owner).toBe(GEMINI_PROVIDER_ID);
+    expect(state.tasks[0].owner).toBe(PRIMARY_PROVIDER_ID);
     expect(state.activeTaskId).toBe('task-1');
   });
 });

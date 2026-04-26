@@ -30,19 +30,9 @@ export type CachedPageRecord = {
   updatedAt: number;
   /** See {@link CachedPageChunk.taskId}. */
   taskId?: string;
-  /**
-   * Pinned pages are exempt from LRU eviction so the model can protect the
-   * 2–3 pages a task actually relies on. Set via `browser.pin_page` or the
-   * store's {@link PageKnowledgeStore.setPinned} helper.
-   */
-  pinned?: boolean;
-  /**
-   * Timestamp stamped on pages whose owning tab has been closed. The page
-   * stays searchable ("I just closed that tab, look it up again") but is
-   * preferred for eviction ahead of live-tab pages once the LRU cap is hit.
-   */
-  tabClosedAt?: number;
 };
+
+export type PageSearchConfidence = 'high' | 'medium' | 'low';
 
 export type PageSearchResult = {
   chunkId: string;
@@ -53,6 +43,12 @@ export type PageSearchResult = {
   heading: string;
   snippet: string;
   score: number;
+  /**
+   * Coarse bucket derived from `score`. The agent uses this to decide whether
+   * a `read_cached_chunk` call is worth the token cost — `low` confidence
+   * chunks are usually not.
+   */
+  confidence: PageSearchConfidence;
   tokenEstimate: number;
 };
 

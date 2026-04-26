@@ -145,109 +145,6 @@ describe('PageKnowledgeStore', () => {
     }
   });
 
-  it('markTabClosed keeps chunks searchable so "I just closed that tab" still answers from cache', () => {
-    const store = new PageKnowledgeStore();
-    const page = store.cachePage({
-      tabId: 'tab-closed',
-      url: 'https://example.com/a',
-      title: 'Page A',
-      content: longContent('rho content rho rho rho'),
-      tier: 'readability',
-    });
-
-    const closedAt = Date.now();
-    const result = store.markTabClosed('tab-closed', closedAt);
-    expect(result.pageCount).toBe(1);
-
-    const hits = store.search('rho');
-    expect(hits.length).toBeGreaterThan(0);
-    expect(hits[0].pageId).toBe(page.id);
-
-    const record = store.listPages().find(p => p.id === page.id);
-    expect(record?.tabClosedAt).toBe(closedAt);
-  });
-
-  it('setPinned exempts a cached page from global LRU eviction even when the cache is full', () => {
-    const store = new PageKnowledgeStore();
-    const protectedPage = store.cachePage({
-      tabId: 'tab-keep',
-      url: 'https://example.com/keep',
-      title: 'Keep Me',
-      content: longContent('protected signature tau tau tau'),
-      tier: 'readability',
-    });
-    const pinned = store.setPinned(protectedPage.id, true);
-    expect(pinned?.pinned).toBe(true);
-
-    // Force LRU eviction by filling beyond MAX_CACHED_PAGES (500). Rather
-    // than cache 500 real pages, monkey-patch the internal pages map so we
-    // can exercise enforceCacheLimits deterministically.
-    const internals = store as unknown as {
-      pages: Map<string, { id: string; tabId: string; chunkIds: string[]; updatedAt: number; pinned?: boolean }>;
-      chunks: Map<string, unknown>;
-      enforceCacheLimits: () => void;
-    };
-    for (let i = 0; i < 600; i++) {
-      const id = `page_filler_${i}`;
-      internals.pages.set(id, {
-        id,
-        tabId: `tab-filler-${i}`,
-        chunkIds: [],
-        updatedAt: 1 + i,
-      });
-    }
-    internals.enforceCacheLimits();
-
-    const stillThere = store.listPages().find(p => p.id === protectedPage.id);
-    expect(stillThere).toBeTruthy();
-    expect(stillThere?.pinned).toBe(true);
-  });
-
-  it('evicts closed-tab pages before live-tab pages when the LRU has to make room', () => {
-    const store = new PageKnowledgeStore();
-    const internals = store as unknown as {
-      pages: Map<string, { id: string; tabId: string; chunkIds: string[]; updatedAt: number; pinned?: boolean; tabClosedAt?: number }>;
-      chunks: Map<string, unknown>;
-      enforceCacheLimits: () => void;
-    };
-
-    // Single live-tab "old" page plus one closed-tab page that is newer.
-    // Under the old pure-updatedAt LRU the live page would evict first;
-    // under the new policy the closed page evicts first regardless of age.
-    internals.pages.set('page_live_old', {
-      id: 'page_live_old',
-      tabId: 'tab-live',
-      chunkIds: [],
-      updatedAt: 50,
-    });
-    internals.pages.set('page_closed_new', {
-      id: 'page_closed_new',
-      tabId: 'tab-closed',
-      chunkIds: [],
-      updatedAt: 100,
-      tabClosedAt: 100,
-    });
-    // Fill exactly to one over the cap so enforceCacheLimits drops a
-    // single page — the one whose eviction order was promoted by the
-    // closed-tab rule.
-    for (let i = 0; i < 499; i++) {
-      const id = `page_filler_${i}`;
-      internals.pages.set(id, {
-        id,
-        tabId: `tab-filler-${i}`,
-        chunkIds: [],
-        updatedAt: 500 + i,
-      });
-    }
-
-    internals.enforceCacheLimits();
-
-    const remaining = new Set(store.listPages().map(p => p.id));
-    expect(remaining.has('page_closed_new')).toBe(false);
-    expect(remaining.has('page_live_old')).toBe(true);
-    expect(remaining.size).toBe(500);
-  });
-
   it('removePagesForTab drops every page cached under that tab, including prior history', () => {
     const store = new PageKnowledgeStore();
     store.cachePage({
@@ -463,6 +360,100 @@ describe('PageKnowledgeStore', () => {
       expect(pages.size).toBeGreaterThan(1);
     }
     expect(answer.suggestedChunkIds.length).toBeLessThanOrEqual(4);
+  });
+
+  it('picks a snippet window around the densest cluster of query terms, not the first occurrence', () => {
+    const store = new PageKnowledgeStore();
+    // Construct a page where "gpt5" appears early and "pricing" appears far
+    // later; the first-occurrence window would slice around "gpt5" and miss
+    // "pricing" entirely.
+    const earlyNoise = 'gpt5 mentioned early. '.repeat(4);
+    const filler = 'Unrelated filler talking about other topics. '.repeat(30);
+    const answerBlock = 'The pricing for gpt5 is laid out here: $10/M input tokens and $30/M output tokens for gpt5 pricing.';
+    const content = `# Heading\n\n${earlyNoise}\n\n${filler}\n\n${answerBlock}\n\n${filler}`;
+    store.cachePage({
+      tabId: 'tab-snippet',
+      url: 'https://example.com/snippet',
+      title: 'Snippet test page',
+      content,
+      tier: 'readability',
+    });
+
+    const results = store.search('gpt5 pricing', { qualityFloor: 0 });
+    expect(results.length).toBeGreaterThan(0);
+    const top = results[0];
+    expect(top.snippet.toLowerCase()).toContain('pricing');
+    expect(top.snippet.toLowerCase()).toContain('gpt5');
+  });
+
+  it('applies a phrase-match boost so chunks containing the full query as a substring outrank scattered-term chunks', () => {
+    const store = new PageKnowledgeStore();
+    const phraseContent = `# Heading\n\nIntro copy padding padding padding padding padding padding. The exact phrase matter a lot matters a lot here. More filler more filler more filler more filler.`;
+    const scatteredContent = `# Heading\n\nThis page mentions phrase in one paragraph. ${'filler '.repeat(60)}\n\nAnd later another section mentions matter entirely separately, with lots of filler words between them.`;
+    const phrasePage = store.cachePage({
+      tabId: 'tab-phrase',
+      url: 'https://example.com/phrase',
+      title: 'Phrase page',
+      content: phraseContent,
+      tier: 'readability',
+    });
+    const scatteredPage = store.cachePage({
+      tabId: 'tab-scattered',
+      url: 'https://example.com/scattered',
+      title: 'Scattered page',
+      content: scatteredContent,
+      tier: 'readability',
+    });
+
+    const results = store.search('phrase matter', { qualityFloor: 0 });
+    const phraseResult = results.find(r => r.pageId === phrasePage.id);
+    const scatteredResult = results.find(r => r.pageId === scatteredPage.id);
+    expect(phraseResult).toBeTruthy();
+    expect(scatteredResult).toBeTruthy();
+    if (phraseResult && scatteredResult) {
+      expect(phraseResult.score).toBeGreaterThan(scatteredResult.score);
+    }
+  });
+
+  it('filters results below the default quality floor but honors qualityFloor: 0 for audit access', () => {
+    const store = new PageKnowledgeStore();
+    // A page that mentions "edgeterm" once buried in filler — raw score will
+    // be a handful, well below the default floor of 3 once we subtract the
+    // phrase/heading/title boosts that this trivial layout does not get.
+    const content = `# Heading\n\nLong body of unrelated text. ${'prose '.repeat(50)} edgeterm appears here once. ${'prose '.repeat(50)}`;
+    store.cachePage({
+      tabId: 'tab-weak',
+      url: 'https://example.com/weak',
+      title: 'Weak match page',
+      content,
+      tier: 'readability',
+    });
+
+    const floored = store.search('edgeterm');
+    const unfiltered = store.search('edgeterm', { qualityFloor: 0 });
+    // Unfiltered search must see at least what the floored search sees.
+    expect(unfiltered.length).toBeGreaterThanOrEqual(floored.length);
+    for (const result of floored) {
+      expect(result.score).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('attaches a confidence tier to each search result so the agent can skip low-confidence chunks', () => {
+    const store = new PageKnowledgeStore();
+    const highContent = `# Heading\n\n${'strongmatch strongmatch strongmatch '.repeat(30)}`;
+    store.cachePage({
+      tabId: 'tab-high',
+      url: 'https://example.com/high',
+      title: 'strongmatch everywhere',
+      content: highContent,
+      tier: 'readability',
+    });
+    const results = store.search('strongmatch', { qualityFloor: 0 });
+    expect(results.length).toBeGreaterThan(0);
+    for (const r of results) {
+      expect(['high', 'medium', 'low']).toContain(r.confidence);
+    }
+    expect(results[0].confidence).toBe('high');
   });
 
   it('clearAll wipes the cache synchronously so tests and shutdown hooks observe durable state', () => {

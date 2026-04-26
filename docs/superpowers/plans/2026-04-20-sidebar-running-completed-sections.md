@@ -1,5 +1,7 @@
 # Sidebar Running/Completed Sections Implementation Plan
 
+> Historical note: this dated UI plan is preserved as implementation history. Use the current renderer code as the source of truth for shipped behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Split the agent sidebar into "Running" (backgrounded tasks) and "Completed" sections, hiding the active task from the sidebar entirely, and capping completed tasks at 3 with a "Show N more" toggle.

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { pruneExpiredEntries } from './AppServerProvider';
 import { AppServerProvider } from './AppServerProvider';
 
@@ -179,7 +179,7 @@ describe('web_search config enforcement', () => {
 });
 
 describe('turn text emission', () => {
-  it('streams assistant message deltas via onToken so the chat UI sees live output', async () => {
+  it('buffers pre-tool assistant deltas instead of streaming them into chat before the first tool call', async () => {
     const tokens: string[] = [];
     const mockWs = {
       send: (data: string) => {
@@ -244,7 +244,7 @@ describe('turn text emission', () => {
 
     expect(result.kind).toBe('tool_calls');
     expect(result.message).toContain('Checking the page');
-    expect(tokens).toEqual(['Checking the page before I click.']);
+    expect(tokens).toEqual([]);
   });
 });
 
@@ -308,7 +308,158 @@ describe('turn input attachments', () => {
 
     expect(turnStartMessage).toBeTruthy();
     expect(turnStartMessage.params.input).toEqual([
-      { type: 'local_image', path: '/tmp/diagram.png' },
+      { type: 'localImage', path: '/tmp/diagram.png' },
+    ]);
+  });
+
+  it('sends multiple image attachments as separate input items in order, with text first', async () => {
+    let turnStartMessage: any = null;
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'turn/start') {
+          turnStartMessage = msg;
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            for (const handler of handlers) {
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: 'Compare these screenshots',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: 'Compare these screenshots',
+        tools: [],
+        loadableTools: [],
+        attachments: [
+          {
+            type: 'image',
+            mediaType: 'image/png',
+            data: 'Zmlyc3Q=',
+            name: 'first.png',
+            path: '/tmp/first.png',
+          },
+          {
+            type: 'image',
+            mediaType: 'image/jpeg',
+            data: 'c2Vjb25k',
+            name: 'pasted-1.jpg',
+          },
+          {
+            type: 'image',
+            mediaType: 'image/webp',
+            data: 'dGhpcmQ=',
+            name: 'pasted-2.webp',
+          },
+        ],
+      },
+      currentTools: [],
+      loadableTools: [],
+    });
+
+    expect(turnStartMessage).toBeTruthy();
+    expect(turnStartMessage.params.input).toEqual([
+      { type: 'text', text: 'Compare these screenshots' },
+      { type: 'localImage', path: '/tmp/first.png' },
+      { type: 'image', url: 'data:image/jpeg;base64,c2Vjb25k' },
+      { type: 'image', url: 'data:image/webp;base64,dGhpcmQ=' },
+    ]);
+  });
+
+  it('sends images without an accompanying prompt as image-only input', async () => {
+    let turnStartMessage: any = null;
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'turn/start') {
+          turnStartMessage = msg;
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            for (const handler of handlers) {
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: '',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: '',
+        tools: [],
+        loadableTools: [],
+        attachments: [
+          {
+            type: 'image',
+            mediaType: 'image/png',
+            data: 'b25l',
+            name: 'pasted-1.png',
+          },
+          {
+            type: 'image',
+            mediaType: 'image/png',
+            data: 'dHdv',
+            name: 'pasted-2.png',
+          },
+        ],
+      },
+      currentTools: [],
+      loadableTools: [],
+    });
+
+    expect(turnStartMessage).toBeTruthy();
+    expect(turnStartMessage.params.input).toEqual([
+      { type: 'image', url: 'data:image/png;base64,b25l' },
+      { type: 'image', url: 'data:image/png;base64,dHdv' },
     ]);
   });
 });
@@ -392,8 +543,9 @@ describe('turn recovery', () => {
 });
 
 describe('agent message paragraph separation', () => {
-  it('inserts a paragraph break between consecutive agentMessage thoughts in a single turn', async () => {
+  it('emits a thought-boundary status after each completed agentMessage item while streaming tokens cleanly', async () => {
     const tokens: string[] = [];
+    const statuses: string[] = [];
     const mockWs = {
       send: (data: string) => {
         const msg = JSON.parse(data) as { id: number; method?: string };
@@ -469,20 +621,109 @@ describe('agent message paragraph separation', () => {
         tools: [],
         loadableTools: [],
         onToken: (text: string) => tokens.push(text),
+        onStatus: (status: string) => statuses.push(status),
       },
       currentTools: [],
       loadableTools: [],
     });
 
     expect(result.kind).toBe('final');
-    // Tokens stream in order: first thought, paragraph break, second thought,
-    // trailing break from closing the last item. The trailing break renders
-    // as an empty paragraph in markdown (no visible effect) and is trimmed
-    // from the published message below.
-    expect(tokens).toEqual(['First thought.', '\n\n', 'Second thought.', '\n\n']);
-    // The final published message separates the two thoughts with a blank
-    // line and strips any trailing whitespace from the closing break.
+    // Tokens stream the raw text deltas only. Paragraph breaks are NOT
+    // emitted as sentinel tokens anymore — the renderer commits each
+    // thought into a separate slot using the `thought-boundary` status
+    // below. This keeps the live typewriter buffer free of out-of-band
+    // separators that used to cause pacing glitches.
+    expect(tokens).toEqual(['First thought.', 'Second thought.']);
+    // Exactly one thought-boundary per completed agentMessage item.
+    expect(statuses.filter(s => s === 'thought-boundary')).toHaveLength(2);
+    // The final published message still separates the two thoughts with a
+    // blank line (the accumulated buffer keeps the \n\n for downstream
+    // consumers and for the canonical `result.output`). Trailing whitespace
+    // is trimmed before publish.
     expect(result.message).toBe('First thought.\n\nSecond thought.');
+  });
+
+  it('uses the last completed agentMessage when the completed items are cumulative snapshots', async () => {
+    const mockWs = {
+      send: (data: string) => {
+        const msg = JSON.parse(data) as { id: number; method?: string };
+        if (msg.method === 'turn/start') {
+          setTimeout(() => {
+            const handlers = (mockWs as any)._messageHandlers ?? [];
+            const handler = handlers[0];
+            if (handler) {
+              handler({ data: JSON.stringify({
+                method: 'item/agentMessage/delta',
+                params: { delta: 'I found multiple relevant Reddit threads on Gemini models.' },
+              }) });
+              handler({ data: JSON.stringify({
+                method: 'item/completed',
+                params: {
+                  item: {
+                    id: 'msg-1',
+                    type: 'agentMessage',
+                    text: 'I found multiple relevant Reddit threads on Gemini models.',
+                  },
+                },
+              }) });
+              handler({ data: JSON.stringify({
+                method: 'item/agentMessage/delta',
+                params: { delta: ' I found relevant Reddit discussions already:\n- r/GeminiAI: practical advice on model choice.' },
+              }) });
+              handler({ data: JSON.stringify({
+                method: 'item/completed',
+                params: {
+                  item: {
+                    id: 'msg-2',
+                    type: 'agentMessage',
+                    text: 'I found multiple relevant Reddit threads on Gemini models.\n\nI found relevant Reddit discussions already:\n- r/GeminiAI: practical advice on model choice.',
+                  },
+                },
+              }) });
+              handler({ data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+            }
+          }, 0);
+        }
+      },
+      addEventListener: (event: string, handler: unknown) => {
+        if (event === 'message') {
+          (mockWs as any)._messageHandlers = (mockWs as any)._messageHandlers ?? [];
+          (mockWs as any)._messageHandlers.push(handler);
+        }
+      },
+      removeEventListener: (_event: string, handler: unknown) => {
+        const idx = (mockWs as any)._messageHandlers?.indexOf(handler) ?? -1;
+        if (idx !== -1) (mockWs as any)._messageHandlers.splice(idx, 1);
+      },
+    } as unknown as WebSocket;
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+
+    const result = await (provider as any).runOneTurn(mockWs, {
+      threadId: 'thread-1',
+      task: 'Answer directly.',
+      request: {
+        runId: 'run-1',
+        agentId: 'gpt-5.4',
+        mode: 'unrestricted-dev',
+        taskId: 'task-1',
+        systemPrompt: 'system',
+        task: 'Answer directly.',
+        tools: [],
+        loadableTools: [],
+      },
+      currentTools: [],
+      loadableTools: [],
+    });
+
+    expect(result.kind).toBe('final');
+    expect(result.message).toBe(
+      'I found multiple relevant Reddit threads on Gemini models.\n\nI found relevant Reddit discussions already:\n- r/GeminiAI: practical advice on model choice.',
+    );
   });
 });
 
@@ -566,6 +807,16 @@ describe('turn boundary signalling', () => {
 
     expect(turnStartCount).toBe(2);
     expect(result.output).toBe('Now here is my final answer.');
+    const turnStarts = ws.sent.filter((msg) => msg.method === 'turn/start');
+    expect(turnStarts).toHaveLength(2);
+    // Post-tool turn sends a minimal single-word nudge. The previous
+    // multi-sentence prompt was injected as a user turn on every tool
+    // boundary and measurably biased the model toward re-issuing tools
+    // (duplicate browser.open_tab observed in smoke tests). Keep the
+    // payload to a neutral, non-directive continuation token.
+    expect(turnStarts[1].params.input).toEqual([
+      { type: 'text', text: 'continue' },
+    ]);
     // The exact ordering matters: the tool lifecycle for turn 1 comes first,
     // THEN the turn-boundary, THEN the next turn's deltas. The UI relies on
     // this order to clear the prior descriptive text before new deltas arrive.
@@ -576,7 +827,7 @@ describe('turn boundary signalling', () => {
     expect(turnBoundaryIdx).toBeGreaterThan(toolDoneIdx);
     // Tokens for both turns still flow through the same onToken channel;
     // the UI uses the turn-boundary signal (not token gaps) to reset.
-    expect(tokens.join('')).toBe('First, I will check the page.Now here is my final answer.');
+    expect(tokens.join('')).toBe('Now here is my final answer.');
   });
 
   it('does not emit a turn-boundary after a final turn', async () => {
@@ -618,5 +869,289 @@ describe('turn boundary signalling', () => {
     } as any);
 
     expect(statuses).not.toContain('turn-boundary');
+  });
+});
+
+describe('answer.submit terminal-turn detection', () => {
+  // When the model's last turn contains both `agentMessage` items and a
+  // successful `answer.submit` tool call, the provider used to classify the
+  // turn as `tool_calls` (because tools fired) and loop for one more turn.
+  // The model usually had nothing more to say, so the next turn either hung
+  // (Codex keeps the socket warm with tokenUsage updates, resetting our
+  // per-message timer indefinitely) or returned an empty final that
+  // clobbered the already-rendered text. Either way the live-run card was
+  // stuck on "Exploring ideas". Treat a successful answer.submit as the
+  // terminal signal regardless of whether other tools fired.
+  it('resolves the turn as final when a successful answer.submit is among its tool calls', async () => {
+    const ws = createMockWs();
+    let turnStartCount = 0;
+
+    ws.send = function send(data: string) {
+      this.sent.push(JSON.parse(data));
+      const msg = this.sent[this.sent.length - 1];
+      if (msg.method === 'turn/start') {
+        turnStartCount += 1;
+        setTimeout(() => {
+          ws.emit('message', { data: JSON.stringify({
+            method: 'item/agentMessage/delta',
+            params: { delta: 'Here is the final answer grounded in the run.' },
+          }) });
+          ws.emit('message', { data: JSON.stringify({
+            method: 'item/started',
+            params: {
+              item: {
+                id: 'mcp-submit',
+                type: 'mcpToolCall',
+                server: 'v2-tools',
+                tool: 'answer__submit',
+                arguments: { claims: [], unresolved: [] },
+              },
+            },
+          }) });
+          ws.emit('message', { data: JSON.stringify({
+            method: 'item/completed',
+            params: {
+              item: {
+                id: 'mcp-submit',
+                type: 'mcpToolCall',
+                server: 'v2-tools',
+                tool: 'answer__submit',
+                arguments: { claims: [], unresolved: [] },
+                result: { summary: 'answer accepted' },
+                error: null,
+              },
+            },
+          }) });
+          ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+        }, 0);
+      }
+    };
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+    (provider as any).ws = ws;
+    (provider as any).acquireThread = async () => 'thread-1';
+    (provider as any).writeContextFile = () => {};
+
+    const statuses: string[] = [];
+    const result = await provider.invoke({
+      runId: 'run-1',
+      agentId: 'gpt-5.4',
+      mode: 'unrestricted-dev',
+      taskId: 'task-1',
+      systemPrompt: 'system',
+      task: 'Answer with evidence.',
+      tools: [],
+      onStatus: (status: string) => statuses.push(status),
+    } as any);
+
+    // Exactly one turn: answer.submit is terminal.
+    expect(turnStartCount).toBe(1);
+    expect(result.output).toBe('Here is the final answer grounded in the run.');
+    // No turn-boundary — the UI must flip straight to the done state
+    // instead of showing "Exploring ideas" while we wait for a turn
+    // that would never come.
+    expect(statuses).not.toContain('turn-boundary');
+  });
+
+  it('treats a failed answer.submit as a regular tool call, not a terminal signal', async () => {
+    const ws = createMockWs();
+    let turnStartCount = 0;
+
+    ws.send = function send(data: string) {
+      this.sent.push(JSON.parse(data));
+      const msg = this.sent[this.sent.length - 1];
+      if (msg.method === 'turn/start') {
+        turnStartCount += 1;
+        const isFirstTurn = turnStartCount === 1;
+        setTimeout(() => {
+          if (isFirstTurn) {
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/started',
+              params: {
+                item: {
+                  id: 'mcp-submit-fail',
+                  type: 'mcpToolCall',
+                  server: 'v2-tools',
+                  tool: 'answer__submit',
+                  arguments: { claims: [], unresolved: [] },
+                },
+              },
+            }) });
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/completed',
+              params: {
+                item: {
+                  id: 'mcp-submit-fail',
+                  type: 'mcpToolCall',
+                  server: 'v2-tools',
+                  tool: 'answer__submit',
+                  arguments: { claims: [], unresolved: [] },
+                  result: null,
+                  error: { message: 'GROUNDING FAIL' },
+                },
+              },
+            }) });
+            ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+          } else {
+            ws.emit('message', { data: JSON.stringify({
+              method: 'item/agentMessage/delta',
+              params: { delta: 'Revised answer.' },
+            }) });
+            ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+          }
+        }, 0);
+      }
+    };
+
+    const provider = new AppServerProvider({
+      providerId: 'gpt-5.4' as any,
+      modelId: 'gpt-5.4',
+      process: {} as any,
+    });
+    (provider as any).ws = ws;
+    (provider as any).acquireThread = async () => 'thread-1';
+    (provider as any).writeContextFile = () => {};
+
+    const result = await provider.invoke({
+      runId: 'run-1',
+      agentId: 'gpt-5.4',
+      mode: 'unrestricted-dev',
+      taskId: 'task-1',
+      systemPrompt: 'system',
+      task: 'Answer with evidence.',
+      tools: [],
+    } as any);
+
+    // Failed answer.submit should loop once more so the model can revise.
+    expect(turnStartCount).toBe(2);
+    expect(result.output).toBe('Revised answer.');
+  });
+});
+
+describe('turn idle timer', () => {
+  // The previous implementation reset the 3-minute turn deadline on every
+  // incoming message, so Codex's tokenUsage keepalives (sent while the
+  // model is thinking) could indefinitely defer the timeout. If the
+  // app-server failed to emit `turn/completed` at all, the UI would sit
+  // forever. A separate idle timer fires on message-silence regardless of
+  // the longer wall-clock budget.
+  it('times out a turn when no messages arrive within the idle window, even if the wall-clock budget has not expired', async () => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      ws.send = function send(data: string) {
+        this.sent.push(JSON.parse(data));
+        // Do not emit any response — simulate a stalled Codex turn.
+      };
+
+      const provider = new AppServerProvider({
+        providerId: 'gpt-5.4' as any,
+        modelId: 'gpt-5.4',
+        process: {} as any,
+      });
+
+      const promise = (provider as any).runOneTurn(ws, {
+        threadId: 'thread-1',
+        task: 'Do something.',
+        request: {
+          runId: 'run-1',
+          agentId: 'gpt-5.4',
+          mode: 'unrestricted-dev',
+          taskId: 'task-1',
+          systemPrompt: 'system',
+          task: 'Do something.',
+          tools: [],
+        },
+        currentTools: [],
+      });
+
+      // Attach a catch handler synchronously so the eventual rejection
+      // does not surface as an unhandled rejection while we advance
+      // timers.
+      const settled: { error?: Error } = {};
+      promise.catch((err: Error) => { settled.error = err; });
+
+      // 45 seconds of silence — well past the 30s idle deadline, well
+      // below the 3-minute wall-clock budget. The old implementation
+      // would have waited the full 3 minutes.
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      expect(settled.error).toBeDefined();
+      expect(settled.error?.message).toMatch(/idle/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fire the idle timer while messages keep arriving', async () => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      let heartbeats = 0;
+      ws.send = function send(data: string) {
+        this.sent.push(JSON.parse(data));
+        const msg = this.sent[this.sent.length - 1];
+        if (msg.method === 'turn/start') {
+          // Emit a tokenUsage notification every 10s for 60s — longer
+          // than the 30s idle window but shorter than the 3-minute
+          // wall-clock. Then finally resolve the turn.
+          const scheduleHeartbeat = () => {
+            setTimeout(() => {
+              heartbeats += 1;
+              ws.emit('message', { data: JSON.stringify({
+                method: 'thread/tokenUsage/updated',
+                params: { tokenUsage: { last: { inputTokens: 1, outputTokens: 1 } } },
+              }) });
+              if (heartbeats < 6) scheduleHeartbeat();
+              else {
+                setTimeout(() => {
+                  ws.emit('message', { data: JSON.stringify({
+                    method: 'item/agentMessage/delta',
+                    params: { delta: 'done' },
+                  }) });
+                  ws.emit('message', { data: JSON.stringify({ method: 'turn/completed', params: {} }) });
+                }, 5_000);
+              }
+            }, 10_000);
+          };
+          scheduleHeartbeat();
+        }
+      };
+
+      const provider = new AppServerProvider({
+        providerId: 'gpt-5.4' as any,
+        modelId: 'gpt-5.4',
+        process: {} as any,
+      });
+
+      const promise = (provider as any).runOneTurn(ws, {
+        threadId: 'thread-1',
+        task: 'Do something.',
+        request: {
+          runId: 'run-1',
+          agentId: 'gpt-5.4',
+          mode: 'unrestricted-dev',
+          taskId: 'task-1',
+          systemPrompt: 'system',
+          task: 'Do something.',
+          tools: [],
+        },
+        currentTools: [],
+      });
+
+      // Drive the fake clock in small steps so the scheduled heartbeat
+      // setTimeouts fire in order.
+      await vi.advanceTimersByTimeAsync(70_000);
+
+      const result = await promise;
+      expect(result.kind).toBe('final');
+      expect(heartbeats).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,7 +1,9 @@
 # Codex Continuation Note
 
+Status: archived historical note. This file reflects an older rollout checkpoint and should not be treated as current implementation guidance.
+
 Date: 2026-04-12
-Status: current
+Original status at time of writing: current
 
 Use this in a new chat:
 

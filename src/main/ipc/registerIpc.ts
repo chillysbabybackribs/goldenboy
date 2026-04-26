@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { ipcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
+import { app, ipcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { AgentInvocationOptions } from '../../shared/types/model';
 import { appStateStore } from '../state/appStateStore';
@@ -21,9 +21,11 @@ import { agentModelService } from '../agent/AgentModelService';
 import { agentToolExecutor } from '../agent/AgentToolExecutor';
 import { documentAttachmentStore } from '../attachments/DocumentAttachmentStore';
 import { taskMemoryStore } from '../models/taskMemoryStore';
+import { codeHeatmapService } from '../codeHeatmap/CodeHeatmapService';
 import * as path from 'path';
 import * as os from 'os';
 import type { DocumentImportRequest } from '../../shared/types/attachments';
+import type { ScreenRecorderPendingFile } from '../../shared/types/screenRecorder';
 
 type TrustedIpcEvent = IpcMainEvent | IpcMainInvokeEvent;
 
@@ -56,6 +58,10 @@ function safeHandle<TEventArgs extends unknown[], TResult>(
     }
     return handler(event, ...args);
   });
+}
+
+function sanitizeRecorderFileSegment(input: string): string {
+  return input.replace(/[^a-z0-9._-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'capture';
 }
 
 export function registerIpc(): void {
@@ -213,6 +219,32 @@ export function registerIpc(): void {
     return terminalService.captureScrollback();
   });
 
+  safeHandle(IPC_CHANNELS.SCREEN_RECORDER_SAVE_FILES, async (_event, files: ScreenRecorderPendingFile[]) => {
+    const downloadsDir = app.getPath('downloads') || path.join(os.homedir(), 'Downloads');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const targetDir = path.join(downloadsDir, 'Goldenboy Recordings', stamp);
+    await fs.promises.mkdir(targetDir, { recursive: true });
+
+    const written = [];
+    for (const file of files) {
+      const baseName = sanitizeRecorderFileSegment(file.fileName);
+      const finalName = baseName.toLowerCase().endsWith('.webm') ? baseName : `${baseName}.webm`;
+      const outputPath = path.join(targetDir, finalName);
+      const buffer = Buffer.from(file.bytes);
+      await fs.promises.writeFile(outputPath, buffer);
+      written.push({
+        fileName: finalName,
+        path: outputPath,
+        byteLength: buffer.byteLength,
+      });
+    }
+
+    return {
+      directory: targetDir,
+      files: written,
+    };
+  });
+
   // ── Browser runtime IPC handlers ─────────────────────────────────────
 
   safeHandle(IPC_CHANNELS.BROWSER_GET_STATE, () => {
@@ -367,20 +399,12 @@ export function registerIpc(): void {
     return agentModelService.cancel(taskId);
   });
 
-  safeHandle(IPC_CHANNELS.MODEL_GET_PROVIDERS, () => {
-    return agentModelService.getProviderStatuses();
-  });
-
   safeHandle(IPC_CHANNELS.MODEL_GET_TASK_MEMORY, (_event, taskId: string) => {
     return agentModelService.getTaskMemory(taskId);
   });
 
   safeHandle(IPC_CHANNELS.MODEL_RESOLVE, (_event, prompt: string, explicitOwner?: string, options?: AgentInvocationOptions) => {
     return agentModelService.resolve(prompt, explicitOwner, options);
-  });
-
-  safeHandle(IPC_CHANNELS.MODEL_HANDOFF, () => {
-    throw new Error('Model handoff is not implemented in the v2 agent runtime yet.');
   });
 
   safeHandle(
@@ -404,37 +428,8 @@ export function registerIpc(): void {
     },
   );
 
-  // ── Filesystem bridge (unsandboxed, Node fs) ────────────────────────────
-
-  safeHandle(IPC_CHANNELS.FS_READ, (_event, filePath: string) => {
-    return fs.readFileSync(filePath, 'utf-8');
-  });
-
-  safeHandle(IPC_CHANNELS.FS_WRITE, (_event, filePath: string, content: string) => {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content, 'utf-8');
-  });
-
-  safeHandle(IPC_CHANNELS.FS_EXISTS, (_event, filePath: string) => {
-    return fs.existsSync(filePath);
-  });
-
-  safeHandle(IPC_CHANNELS.FS_LIST, (_event, dirPath: string) => {
-    if (!fs.existsSync(dirPath)) return [];
-    return fs.readdirSync(dirPath).map((name: string) => ({
-      name,
-      isDirectory: fs.statSync(path.join(dirPath, name)).isDirectory(),
-    }));
-  });
-
-  safeHandle(IPC_CHANNELS.FS_DELETE, (_event, filePath: string) => {
-    if (fs.existsSync(filePath)) {
-      fs.rmSync(filePath, { recursive: true, force: true });
-    }
-  });
-
-  safeHandle(IPC_CHANNELS.FS_MKDIR, (_event, dirPath: string) => {
-    fs.mkdirSync(dirPath, { recursive: true });
+  safeHandle(IPC_CHANNELS.CODE_HEATMAP_GET_SNAPSHOT, () => {
+    return codeHeatmapService.getSnapshot();
   });
 
   // Debug: test disk extraction on active browser tab

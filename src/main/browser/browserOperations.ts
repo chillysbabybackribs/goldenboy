@@ -1,9 +1,12 @@
 import {
   BrowserActivateTabPayload,
+  BrowserApplyVisualMaskPayload,
   BrowserClickPayload,
   BrowserClickRankedActionPayload,
+  BrowserClearVisualMasksPayload,
   BrowserCloseTabPayload,
   BrowserCreateTabPayload,
+  BrowserListVisualMasksPayload,
   BrowserOpenSearchResultsTabsPayload,
   BrowserSemanticTargetPayload,
   BrowserSplitTabPayload,
@@ -55,6 +58,9 @@ export type BrowserOperationPayloadMap = {
   'browser.click-ranked-action': BrowserClickRankedActionPayload;
   'browser.wait-for-overlay-state': BrowserWaitForOverlayPayload;
   'browser.open-search-results-tabs': BrowserOpenSearchResultsTabsPayload;
+  'browser.apply-visual-mask': BrowserApplyVisualMaskPayload;
+  'browser.clear-visual-masks': BrowserClearVisualMasksPayload;
+  'browser.list-visual-masks': BrowserListVisualMasksPayload;
   'browser.get-state': Record<string, never>;
   'browser.get-tabs': Record<string, never>;
   'browser.search-web': { query: string };
@@ -338,6 +344,48 @@ export async function executeBrowserOperation(
         result = {
           summary: `Typed in: ${selector}`,
           data: { selector, textLength: text.length, result: typeResult },
+        };
+        break;
+      }
+
+      case 'browser.apply-visual-mask': {
+        const { selector, tabId, blurPx } = input.payload;
+        const applyResult = await browser.applyVisualMask({ selector, tabId, blurPx });
+        if (!applyResult.success) {
+          throw new Error(applyResult.error || `Apply visual mask failed: ${selector}`);
+        }
+        result = {
+          summary: `Applied visual mask: ${selector}`,
+          data: {
+            selector,
+            blurPx: blurPx ?? 7,
+            result: applyResult,
+          },
+        };
+        break;
+      }
+
+      case 'browser.clear-visual-masks': {
+        const clearResult = await browser.clearVisualMasks(input.payload);
+        if (!clearResult.success) {
+          throw new Error(clearResult.error || 'Clear visual masks failed');
+        }
+        result = {
+          summary: clearResult.clearedCount > 0
+            ? `Cleared ${clearResult.clearedCount} visual mask${clearResult.clearedCount === 1 ? '' : 's'}`
+            : 'No visual masks were cleared',
+          data: clearResult,
+        };
+        break;
+      }
+
+      case 'browser.list-visual-masks': {
+        const masks = browser.listVisualMasks(input.payload.tabId);
+        result = {
+          summary: masks.length > 0
+            ? `Listed ${masks.length} visual mask${masks.length === 1 ? '' : 's'}`
+            : 'No visual masks found',
+          data: { masks },
         };
         break;
       }

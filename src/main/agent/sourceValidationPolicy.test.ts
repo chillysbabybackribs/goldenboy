@@ -40,6 +40,9 @@ describe('source validation policy', () => {
     expect(prompt).toContain('Before marking any result valid');
     expect(prompt).toContain('## Physical Task Completion');
     expect(prompt).toContain('perform it via tools');
+    expect(prompt).toContain('After any codebase edit, run the repository build before stopping');
+    expect(prompt).toContain('Prefer `terminal.build_repo` over raw `terminal.exec`');
+    expect(prompt).toContain('prefer `terminal.test_repo` over raw `terminal.exec`');
     expect(prompt).toContain('## Workspace Root');
     expect(prompt).toContain(APP_WORKSPACE_ROOT);
     expect(prompt).toContain('## Operating Rules');
@@ -48,9 +51,9 @@ describe('source validation policy', () => {
     expect(prompt).not.toMatch(/Current date\/time: [A-Z][a-z]+day,/);
     expect(prompt).toContain('Current date/time is provided in the user-turn runtime context below');
     expect(prompt).toContain('## Tool Map');
-    expect(prompt).toContain('Every tool listed in your tool schema is already active for this run');
-    expect(prompt).toContain('`context.load`');
+    expect(prompt).toContain('Every tool in your schema is already active for this run');
     expect(prompt).not.toContain('## Tool Catalog');
+    expect(prompt).not.toContain('context.load');
     expect(prompt).not.toContain('tool-runtime.html');
     expect(prompt).not.toContain('window.runTool');
     expect(prompt).not.toContain('runtime.search_tools');
@@ -80,6 +83,9 @@ describe('source validation policy', () => {
     const skill: AgentSkill = {
       name: 'browser-operation',
       path: '/tmp/browser-operation/SKILL.md',
+      description: 'Use this skill when a task requires navigation or browser research.',
+      allowedTools: ['browser.navigate', 'browser.research_search'],
+      references: ['src/main/browser/BrowserService.ts'],
       body: [
         '# Browser Operation',
         '',
@@ -92,7 +98,11 @@ describe('source validation policy', () => {
         '## Workflow',
         '',
         '1. Read current browser state.',
-        '2. Search cached chunks before full extraction.',
+        '2. Extract the live page with browser.extract_page; persist takeaways with browser.record_finding.',
+        '',
+        '## Rules',
+        '',
+        '- Use live browser evidence.',
         '',
         '## Preferred Tools',
         '',
@@ -110,6 +120,8 @@ describe('source validation policy', () => {
     expect(prompt).toContain('## Skill: browser-operation');
     expect(prompt).toContain('Use this skill when a task requires navigation or browser research.');
     expect(prompt).toContain('## Workflow');
+    expect(prompt).toContain('## Rules');
+    expect(prompt).toContain('Use live browser evidence.');
     expect(prompt).toContain('## Preferred Tools');
     expect(prompt).not.toContain('## Relevant Files');
     expect(prompt).not.toContain('BrowserService.ts');

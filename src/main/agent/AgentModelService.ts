@@ -1,12 +1,7 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { LogSource } from '../../shared/types/appState';
 import {
-  GEMINI_PROVIDER_ID,
-  HAIKU_PROVIDER_ID,
   PRIMARY_PROVIDER_ID,
   AgentInvocationOptions,
   InvocationProgress,
@@ -21,18 +16,16 @@ import { AppEventType } from '../../shared/types/events';
 import { generateId } from '../../shared/utils/ids';
 import { AgentProvider, AgentProviderResult, AgentToolName } from './AgentTypes';
 import { AgentRuntime, readPartialUsageFromError } from './AgentRuntime';
-import { CodexProvider } from './CodexProvider';
-import { GeminiProvider } from './GeminiProvider';
-import { HaikuProvider } from './HaikuProvider';
+import { probeCodexAvailability } from './codexBinary';
 import { AppServerBackedProvider } from './AppServerBackedProvider';
-import { AppServerProcess } from './AppServerProcess';
-import { AppServerProvider } from './AppServerProvider';
 import { agentToolExecutor } from './AgentToolExecutor';
 import { createBrowserToolDefinitions } from './tools/browser';
-import { createContextToolDefinitions } from './tools/context';
+import { createAnswerSubmitToolDefinitions } from './tools/answerSubmit';
 import { createSessionMemoryToolDefinitions } from './tools/session';
+import { createSkillToolDefinitions } from './tools/skills';
 import { createAttachmentToolDefinitions, DOCUMENT_ATTACHMENT_TOOL_NAMES } from './tools/attachments';
 import { createFilesystemToolDefinitions } from './tools/filesystem';
+import { createMemoryToolDefinitions } from './tools/memory';
 import { createTerminalToolDefinitions } from './tools/terminal';
 import { createSubAgentToolDefinitions } from './tools/subagent';
 import { createRepoMapToolDefinitions } from './tools/repomap';
@@ -41,22 +34,18 @@ import { workspaceManifestService } from './workspaceManifest';
 import { APP_WORKSPACE_ROOT } from '../workspaceRoot';
 import { taskMemoryStore } from '../models/taskMemoryStore';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
-import { applyAdaptiveTaskProfileOverride, scopeForPrompt, withBrowserSearchDirective } from './runtimeScope';
-import { pickProviderForPrompt, taskKindRequiresV2ToolRuntime } from './providerRouting';
+import {
+  applyAdaptiveTaskProfileOverride,
+  scopeForPrompt,
+  withBrowserSearchDirective,
+  withExecutionModeDirective,
+} from './runtimeScope';
 import { SubAgentSpawnInput } from './subagents/SubAgentTypes';
 import { buildTaskProfile } from './taskProfile';
+import { looksLikeExecutionEscapePrompt } from './taskProfile';
 import { browserService } from '../browser/BrowserService';
-import { V2ToolBridge } from './V2ToolBridge';
 import type { AgentTaskKind } from '../../shared/types/model';
-import { buildStartupStatusMessages, shouldPrimeResearchBrowserSurface } from './startupProgress';
-import {
-  backgroundResearchSynthesisProviderId,
-  buildBackgroundResearchSynthesisContext,
-  buildBackgroundResearchSynthesisTask,
-  formatBackgroundResearchSynthesis,
-  NO_MATERIAL_RESEARCH_UPDATE,
-  shouldRunBackgroundResearchSynthesis,
-} from './researchSynthesis';
+import { buildStartupStatusMessages } from './startupProgress';
 import type { InvocationAttachment } from '../../shared/types/model';
 import type { TaskPlanMetadata } from '../../shared/types/model';
 import type { DocumentInvocationAttachment } from '../../shared/types/attachments';
@@ -72,21 +61,19 @@ type ProviderEntry = {
 type ActiveTaskInvocation = {
   providerId: ProviderId;
   runtime: AgentRuntime;
+  taskKey: string;
+};
+
+type WarmTaskProvider = {
+  provider: AgentProvider;
   dispose?: () => Promise<void>;
 };
 
-type SharedAppServerSession = {
-  process: AppServerProcess;
-  wsPort: number;
-  /** Pre-connected provider — reused across tasks to skip per-task WS connect. */
-  provider: AppServerProvider;
-};
-
-const PROVIDER_CONFIGS: Array<{ id: ProviderId; label: string; modelId: string }> = [
-  { id: PRIMARY_PROVIDER_ID, label: 'Codex', modelId: PRIMARY_PROVIDER_ID },
-  { id: HAIKU_PROVIDER_ID, label: 'Haiku 4.5', modelId: HAIKU_PROVIDER_ID },
-  { id: GEMINI_PROVIDER_ID, label: 'Gemini', modelId: GEMINI_PROVIDER_ID },
-];
+const PRIMARY_PROVIDER_CONFIG = {
+  id: PRIMARY_PROVIDER_ID,
+  label: 'Codex',
+  modelId: PRIMARY_PROVIDER_ID,
+} satisfies { id: ProviderId; label: string; modelId: string };
 
 function buildAttachmentSummary(attachments?: InvocationAttachment[]): string | null {
   if (!attachments?.length) return null;
@@ -204,6 +191,10 @@ function buildParentTurnPlanMetadata(
   };
 }
 
+function shouldAutoProgressChecklist(prompt: string): boolean {
+  return /\b(continue|keep going|carry on|start|implement|implementation|work on|do the next|next step|next one|patch|fix|build|apply)\b/i.test(prompt);
+}
+
 function buildSubagentContinuationContext(taskId: string, taskKind: AgentTaskKind): string | null {
   const planContext = taskMemoryStore.buildPlanContext(taskId);
   const snapshot = taskMemoryStore.getPlanSnapshot(taskId);
@@ -238,15 +229,6 @@ function buildSubagentContinuationContext(taskId: string, taskKind: AgentTaskKin
 
   if (planContext) sections.push(planContext);
   return sections.join('\n\n').trim() || null;
-}
-
-function logAdaptiveOrchestrationScopeDecision(input: {
-  taskId: string;
-  prompt: string;
-  originalTaskProfile?: AgentInvocationOptions['taskProfile'];
-  adaptiveTaskProfile?: AgentInvocationOptions['taskProfile'];
-}): void {
-  void input;
 }
 
 function buildDocumentAttachmentContext(attachments?: InvocationAttachment[]): string | null {
@@ -289,18 +271,18 @@ function withDocumentAttachmentTools(
 class AgentModelService {
   private providers = new Map<ProviderId, ProviderEntry>();
   private activeTaskProviders = new Map<string, ActiveTaskInvocation>();
-  private sharedAppServerSession: SharedAppServerSession | null = null;
-  private sharedAppServerSessionPromise: Promise<SharedAppServerSession> | null = null;
-  private sharedAppServerBridge: V2ToolBridge | null = null;
-  private sharedAppServerContextPath: string | null = null;
+  private warmTaskProviders = new Map<string, WarmTaskProvider>();
+  private idleWarmProvider: WarmTaskProvider | null = null;
 
   init(): void {
     agentToolExecutor.registerMany([
-      ...createContextToolDefinitions(),
+      ...createAnswerSubmitToolDefinitions(),
       ...createAttachmentToolDefinitions(),
       ...createBrowserToolDefinitions(),
       ...createSessionMemoryToolDefinitions(),
+      ...createSkillToolDefinitions(),
       ...createFilesystemToolDefinitions(),
+      ...createMemoryToolDefinitions(),
       ...createTerminalToolDefinitions(),
       ...createRepoMapToolDefinitions(),
       ...createWorkspaceToolDefinitions(),
@@ -329,26 +311,16 @@ class AgentModelService {
         });
       });
 
-    void this.initializeAppServerProvider(PROVIDER_CONFIGS[0]);
-    this.initializeHaikuProvider(PROVIDER_CONFIGS[1]);
-    this.initializeGeminiProvider(PROVIDER_CONFIGS[2]);
+    void this.initializeAppServerProvider(PRIMARY_PROVIDER_CONFIG);
+    void this.prewarmNextProvider();
 
     if (this.providers.size === 0) {
-      this.log('system', 'warn', 'No model providers are available.');
+      this.log('system', 'warn', 'The Codex runtime is unavailable.');
     }
   }
 
-  getProviderStatuses(): Record<string, ProviderRuntime> {
-    return appStateStore.getState().providers;
-  }
-
-  resolve(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions): string {
-    if (explicitOwner && explicitOwner !== 'auto' && isSupportedProvider(explicitOwner) && this.providers.has(explicitOwner)) {
-      return explicitOwner;
-    }
-    return this.pickAutoProvider(prompt, options)
-      ?? Array.from(this.providers.keys())[0]
-      ?? PRIMARY_PROVIDER_ID;
+  resolve(_prompt: string, _explicitOwner?: string, _options?: AgentInvocationOptions): string {
+    return PRIMARY_PROVIDER_ID;
   }
 
   cancel(taskId: string): boolean {
@@ -364,22 +336,20 @@ class AgentModelService {
   }
 
   dispose(): void {
-    this.sharedAppServerSessionPromise = null;
-    this.sharedAppServerSession?.provider.abort();
-    this.sharedAppServerSession?.process.stop();
-    this.sharedAppServerSession = null;
-    if (this.sharedAppServerBridge) {
-      void this.sharedAppServerBridge.stop().catch(() => undefined);
-      this.sharedAppServerBridge = null;
+    if (this.idleWarmProvider) {
+      void Promise.resolve(this.idleWarmProvider.dispose?.()).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log('system', 'warn', `Idle warm runtime cleanup failed: ${message}`);
+      });
+      this.idleWarmProvider = null;
     }
-    if (this.sharedAppServerContextPath) {
-      try {
-        fs.unlinkSync(this.sharedAppServerContextPath);
-      } catch {
-        // Best-effort cleanup.
-      }
-      this.sharedAppServerContextPath = null;
+    for (const [taskKey, warmProvider] of this.warmTaskProviders.entries()) {
+      void Promise.resolve(warmProvider.dispose?.()).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log('system', 'warn', `Warm task runtime cleanup failed for ${taskKey}: ${message}`);
+      });
     }
+    this.warmTaskProviders.clear();
   }
 
   getTaskMemory(taskId: string) {
@@ -392,26 +362,19 @@ class AgentModelService {
     if (!provider) {
       throw new Error(this.buildUnavailableProviderMessage(providerId));
     }
-    if (providerId === PRIMARY_PROVIDER_ID) {
-      await this.ensureSharedAppServerSession();
-    }
-    const activeTask = this.createTaskInvocation(providerId);
+    const activeTask = this.createTaskInvocation(taskId, providerId);
 
     const adaptiveTaskProfile = applyAdaptiveTaskProfileOverride(
       prompt,
       options?.taskProfile,
       taskMemoryStore.getPlanSnapshot(taskId),
+      taskMemoryStore.getLatestUserPrompt(taskId),
     );
-    logAdaptiveOrchestrationScopeDecision({
-      taskId,
-      prompt,
-      originalTaskProfile: options?.taskProfile,
-      adaptiveTaskProfile,
-    });
+    const explicitExecutionEscape = looksLikeExecutionEscapePrompt(prompt);
 
     const attachmentSummary = buildAttachmentSummary(options?.attachments);
     const displayPrompt = typeof options?.displayPrompt === 'string' ? options.displayPrompt : prompt;
-    const chatUserMessage = chatKnowledgeStore.recordUserMessage(
+    chatKnowledgeStore.recordUserMessage(
       taskId,
       buildChatUserMessageText(displayPrompt, options?.attachments),
     );
@@ -431,7 +394,10 @@ class AgentModelService {
         buildInitialPlanMetadata(displayPrompt),
       );
     }
-    const taskMemoryContext = taskMemoryStore.buildContext(taskId);
+    const autoChecklistProgress = shouldAutoProgressChecklist(displayPrompt)
+      && !explicitExecutionEscape
+      ? taskMemoryStore.beginChecklistItemForPrompt(taskId, displayPrompt, `prompt="${displayPrompt.trim()}"`)
+      : null;
     this.activeTaskProviders.set(taskId, activeTask);
 
     appStateStore.dispatch({
@@ -452,32 +418,14 @@ class AgentModelService {
 
     try {
       this.emitStartupStatuses(taskId, providerId, taskProfile.kind);
-      if (shouldPrimeResearchBrowserSurface(taskProfile.kind, browserService.isCreated())) {
-        void this.primeResearchBrowserSurface(prompt, providerId, taskId);
-      }
-
-      const runtimePrompt = withBrowserSearchDirective(prompt, adaptiveTaskProfile);
+      const runtimePrompt = withExecutionModeDirective(
+        withBrowserSearchDirective(prompt, adaptiveTaskProfile),
+        adaptiveTaskProfile,
+      );
       const runtimeScope = scopeForPrompt(prompt, adaptiveTaskProfile);
-      // Real prior-turn continuity travels as structured messages so stateless
-      // providers (Haiku, Gemini) see actual chat history instead of a
-      // markdown recap buried inside a single user turn. The Markdown recap is
-      // still emitted via `buildInvocationContext` below as a belt-and-braces
-      // hint for providers that ignore `priorTurns`.
-      const priorTurns = chatKnowledgeStore.listPriorTurns(taskId, {
-        count: 6,
-        maxChars: 6000,
-        excludeMessageIds: [chatUserMessage.id],
-      });
       const contextPrompt = buildContextPrompt([
-        // Direct chat continuity comes FIRST so under budget contention the
-        // prior-message block always wins over recall/summary-based blocks.
-        chatKnowledgeStore.buildInvocationContext(taskId, chatUserMessage.id, {
-          includeCurrentMessage: false,
-          recentCount: 3,
-        }),
-        buildSubagentContinuationContext(taskId, taskProfile.kind),
-        buildAutomaticTaskContinuationContext(taskId, prompt),
-        taskMemoryContext,
+        explicitExecutionEscape ? null : buildSubagentContinuationContext(taskId, taskProfile.kind),
+        explicitExecutionEscape ? null : buildAutomaticTaskContinuationContext(taskId, prompt),
         buildDocumentAttachmentContext(options?.attachments),
       ]);
       const response = await activeTask.runtime.run({
@@ -486,10 +434,12 @@ class AgentModelService {
         agentId: providerId,
         role: 'primary',
         task: runtimePrompt,
+        taskProfileOverride: adaptiveTaskProfile,
+        forceFreshThread: explicitExecutionEscape,
+        suppressTaskMemoryContext: explicitExecutionEscape,
         taskId,
         cwd: options?.cwd,
         contextPrompt,
-        priorTurns,
         systemPromptAddendum: options?.systemPrompt,
         allowedTools: withDocumentAttachmentTools(runtimeScope.allowedTools, options?.attachments),
         maxTokensOverride: options?.maxTokensOverride,
@@ -539,12 +489,17 @@ class AgentModelService {
         success: true,
         status: 'completed',
         output: finalizedResponse.output,
-        artifacts: [],
         codexItems: finalizedResponse.codexItems,
         usage: finalizedResponse.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
       };
 
       chatKnowledgeStore.recordAssistantMessage(taskId, finalizedResponse.output, providerId);
+      if (autoChecklistProgress) {
+        taskMemoryStore.completeActiveChecklistItem(
+          taskId,
+          `completed via successful ${taskProfile.kind} turn`,
+        );
+      }
       taskMemoryStore.recordInvocationResult(result);
       if (taskProfile.kind === 'orchestration') {
         taskMemoryStore.recordPlan(
@@ -564,13 +519,6 @@ class AgentModelService {
         errorDetail: null,
       });
       this.log(providerId, 'info', `${provider.label} invocation completed`, taskId);
-      this.queueBackgroundResearchSynthesis({
-        taskId,
-        prompt,
-        taskKind: taskProfile.kind,
-        primaryProviderId: providerId,
-        fastAnswer: finalizedResponse.output,
-      });
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -582,7 +530,6 @@ class AgentModelService {
         providerId,
         success: false,
         output: '',
-        artifacts: [],
         error: cancelled ? getAgentCancellationMessage() : message,
         status: cancelled ? 'cancelled' : 'failed',
         usage: failureUsage,
@@ -633,12 +580,11 @@ class AgentModelService {
       return result;
     } finally {
       this.activeTaskProviders.delete(taskId);
-      await this.disposeTaskInvocation(activeTask, providerId, taskId);
     }
   }
 
   private async initializeAppServerProvider(config: { id: ProviderId; label: string; modelId: string }): Promise<void> {
-    const probe = CodexProvider.isAvailable();
+    const probe = probeCodexAvailability();
     if (!probe.available) {
       this.setRuntime(config.id, {
         status: 'unavailable',
@@ -650,7 +596,6 @@ class AgentModelService {
     }
 
     try {
-      await this.ensureSharedAppServerSession();
       this.providers.set(config.id, {
         id: config.id,
         label: config.label,
@@ -658,7 +603,7 @@ class AgentModelService {
         supportsAppToolExecutor: true,
       });
       this.setRuntime(config.id, { status: 'available', activeTaskId: null, errorDetail: null }, config.modelId);
-      this.log(config.id, 'info', `${config.label} ready (prewarmed app-server mode)`);
+      this.log(config.id, 'info', `${config.label} ready`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.setRuntime(config.id, {
@@ -670,193 +615,37 @@ class AgentModelService {
     }
   }
 
-  private initializeHaikuProvider(config: { id: ProviderId; label: string; modelId: string }): void {
-    try {
-      const provider = new HaikuProvider();
-      this.providers.set(config.id, {
-        id: config.id,
-        label: config.label,
-        modelId: provider.modelId,
-        supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
-      });
-      this.setRuntime(config.id, {
-        status: 'available',
-        activeTaskId: null,
-        errorDetail: null,
-      }, provider.modelId);
-      this.log(config.id, 'info', `${config.label} ready: ${provider.modelId}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.setRuntime(config.id, {
-        status: 'unavailable',
-        activeTaskId: null,
-        errorDetail: message,
-      });
-      this.log(config.id, 'warn', `${config.label} unavailable: ${message}`);
+  private pickProvider(
+    _prompt: string,
+    explicitOwner?: string,
+    _options?: AgentInvocationOptions,
+  ): ProviderId {
+    if (explicitOwner && explicitOwner !== 'auto' && explicitOwner !== PRIMARY_PROVIDER_ID) {
+      throw new Error(`Unsupported provider: ${explicitOwner}`);
     }
+    if (!this.providers.has(PRIMARY_PROVIDER_ID)) {
+      throw new Error(this.buildUnavailableProviderMessage(PRIMARY_PROVIDER_ID));
+    }
+    return PRIMARY_PROVIDER_ID;
   }
 
-  private initializeGeminiProvider(config: { id: ProviderId; label: string; modelId: string }): void {
-    try {
-      const provider = new GeminiProvider();
-      this.providers.set(config.id, {
-        id: config.id,
-        label: config.label,
-        modelId: provider.modelId,
-        supportsAppToolExecutor: Boolean(provider.supportsAppToolExecutor),
-      });
-      this.setRuntime(config.id, {
-        status: 'available',
-        activeTaskId: null,
-        errorDetail: null,
-      }, provider.modelId);
-      this.log(config.id, 'info', `${config.label} ready: ${provider.modelId}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.setRuntime(config.id, {
-        status: 'unavailable',
-        activeTaskId: null,
-        errorDetail: message,
-      });
-      this.log(config.id, 'warn', `${config.label} unavailable: ${message}`);
+  private createPreferredSubAgentProvider(_input?: Pick<SubAgentSpawnInput, 'task' | 'role' | 'providerId' | 'modelId'>): AgentProvider {
+    if (!this.providers.has(PRIMARY_PROVIDER_ID)) {
+      throw new Error(this.buildUnavailableProviderMessage(PRIMARY_PROVIDER_ID));
     }
+    return this.createProviderInstance();
   }
 
-  private pickProvider(prompt: string, explicitOwner?: string, options?: AgentInvocationOptions): ProviderId {
-    if (explicitOwner && explicitOwner !== 'auto') {
-      if (!isSupportedProvider(explicitOwner)) {
-        throw new Error(`Unsupported provider: ${explicitOwner}`);
-      }
-      if (!this.providers.has(explicitOwner)) {
-        throw new Error(this.buildUnavailableProviderMessage(explicitOwner));
-      }
-      this.assertProviderSupportsPrompt(explicitOwner, prompt, options);
-      return explicitOwner;
-    }
-
-    const autoProvider = this.pickAutoProvider(prompt, options);
-    if (autoProvider) return autoProvider;
-    const profile = buildTaskProfile(prompt, options?.taskProfile);
-    const requiresAppTools = taskKindRequiresV2ToolRuntime(profile.kind);
-    if (requiresAppTools) {
-      throw new Error(
-        `No model provider that executes through the V2 tool runtime is available for ${profile.kind} tasks.`,
-      );
-    }
-    throw new Error('No model provider is available. Check Codex CLI availability and authentication.');
+  private createProviderInstance(): AgentProvider {
+    return new AppServerBackedProvider({
+      providerId: PRIMARY_PROVIDER_CONFIG.id,
+      modelId: PRIMARY_PROVIDER_CONFIG.modelId,
+    });
   }
 
-  private pickAutoProvider(prompt = '', options?: AgentInvocationOptions): ProviderId | null {
-    return pickProviderForPrompt(
-      prompt,
-      this.providers.keys(),
-      options?.taskProfile,
-      this.getProviderRoutingCapabilities(),
-    );
-  }
-
-  private createPreferredSubAgentProvider(input?: Pick<SubAgentSpawnInput, 'task' | 'role' | 'providerId' | 'modelId'>): AgentProvider {
-    const taskPrompt = [input?.role, input?.task].filter(Boolean).join('\n');
-    const inferredProviderId = inferProviderIdFromModelId(input?.modelId);
-    const explicitProviderId = input?.providerId && input.providerId !== 'auto'
-      ? input.providerId
-      : null;
-    const requestedProviderId = explicitProviderId ?? inferredProviderId;
-    if (requestedProviderId) {
-      if (!this.providers.has(requestedProviderId)) {
-        if (explicitProviderId) {
-          throw new Error(this.buildUnavailableProviderMessage(requestedProviderId));
-        }
-      } else {
-        this.assertProviderSupportsPrompt(requestedProviderId, taskPrompt);
-        return this.createProviderInstance(requestedProviderId, input?.modelId);
-      }
-    }
-
-    const preferred = this.pickAutoProvider(taskPrompt);
-    if (preferred) return this.createProviderInstance(preferred, input?.modelId);
-    throw new Error('No compatible provider is available for the requested sub-agent task.');
-  }
-
-  private createProviderInstance(providerId: ProviderId, modelIdOverride?: string): AgentProvider {
-    const config = PROVIDER_CONFIGS.find((entry) => entry.id === providerId);
-    if (!config) {
-      throw new Error(`Unknown provider configuration: ${providerId}`);
-    }
-    if (modelIdOverride && !modelIdMatchesProvider(modelIdOverride, providerId)) {
-      throw new Error(`modelId ${modelIdOverride} does not match provider ${providerId}`);
-    }
-    if (providerId === HAIKU_PROVIDER_ID) {
-      return new HaikuProvider({ modelId: modelIdOverride });
-    }
-    if (providerId === GEMINI_PROVIDER_ID) {
-      return new GeminiProvider({ modelId: modelIdOverride });
-    }
-    if (providerId === PRIMARY_PROVIDER_ID) {
-      if (modelIdOverride && modelIdOverride !== config.modelId) {
-        throw new Error(`Custom modelId is not supported for ${config.label} sub-agents yet. Requested: ${modelIdOverride}`);
-      }
-      const session = this.sharedAppServerSession;
-      return new AppServerBackedProvider({
-        providerId: config.id,
-        modelId: config.modelId,
-        process: session?.process,
-        wsPort: session?.wsPort,
-        provider: !modelIdOverride || modelIdOverride === config.modelId ? session?.provider : undefined,
-      });
-    }
-    throw new Error(`Unsupported direct provider instance path for ${providerId}`);
-  }
-
-  private async ensureSharedAppServerSession(): Promise<SharedAppServerSession> {
-    if (this.sharedAppServerSession) return this.sharedAppServerSession;
-    if (this.sharedAppServerSessionPromise) return this.sharedAppServerSessionPromise;
-
-    this.sharedAppServerSessionPromise = (async () => {
-      const contextPath = path.join(
-        os.tmpdir(),
-        `v2-tool-context-shared-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
-      );
-      const bridge = new V2ToolBridge(contextPath);
-      await bridge.start();
-      const shimPath = path.join(__dirname, 'v2-mcp-shim.js');
-      const processHandle = new AppServerProcess(bridge.getPort(), shimPath, contextPath);
-      try {
-        await processHandle.start();
-        const { wsPort } = await processHandle.waitUntilReady();
-        const sharedProvider = new AppServerProvider({
-          providerId: PROVIDER_CONFIGS[0].id,
-          modelId: PROVIDER_CONFIGS[0].modelId,
-          process: processHandle,
-          contextPath,
-        });
-        await sharedProvider.connect(wsPort);
-        this.sharedAppServerBridge = bridge;
-        this.sharedAppServerContextPath = contextPath;
-        this.sharedAppServerSession = { process: processHandle, wsPort, provider: sharedProvider };
-        return this.sharedAppServerSession;
-      } catch (err) {
-        processHandle.stop();
-        await bridge.stop().catch(() => undefined);
-        try {
-          fs.unlinkSync(contextPath);
-        } catch {
-          // Best-effort cleanup.
-        }
-        throw err;
-      } finally {
-        this.sharedAppServerSessionPromise = null;
-      }
-    })();
-
-    return this.sharedAppServerSessionPromise;
-  }
-
-  private createTaskInvocation(providerId: ProviderId): ActiveTaskInvocation {
-    const provider = this.createProviderInstance(providerId);
+  private buildWarmTaskProvider(provider: AgentProvider): WarmTaskProvider {
     return {
-      providerId,
-      runtime: new AgentRuntime(provider),
+      provider,
       dispose: hasDisposableProvider(provider)
         ? async () => {
             await provider.dispose();
@@ -865,57 +654,70 @@ class AgentModelService {
     };
   }
 
-  private async disposeTaskInvocation(
-    activeTask: ActiveTaskInvocation,
-    providerId: ProviderId,
-    taskId: string,
-  ): Promise<void> {
-    if (!activeTask.dispose) return;
-    try {
-      await activeTask.dispose();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log(providerId, 'warn', `Task runtime cleanup failed: ${message}`, taskId);
+  private warmProvider(provider: AgentProvider): void {
+    if (hasPreconnect(provider)) {
+      void provider.preconnect().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log('system', 'warn', `Codex provider prewarm failed: ${message}`);
+      });
     }
+  }
+
+  private async prewarmNextProvider(): Promise<void> {
+    if (this.idleWarmProvider || !this.providers.has(PRIMARY_PROVIDER_ID)) return;
+    const provider = this.createProviderInstance();
+    const warmProvider = this.buildWarmTaskProvider(provider);
+    this.idleWarmProvider = warmProvider;
+
+    if (!hasPreconnect(provider)) return;
+    try {
+      await provider.preconnect();
+    } catch (err) {
+      if (this.idleWarmProvider !== warmProvider) return;
+      this.idleWarmProvider = null;
+      const message = err instanceof Error ? err.message : String(err);
+      this.log('system', 'warn', `Codex idle prewarm failed: ${message}`);
+      await Promise.resolve(warmProvider.dispose?.()).catch(() => undefined);
+    }
+  }
+
+  private buildTaskProviderKey(taskId: string, providerId: ProviderId): string {
+    return `${providerId}:${taskId}`;
+  }
+
+  private getOrCreateWarmTaskProvider(taskId: string, providerId: ProviderId): WarmTaskProvider {
+    const taskKey = this.buildTaskProviderKey(taskId, providerId);
+    const existing = this.warmTaskProviders.get(taskKey);
+    if (existing) return existing;
+
+    const warmProvider = this.idleWarmProvider ?? this.buildWarmTaskProvider(this.createProviderInstance());
+    if (this.idleWarmProvider === warmProvider) {
+      this.idleWarmProvider = null;
+      void this.prewarmNextProvider();
+    } else {
+      this.warmProvider(warmProvider.provider);
+    }
+    this.warmTaskProviders.set(taskKey, warmProvider);
+    return warmProvider;
+  }
+
+  private createTaskInvocation(taskId: string, providerId: ProviderId): ActiveTaskInvocation {
+    const taskKey = this.buildTaskProviderKey(taskId, providerId);
+    const warmProvider = this.getOrCreateWarmTaskProvider(taskId, providerId);
+    return {
+      providerId,
+      runtime: new AgentRuntime(warmProvider.provider),
+      taskKey,
+    };
   }
 
   private buildUnavailableProviderMessage(providerId: ProviderId): string {
     const runtime = appStateStore.getState().providers[providerId];
     const suffix = runtime?.errorDetail ? ` ${runtime.errorDetail}` : '';
     const label = this.providers.get(providerId)?.label
-      ?? PROVIDER_CONFIGS.find((entry) => entry.id === providerId)?.label
+      ?? (providerId === PRIMARY_PROVIDER_ID ? PRIMARY_PROVIDER_CONFIG.label : undefined)
       ?? providerId;
     return `${label} is not available.${suffix}`.trim();
-  }
-
-  private assertProviderSupportsPrompt(
-    providerId: ProviderId,
-    prompt: string,
-    options?: AgentInvocationOptions,
-  ): void {
-    const provider = this.providers.get(providerId);
-    if (!provider) return;
-
-    const profile = buildTaskProfile(prompt, options?.taskProfile);
-    const requiresAppTools = taskKindRequiresV2ToolRuntime(profile.kind);
-
-    if (!requiresAppTools || provider.supportsAppToolExecutor) return;
-
-    throw new Error(
-      `${provider.label} does not execute through the V2 tool runtime yet and cannot be used for ${profile.kind} tasks.`,
-    );
-  }
-
-  private getProviderRoutingCapabilities(): Record<ProviderId, { supportsV2ToolRuntime: boolean }> {
-    return Array.from(this.providers.values()).reduce<Record<ProviderId, { supportsV2ToolRuntime: boolean }>>(
-      (capabilities, provider) => {
-        capabilities[provider.id] = {
-          supportsV2ToolRuntime: provider.supportsAppToolExecutor,
-        };
-        return capabilities;
-      },
-      {} as Record<ProviderId, { supportsV2ToolRuntime: boolean }>,
-    );
   }
 
   private setRuntime(
@@ -974,7 +776,6 @@ class AgentModelService {
     appStateStore.dispatch({
       type: ActionType.ACCUMULATE_TASK_TOKEN_USAGE,
       taskId,
-      providerId,
       inputTokens,
       outputTokens,
       apiCalls: 1,
@@ -1045,16 +846,6 @@ class AgentModelService {
     }
   }
 
-  private async primeResearchBrowserSurface(prompt: string, providerId: ProviderId, taskId: string): Promise<void> {
-    try {
-      browserService.createTab(prompt);
-      this.log(providerId, 'info', 'Pre-opened browser search tab for research task', taskId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log(providerId, 'warn', `Browser search prewarm skipped: ${message}`, taskId);
-    }
-  }
-
   private async finishIncompleteResponse(input: {
     taskId: string;
     prompt: string;
@@ -1067,239 +858,94 @@ class AgentModelService {
       return combined;
     }
 
-    const providerOrder: ProviderId[] = [
-      input.primaryProviderId,
-      ...[PRIMARY_PROVIDER_ID, HAIKU_PROVIDER_ID, GEMINI_PROVIDER_ID].filter(
-        (providerId) => providerId !== input.primaryProviderId && this.providers.has(providerId),
-      ),
-    ];
+    const providerId = input.primaryProviderId;
+    if (!this.providers.has(providerId)) return combined;
 
-    for (const providerId of providerOrder) {
-      if (!this.providers.has(providerId)) continue;
+    const continuationTask = this.createTaskInvocation(input.taskId, providerId);
+    try {
+      this.emitProgress({
+        taskId: input.taskId,
+        providerId,
+        type: 'status',
+        data: 'Finishing the response after the model hit its output limit.',
+        timestamp: Date.now(),
+      });
 
-      const continuationTask = this.createTaskInvocation(providerId);
-      try {
-        this.emitProgress({
-          taskId: input.taskId,
-          providerId,
-          type: 'status',
-          data: providerId === input.primaryProviderId
-            ? 'Finishing the response after the model hit its output limit.'
-            : `Finishing the response with ${providerId} after the previous model hit its output limit.`,
-          timestamp: Date.now(),
-        });
+      const continuation = await continuationTask.runtime.run({
+        mode: 'unrestricted-dev',
+        agentId: providerId,
+        role: 'secondary',
+        taskId: input.taskId,
+        task: 'Continue the assistant response exactly where it stopped. Do not restart, summarize, or repeat prior text. Finish the response directly.',
+        contextPrompt: buildContextPrompt([
+          '## Original User Request',
+          input.prompt.trim(),
+          '',
+          '## Partial Assistant Response',
+          combined.output.trim(),
+        ]),
+        priorTurns: [
+          { role: 'user', content: input.prompt.trim() },
+          { role: 'assistant', content: combined.output },
+        ],
+        allowedTools: [],
+        canSpawnSubagents: false,
+        maxToolTurns: 1,
+        maxTokensOverride: input.maxTokensOverride,
+        onToken: (text) => {
+          this.emitProgress({
+            taskId: input.taskId,
+            providerId,
+            type: 'token',
+            data: text,
+            timestamp: Date.now(),
+          });
+        },
+        onStatus: (status) => {
+          this.emitProgress({
+            taskId: input.taskId,
+            providerId,
+            type: 'status',
+            data: status,
+            timestamp: Date.now(),
+          });
+        },
+        onItem: ({ item, eventType }) => {
+          if (item.type === 'agent_message') return;
+          this.emitProgress({
+            taskId: input.taskId,
+            providerId,
+            type: 'item',
+            data: eventType,
+            codexItem: item,
+            timestamp: Date.now(),
+          });
+        },
+      });
 
-        const continuation = await continuationTask.runtime.run({
-          mode: 'unrestricted-dev',
-          agentId: providerId,
-          role: 'secondary',
-          taskId: input.taskId,
-          task: 'Continue the assistant response exactly where it stopped. Do not restart, summarize, or repeat prior text. Finish the response directly.',
-          contextPrompt: buildContextPrompt([
-            '## Original User Request',
-            input.prompt.trim(),
-            '',
-            '## Partial Assistant Response',
-            combined.output.trim(),
-          ]),
-          priorTurns: [
-            { role: 'user', content: input.prompt.trim() },
-            { role: 'assistant', content: combined.output },
-          ],
-          allowedTools: [],
-          canSpawnSubagents: false,
-          maxToolTurns: 1,
-          maxTokensOverride: input.maxTokensOverride,
-          onToken: (text) => {
-            this.emitProgress({
-              taskId: input.taskId,
-              providerId,
-              type: 'token',
-              data: text,
-              timestamp: Date.now(),
-            });
-          },
-          onStatus: (status) => {
-            this.emitProgress({
-              taskId: input.taskId,
-              providerId,
-              type: 'status',
-              data: status,
-              timestamp: Date.now(),
-            });
-          },
-          onItem: ({ item, eventType }) => {
-            if (item.type === 'agent_message') return;
-            this.emitProgress({
-              taskId: input.taskId,
-              providerId,
-              type: 'item',
-              data: eventType,
-              codexItem: item,
-              timestamp: Date.now(),
-            });
-          },
-        });
-
-        this.recordInvocationUsage(input.taskId, providerId, continuation.usage);
-        combined = {
-          output: mergeContinuationText(combined.output, continuation.output),
-          codexItems: [...(combined.codexItems || []), ...(continuation.codexItems || [])],
-          usage: mergeUsage(combined.usage, continuation.usage),
-          completion: continuation.completion,
-        };
-
-        if (combined.completion?.completed !== false || !combined.completion?.canContinue) {
-          return combined;
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.log(providerId, 'warn', `Continuation attempt failed: ${message}`, input.taskId);
-      } finally {
-        await this.disposeTaskInvocation(continuationTask, providerId, input.taskId);
-      }
+      this.recordInvocationUsage(input.taskId, providerId, continuation.usage);
+      combined = {
+        output: mergeContinuationText(combined.output, continuation.output),
+        codexItems: [...(combined.codexItems || []), ...(continuation.codexItems || [])],
+        usage: mergeUsage(combined.usage, continuation.usage),
+        completion: continuation.completion,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(providerId, 'warn', `Continuation attempt failed: ${message}`, input.taskId);
     }
 
     return combined;
   }
 
-  private queueBackgroundResearchSynthesis(input: {
-    taskId: string;
-    prompt: string;
-    taskKind: AgentTaskKind;
-    primaryProviderId: ProviderId;
-    fastAnswer: string;
-  }): void {
-    const synthesisProviderId = backgroundResearchSynthesisProviderId(input.primaryProviderId);
-    const synthesisProviderAvailable = this.providers.has(synthesisProviderId)
-      && !Array.from(this.activeTaskProviders.values()).some((activeTask) => activeTask.providerId === synthesisProviderId);
-
-    if (!shouldRunBackgroundResearchSynthesis({
-      prompt: input.prompt,
-      taskKind: input.taskKind,
-      primaryProviderId: input.primaryProviderId,
-      synthesisProviderAvailable,
-    })) {
-      return;
-    }
-
-    this.emitProgress({
-      taskId: input.taskId,
-      providerId: input.primaryProviderId,
-      type: 'status',
-      data: 'Launching background synthesis from cached browser evidence.',
-      timestamp: Date.now(),
-    });
-
-    void this.runBackgroundResearchSynthesis({
-      ...input,
-      synthesisProviderId,
-    });
-  }
-
-  private async runBackgroundResearchSynthesis(input: {
-    taskId: string;
-    prompt: string;
-    taskKind: AgentTaskKind;
-    primaryProviderId: ProviderId;
-    synthesisProviderId: ProviderId;
-    fastAnswer: string;
-  }): Promise<void> {
-    const toolTranscript = chatKnowledgeStore.readLast(input.taskId, {
-      role: 'tool',
-      count: 8,
-      maxChars: 10_000,
-    });
-    if (!toolTranscript.text.trim()) {
-      this.log(input.synthesisProviderId, 'info', 'Background research synthesis skipped: no cached tool evidence', input.taskId);
-      return;
-    }
-
-    const synthesisTask = this.createTaskInvocation(input.synthesisProviderId);
-    try {
-      const synthesisContext = buildBackgroundResearchSynthesisContext({
-        prompt: input.prompt,
-        fastAnswer: input.fastAnswer,
-        threadSummary: chatKnowledgeStore.threadSummary(input.taskId),
-        evidenceTranscript: toolTranscript.text,
-      });
-      const response = await synthesisTask.runtime.run({
-        mode: 'unrestricted-dev',
-        agentId: input.synthesisProviderId,
-        role: 'secondary',
-        taskId: input.taskId,
-        task: buildBackgroundResearchSynthesisTask(),
-        contextPrompt: synthesisContext,
-        allowedTools: [],
-        canSpawnSubagents: false,
-        maxToolTurns: 1,
-        onStatus: (status) => {
-          if (!status.trim()) return;
-          this.log(input.synthesisProviderId, 'info', `Background synthesis status: ${status}`, input.taskId);
-        },
-      });
-
-      const formatted = formatBackgroundResearchSynthesis(response.output);
-      if (!formatted || formatted === NO_MATERIAL_RESEARCH_UPDATE) {
-        this.log(input.synthesisProviderId, 'info', 'Background research synthesis found no material update', input.taskId);
-        return;
-      }
-
-      chatKnowledgeStore.recordAssistantMessage(input.taskId, formatted, input.synthesisProviderId);
-      taskMemoryStore.recordInvocationResult({
-        taskId: input.taskId,
-        providerId: input.synthesisProviderId,
-        success: true,
-        status: 'completed',
-        output: formatted,
-        artifacts: [],
-        usage: response.usage || { inputTokens: 0, outputTokens: 0, durationMs: 0 },
-        codexItems: response.codexItems,
-      });
-      this.recordInvocationUsage(input.taskId, input.synthesisProviderId, response.usage);
-      appStateStore.dispatch({
-        type: ActionType.UPDATE_TASK,
-        taskId: input.taskId,
-        updates: { updatedAt: Date.now() },
-      });
-      this.emitProgress({
-        taskId: input.taskId,
-        providerId: input.synthesisProviderId,
-        type: 'status',
-        data: 'Background synthesis appended a refined answer.',
-        timestamp: Date.now(),
-      });
-      this.log(input.synthesisProviderId, 'info', 'Background research synthesis appended to task memory', input.taskId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log(input.synthesisProviderId, 'warn', `Background research synthesis failed: ${message}`, input.taskId);
-    } finally {
-      await this.disposeTaskInvocation(synthesisTask, input.synthesisProviderId, input.taskId);
-    }
-  }
-}
-
-function isSupportedProvider(value: string): value is ProviderId {
-  return value === PRIMARY_PROVIDER_ID || value === HAIKU_PROVIDER_ID || value === GEMINI_PROVIDER_ID;
-}
-
-function inferProviderIdFromModelId(modelId?: string): ProviderId | null {
-  const normalized = modelId?.trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized.startsWith('gemini')) return GEMINI_PROVIDER_ID;
-  if (normalized.startsWith('claude') || /\b(opus|sonnet|haiku)\b/.test(normalized)) return HAIKU_PROVIDER_ID;
-  if (normalized === PRIMARY_PROVIDER_ID) return PRIMARY_PROVIDER_ID;
-  return null;
-}
-
-function modelIdMatchesProvider(modelId: string, providerId: ProviderId): boolean {
-  const inferred = inferProviderIdFromModelId(modelId);
-  if (!inferred) return true;
-  return inferred === providerId;
 }
 
 function hasDisposableProvider(provider: AgentProvider): provider is AgentProvider & { dispose(): Promise<void> | void } {
   return typeof (provider as { dispose?: unknown }).dispose === 'function';
+}
+
+function hasPreconnect(provider: AgentProvider): provider is AgentProvider & { preconnect(): Promise<void> } {
+  return typeof (provider as { preconnect?: unknown }).preconnect === 'function';
 }
 
 function buildContextPrompt(parts: Array<string | null | undefined>): string | null {
@@ -1319,8 +965,11 @@ function buildAutomaticTaskContinuationContext(taskId: string, prompt: string): 
   });
   const lastFailure = getLastFailureText(taskId);
   if (!lastFailure && !recall.summary && !recall.text.trim()) {
-    return null;
+    const snapshot = taskMemoryStore.getPlanSnapshot(taskId);
+    if (!snapshot?.activeChecklist?.items.length) return null;
   }
+
+  const snapshot = taskMemoryStore.getPlanSnapshot(taskId);
 
   const sections = [
     '## Conversation Continuity',
@@ -1331,6 +980,13 @@ function buildAutomaticTaskContinuationContext(taskId: string, prompt: string): 
 
   if (lastFailure) {
     sections.push('', '### Last Failure', lastFailure);
+  }
+  if (snapshot?.activeChecklist?.items.length) {
+    sections.push('', '### Active Checklist');
+    if (snapshot.activeChecklist.planName) sections.push(`Plan: ${snapshot.activeChecklist.planName}`);
+    sections.push(...snapshot.activeChecklist.items.map((item) => (
+      `${item.status === 'completed' ? '[done]' : item.status === 'in_progress' ? '[in-progress]' : item.status === 'blocked' ? '[blocked]' : item.status === 'dropped' ? '[dropped]' : '[pending]'} ${item.id}. ${item.text}`
+    )));
   }
   if (recall.summary) {
     sections.push('', '### Thread Summary', recall.summary);

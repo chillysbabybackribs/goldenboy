@@ -6,8 +6,15 @@ import { appStateStore } from './state/appStateStore';
 import { terminalService } from './terminal/TerminalService';
 import { browserService } from './browser/BrowserService';
 import { agentModelService } from './agent/AgentModelService';
+import { codeHeatmapService } from './codeHeatmap/CodeHeatmapService';
 
-const disableGpu = process.env.V2_DISABLE_HARDWARE_ACCELERATION === '1';
+function isSuppressedBlockedResource(url: string, errorDescription: string): boolean {
+  if (!/ERR_BLOCKED_BY_CLIENT/i.test(errorDescription)) return false;
+  return /(doubleclick\.net|googlesyndication\.com|googletagservices\.com|bidswitch\.net|sharethrough\.com|loopme\.me|3lift\.com|mgid\.com|smaato\.net|adform\.net|media\.net|omnitagjs\.com|vistarsagency\.com|prebid\.org)/i.test(url)
+    || /(\/activityi\b|\/sync\b|\/user-sync\b|\/cookie[_-]?sync\b|\/checksync\b)/i.test(url);
+}
+
+const disableGpu = process.env.GOLDENBOY_DISABLE_HARDWARE_ACCELERATION === '1';
 if (disableGpu) {
   process.env.ELECTRON_DISABLE_GPU = '1';
   app.disableHardwareAcceleration();
@@ -27,6 +34,11 @@ if (!gotLock) {
 
 app.on('ready', () => {
   app.on('web-contents-created', (_event, webContents) => {
+    webContents.on('did-fail-load', (event, _errorCode, errorDescription, validatedURL) => {
+      if (isSuppressedBlockedResource(validatedURL, errorDescription)) {
+        event.preventDefault();
+      }
+    });
     webContents.on('will-attach-webview', (event, webPreferences, params) => {
       webPreferences.preload = '';
       webPreferences.nodeIntegration = false;
@@ -41,6 +53,7 @@ app.on('ready', () => {
 
   terminalService.init();
   agentModelService.init();
+  codeHeatmapService.init();
   registerIpc();
   initEventRouter();
   createAllWindows();
@@ -50,6 +63,7 @@ app.on('ready', () => {
 app.on('before-quit', () => {
   setAppQuitting();
   agentModelService.dispose();
+  codeHeatmapService.dispose();
   terminalService.setAppQuitting();
   terminalService.persistNow();
   browserService.dispose();

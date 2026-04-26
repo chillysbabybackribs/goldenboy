@@ -17,6 +17,7 @@ import {
   describeProviderToolCall,
   normalizeProviderMaxToolTurns,
   publishProviderFinalOutput,
+  summarizeProviderToolCompletion,
 } from './providerToolRuntime';
 import type { AppServerProcess } from './AppServerProcess';
 import { createToolScopeState, listActiveTools } from './toolScopeState';
@@ -25,11 +26,31 @@ import { createToolScopeState, listActiveTools } from './toolScopeState';
 
 const THREAD_FILE = 'codex-threads.json';
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+// Hard wall-clock limit for a single turn, armed once at turn/start and
+// NEVER reset by incoming notifications. Protects against stalled turns
+// that would otherwise sit forever if Codex keeps the socket warm with
+// tokenUsage keepalives while failing to emit turn/completed.
 const TURN_TIMEOUT_MS = 3 * 60 * 1000;
+// Idle deadline for a single turn. Reset on every inbound message.
+// Fires when the stream genuinely stalls (no deltas, no tool lifecycle
+// events, no tokenUsage updates, no turn/completed). Shorter than the
+// wall-clock so real stalls convert to a RecoverableTurnError and go
+// through the reconnect+resume path instead of hanging the UI.
+const TURN_IDLE_TIMEOUT_MS = 30 * 1000;
 const DEFAULT_CONTEXT_PATH = path.join(os.tmpdir(), 'v2-tool-context.json');
 const MAX_THREAD_REUSE_MS = 24 * 60 * 60 * 1000;
 const MAX_THREAD_RESUME_COUNT = 3;
 const MAX_TURN_RECOVERY_ATTEMPTS = 2;
+// Minimal, non-directive continuation token sent as the user input for
+// post-tool turns. The previous multi-sentence paragraph ("Continue the
+// task using the tool results…, If the next tool call is obvious, call
+// it immediately…") was measurably biasing the model toward re-issuing
+// the same tool call — duplicate `browser.open_tab` chips at the start
+// of every deterministic smoke test. One neutral word lets the thread
+// history and tool results drive the next turn without adding steering
+// noise to the conversation.
+const POST_TOOL_CONTINUATION_INPUT = 'continue';
+const ANSWER_SUBMIT_TOOL_NAME = 'answer.submit';
 
 // Use the Node 24 built-in WebSocket global via type cast.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,6 +134,30 @@ function toMcpName(toolName: string): string {
   return toolName.replace(/\./g, '__');
 }
 
+function normalizeAgentMessageText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function deriveCanonicalAgentTurnMessage(completedMessages: string[], streamedMessage: string): string {
+  const finalizedMessages = completedMessages.map((text) => text.trim()).filter(Boolean);
+  if (finalizedMessages.length === 0) return streamedMessage.replace(/\s+$/, '');
+  if (finalizedMessages.length === 1) return finalizedMessages[0];
+
+  let cumulativeSnapshots = true;
+  for (let i = 1; i < finalizedMessages.length; i++) {
+    const prev = normalizeAgentMessageText(finalizedMessages[i - 1]);
+    const next = normalizeAgentMessageText(finalizedMessages[i]);
+    if (!prev || !next || next.length < prev.length || !next.includes(prev)) {
+      cumulativeSnapshots = false;
+      break;
+    }
+  }
+
+  return cumulativeSnapshots
+    ? finalizedMessages[finalizedMessages.length - 1]
+    : streamedMessage.replace(/\s+$/, '');
+}
+
 // ─── WebSocket Message Types ─────────────────────────────────────────────
 
 type WsMsg = Record<string, unknown>;
@@ -134,13 +179,18 @@ type AppServerProviderOptions = {
 
 type TurnStartInputItem =
   | { type: 'text'; text: string }
-  | { type: 'local_image'; path: string }
-  | { type: 'input_image'; image_url: string };
+  | { type: 'localImage'; path: string }
+  | { type: 'image'; url: string };
 
 function mergeRecoveredMessage(prefix: string, text: string): string {
   if (!prefix) return text;
   if (!text) return prefix;
   return text.startsWith(prefix) ? text : `${prefix}${text}`;
+}
+
+function shouldSuppressPreToolText(task: string): boolean {
+  return /\b(navigate|go to|open|visit|click|type|fill|submit|login|log in|sign in|upload|download|search|research|inspect|extract|summarize|snapshot|close|activate|switch|fix|edit|patch|build|test|run)\b/i
+    .test(task);
 }
 
 class RecoverableTurnError extends Error {
@@ -290,17 +340,17 @@ export class AppServerProvider implements AgentProvider {
     const ws = this.ws;
     if (!ws) throw new Error('AppServerProvider: not connected');
 
-    this.writeContextFile(runtimeRequest);
+    this.writeContextFile(runtimeRequest, currentTools);
 
     // Acquire or resume a thread
     const taskId = request.taskId ?? request.runId;
-    const threadId = await this.acquireThread(ws, taskId, request.systemPrompt);
+    const threadId = await this.acquireThread(ws, taskId, request.systemPrompt, request.forceFreshThread === true);
     if (this.aborted) throw new Error('Task cancelled by user.');
 
     let accumulatedMessage = '';
     let nextTurnInput: string | null = null;
 
-    // Build the first turn's input text — prepend contextPrompt if present (same pattern as HaikuProvider)
+    // Build the first turn's input text — prepend contextPrompt if present.
     const firstTurnInput = request.contextPrompt?.trim()
       ? `${request.contextPrompt.trim()}\n\n## Current User Request\n\n${request.task}`
       : request.task;
@@ -309,7 +359,7 @@ export class AppServerProvider implements AgentProvider {
     for (let turn = 0; turn < maxToolTurns; turn++) {
       if (this.aborted) throw new Error('Task cancelled by user.');
 
-      const originalTurnInput = nextTurnInput ?? (turn === 0 ? firstTurnInput : accumulatedMessage);
+      const originalTurnInput = nextTurnInput ?? (turn === 0 ? firstTurnInput : POST_TOOL_CONTINUATION_INPUT);
       nextTurnInput = null;
       let turnInput = originalTurnInput;
       let turnResult: Awaited<ReturnType<AppServerProvider['runOneTurn']>>;
@@ -419,7 +469,11 @@ export class AppServerProvider implements AgentProvider {
     ws: WebSocket,
     taskId: string,
     systemPrompt: string,
+    forceFreshThread = false,
   ): Promise<string> {
+    if (forceFreshThread) {
+      return this.startThread(ws, taskId, systemPrompt);
+    }
     const existing = this.threadRegistry[taskId];
     const normalizedExisting = normalizeThreadEntry(existing);
     if (normalizedExisting && this.shouldReuseThread(normalizedExisting)) {
@@ -641,27 +695,56 @@ export class AppServerProvider implements AgentProvider {
     codexItems: CodexItem[];
   }> {
     const { threadId, task, request, currentTools } = params;
+    const turnReqId = this.nextId++;
 
     return new Promise((resolve, reject) => {
       let message = '';
+      const completedAgentMessages: string[] = [];
+      let pendingPreToolDelta = '';
+      const suppressPreToolText = shouldSuppressPreToolText(request.task);
       let lastInputTokens = 0;
       let lastOutputTokens = 0;
       let lastCachedInputTokens = 0;
       let toolsCalled = false;
+      // Set when a successful `answer.submit` MCP tool call completes in
+      // this turn. Treated as the terminal signal regardless of whether
+      // other tools fired in the same turn — the prompt tells the model
+      // to end every run with `answer.submit`, so the provider must
+      // classify its presence as 'final' or the outer loop will queue
+      // another empty turn and leave the UI stuck on "Exploring ideas".
+      let finalAnswerSubmitted = false;
       const turnCodexItems: CodexItem[] = [];
 
-      let timer: ReturnType<typeof setTimeout> | null = null;
+      // Split timers — see constant comments above.
+      //   wallClockTimer : armed once, never reset; guards against any
+      //                    form of stall including keepalive flooding.
+      //   idleTimer      : reset on every inbound message; converts a
+      //                    silent socket into a RecoverableTurnError
+      //                    quickly enough for the reconnect path to
+      //                    salvage the turn before the wall clock fires.
+      let wallClockTimer: ReturnType<typeof setTimeout> | null = null;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
       let settled = false;
-      const resetTimer = (): void => {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
+      const armWallClockTimer = (): void => {
+        wallClockTimer = setTimeout(() => {
           cleanup();
           settled = true;
-          reject(new RecoverableTurnError('AppServerProvider: turn timed out', {
+          reject(new RecoverableTurnError('AppServerProvider: turn wall-clock timeout', {
             partialMessage: message,
             toolsCalled,
           }));
         }, TURN_TIMEOUT_MS);
+      };
+      const resetIdleTimer = (): void => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          cleanup();
+          settled = true;
+          reject(new RecoverableTurnError('AppServerProvider: turn idle timeout', {
+            partialMessage: message,
+            toolsCalled,
+          }));
+        }, TURN_IDLE_TIMEOUT_MS);
       };
 
       // Wire abort — JSON-RPC notification (no id)
@@ -679,10 +762,24 @@ export class AppServerProvider implements AgentProvider {
       const handler = (event: MessageEvent): void => {
         try {
           if (settled) return;
-          resetTimer();
+          // Only the idle timer resets per-message — the wall clock is
+          // armed once at turn/start and never extended. This lets
+          // Codex's per-second tokenUsage keepalives keep the idle
+          // timer quiet without sliding the hard deadline forward.
+          resetIdleTimer();
           const raw = JSON.parse(
             typeof event.data === 'string' ? event.data : event.data.toString(),
           ) as WsMsg;
+
+          if (raw.id === turnReqId) {
+            const response = raw as WsResponse;
+            if (response.error) {
+              cleanup();
+              settled = true;
+              reject(new Error(`AppServerProvider: turn start failed: ${response.error.message}`));
+            }
+            return;
+          }
 
           // Codex pushes notifications as { method, params } (no id field)
           const method = typeof raw.method === 'string' ? raw.method : null;
@@ -696,13 +793,11 @@ export class AppServerProvider implements AgentProvider {
               const delta = typeof params.delta === 'string' ? params.delta : '';
               if (delta) {
                 message += delta;
-                // Live-stream assistant text to the chat UI the same way
-                // Haiku/Gemini do. Without this, Codex shows "Thinking..."
-                // until the whole turn finishes and then dumps the final
-                // answer in one go, which reads as stalled compared to the
-                // other providers. Streaming deltas makes the typewriter in
-                // live-run.ts animate as the model generates.
-                request.onToken?.(delta);
+                if (suppressPreToolText && !toolsCalled) {
+                  pendingPreToolDelta += delta;
+                } else {
+                  request.onToken?.(delta);
+                }
               }
               break;
             }
@@ -713,6 +808,7 @@ export class AppServerProvider implements AgentProvider {
                 : null;
               if (item?.type === 'mcpToolCall') {
                 toolsCalled = true;
+                pendingPreToolDelta = '';
                 const rawToolName = typeof item.tool === 'string' ? item.tool : '';
                 const toolName = fromMcpName(rawToolName);
                 const toolInput = (item.arguments && typeof item.arguments === 'object')
@@ -745,15 +841,18 @@ export class AppServerProvider implements AgentProvider {
                 ? params.item as WsMsg
                 : null;
               if (item?.type === 'agentMessage') {
+                const completedText = typeof item.text === 'string' ? item.text.trim() : '';
+                if (completedText) completedAgentMessages.push(completedText);
                 // Each agentMessage item is a complete "thought" the model
                 // emits, and a single turn can contain several back-to-back.
-                // Without a separator the deltas stream end-to-end and the
-                // UI renders them as one run-on paragraph. Terminating each
-                // thought with a markdown paragraph break gives the chat a
-                // distinct line per thought; trailing whitespace on the
-                // final message is trimmed before publish (see turn/completed).
+                // The accumulated buffer keeps a '\n\n' separator so the
+                // final published message preserves paragraph structure
+                // (trimmed in turn/completed). The live UI receives a
+                // distinct `thought-boundary` status instead of a sentinel
+                // token so the renderer can commit the finished paragraph
+                // to its thoughts[] log without pattern-matching the stream.
                 message += '\n\n';
-                request.onToken?.('\n\n');
+                request.onStatus?.('thought-boundary');
                 break;
               }
               if (item?.type === 'mcpToolCall') {
@@ -770,7 +869,7 @@ export class AppServerProvider implements AgentProvider {
                 const callDescription = describeProviderToolCall(toolName, toolInput);
                 const resultSummary = error
                   ? `error: ${error.message.slice(0, 80)}`
-                  : 'done';
+                  : summarizeProviderToolCompletion(result, false);
                 request.onStatus?.(`tool-done:${callDescription} -> ${resultSummary}`);
 
                 const completedItem: CodexItem = {
@@ -788,6 +887,18 @@ export class AppServerProvider implements AgentProvider {
                 request.onItem?.({ item: completedItem, eventType: 'item.completed' });
                 turnCodexItems.push(completedItem);
 
+                // Terminal-turn detection. The system prompt instructs
+                // every run to end with `answer.submit`, and a failing
+                // submission (e.g. grounding gate rejection) rethrows
+                // as `error` here — in that case we want the outer
+                // loop to ask the model to revise. A successful
+                // submission is the last thing the model will ever
+                // emit for this task, so forcing kind='final' below
+                // prevents an empty follow-up turn from hanging the
+                // live-run card on "Exploring ideas".
+                if (toolName === ANSWER_SUBMIT_TOOL_NAME && !error) {
+                  finalAnswerSubmitted = true;
+                }
               }
               break;
             }
@@ -816,14 +927,23 @@ export class AppServerProvider implements AgentProvider {
             }
 
             case 'turn/completed': {
+              if (suppressPreToolText && !toolsCalled && pendingPreToolDelta) {
+                request.onToken?.(pendingPreToolDelta);
+                pendingPreToolDelta = '';
+              }
               cleanup();
               settled = true;
+              // `finalAnswerSubmitted` wins over `toolsCalled` — a
+              // successful answer.submit is terminal even when other
+              // tools ran earlier in the same turn.
+              const kind: 'final' | 'tool_calls' = finalAnswerSubmitted
+                ? 'final'
+                : toolsCalled
+                  ? 'tool_calls'
+                  : 'final';
               resolve({
-                kind: toolsCalled ? 'tool_calls' : 'final',
-                // Strip the trailing paragraph break we appended after the
-                // last agentMessage item so the published message does not
-                // carry invisible whitespace into the chat log or copy text.
-                message: message.replace(/\s+$/, ''),
+                kind,
+                message: deriveCanonicalAgentTurnMessage(completedAgentMessages, message),
                 inputTokens: lastInputTokens,
                 outputTokens: lastOutputTokens,
                 cachedInputTokens: lastCachedInputTokens,
@@ -872,7 +992,8 @@ export class AppServerProvider implements AgentProvider {
       };
 
       const cleanup = (): void => {
-        if (timer) clearTimeout(timer);
+        if (wallClockTimer) clearTimeout(wallClockTimer);
+        if (idleTimer) clearTimeout(idleTimer);
         this.abortCurrentTurn = null;
         this.steerCurrentTurn = null;
         ws.removeEventListener('message', handler);
@@ -880,12 +1001,12 @@ export class AppServerProvider implements AgentProvider {
         ws.removeEventListener('error', errorHandler);
       };
 
-      const turnReqId = this.nextId++;
       const input = this.buildTurnStartInput(task, request.attachments);
       ws.addEventListener('message', handler);
       ws.addEventListener('close', closeHandler);
       ws.addEventListener('error', errorHandler);
-      resetTimer();
+      armWallClockTimer();
+      resetIdleTimer();
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
         id: turnReqId,
@@ -915,7 +1036,11 @@ export class AppServerProvider implements AgentProvider {
           agentId: request.agentId,
           mode: request.mode,
           taskId: request.taskId,
+          toolScope: {
+            activeTools: currentTools ?? request.toolScope.activeTools,
+          },
           toolNames,
+          runtimeAllowedTools: request.runtimeAllowedTools ?? 'all',
         }, null, 2),
         'utf-8',
       );
@@ -992,12 +1117,12 @@ export class AppServerProvider implements AgentProvider {
       if (attachment.type !== 'image') continue;
       const filePath = attachment.path?.trim();
       if (filePath) {
-        input.push({ type: 'local_image', path: filePath });
+        input.push({ type: 'localImage', path: filePath });
         continue;
       }
       input.push({
-        type: 'input_image',
-        image_url: `data:${attachment.mediaType};base64,${attachment.data}`,
+        type: 'image',
+        url: `data:${attachment.mediaType};base64,${attachment.data}`,
       });
     }
 

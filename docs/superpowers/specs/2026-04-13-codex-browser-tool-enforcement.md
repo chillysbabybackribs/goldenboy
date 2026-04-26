@@ -1,5 +1,7 @@
 # Codex Browser Tool Enforcement
 
+> Historical note: this spec predates the Codex-only hard trim. Any references to the legacy secondary-provider runtime or `CodexProvider (exec mode)` are historical implementation context rather than current runtime behavior.
+
 ## Problem
 
 Codex (running via `AppServerProvider` + `codex app-server`) has a built-in native web search tool. When a user asks a research or browsing question, codex reaches for its native search instead of the V2 in-app browser tools (`browser.*`). This bypasses:
@@ -14,7 +16,7 @@ The existing V2 Tool Priority block in the system prompt is soft guidance — te
 
 - **File changed:** `src/main/agent/AppServerProvider.ts` only
 - **Methods changed:** `startThread` and `resumeThread`
-- **Not changed:** `AppServerProcess`, `V2ToolBridge`, `AgentPromptBuilder`, `HaikuProvider`, `CodexProvider`, tool definitions, `config.toml` writes
+- **Not changed:** `AppServerProcess`, `V2ToolBridge`, `AgentPromptBuilder`, the legacy secondary-provider runtime, `CodexProvider`, tool definitions, `config.toml` writes
 
 ## Solution
 
@@ -68,5 +70,5 @@ ws.send(JSON.stringify({
 ## Risk
 
 - If `config.web_search` in `thread/start` is ignored by the codex runtime, behavior is unchanged from today — no regression.
-- No effect on `HaikuProvider`, `CodexProvider` (exec mode), or sub-agents.
+- No effect on the legacy secondary-provider runtime, `CodexProvider` (exec mode), or sub-agents.
 - The V2 Tool Priority block in the system prompt remains as belt-and-suspenders for other native capabilities.

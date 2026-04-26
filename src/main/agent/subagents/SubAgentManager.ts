@@ -1,6 +1,6 @@
 import * as path from 'path';
 import type { AgentTaskKind, CodexItem, ProviderId, TaskPlanMetadata } from '../../../shared/types/model';
-import type { AgentProviderResult, AgentToolCallRecord, AgentToolResult, ValidationStatus } from '../AgentTypes';
+import type { AgentProviderResult, AgentToolCallRecord, AgentToolName, AgentToolResult, ValidationStatus } from '../AgentTypes';
 import { AgentProvider } from '../AgentTypes';
 import { isOrchestrationExecutionReady } from '../runtimeScope';
 import { SubAgentRecord, SubAgentResult, SubAgentScopeResolution, SubAgentSpawnInput } from './SubAgentTypes';
@@ -260,11 +260,20 @@ export class SubAgentManager {
   ) {}
 
   resolveScope(input: SubAgentSpawnInput): SubAgentScopeResolution {
+    const clampToParent = (candidate: 'all' | AgentToolName[]): 'all' | AgentToolName[] => {
+      if (input.parentAllowedTools === 'all' || !input.parentAllowedTools) {
+        return candidate;
+      }
+      const parentAllowed = new Set<AgentToolName>(input.parentAllowedTools);
+      if (candidate === 'all') return [...parentAllowed];
+      return candidate.filter((tool): tool is AgentToolName => parentAllowed.has(tool));
+    };
+
     if (input.allowedTools === 'all') {
-      return { allowedTools: 'all', source: 'explicit-all' };
+      return { allowedTools: clampToParent('all'), source: 'explicit-all' };
     }
     if (Array.isArray(input.allowedTools)) {
-      return { allowedTools: input.allowedTools, source: 'explicit-list' };
+      return { allowedTools: clampToParent(input.allowedTools), source: 'explicit-list' };
     }
     const selectedTools = agentToolExecutor.list()
       .filter((tool) => input.canSpawnSubagents !== false || !tool.name.startsWith('subagent.'))
@@ -274,7 +283,7 @@ export class SubAgentManager {
       ? 'derived-runtime-selected-adaptive'
       : 'derived-runtime-selected';
     return {
-      allowedTools: selectedTools,
+      allowedTools: clampToParent(selectedTools),
       source: adaptiveSource,
     };
   }
@@ -336,7 +345,7 @@ export class SubAgentManager {
         contextPrompt: this.contextForSpawn(input),
         parentRunId,
         depth: 1,
-        skillNames: this.skillNamesForRole(record.role, input.canSpawnSubagents !== false),
+        skillNames: [],
         allowedTools: scope.allowedTools,
         canSpawnSubagents: input.canSpawnSubagents,
         onStatus: (status) => input.onStatus?.(`subagent ${record.id}: ${status}`),
@@ -442,18 +451,6 @@ export class SubAgentManager {
       this.prune();
       return { record: { ...this.records.get(record.id)! }, result: subResult };
     }
-  }
-
-  private skillNamesForRole(role: string, canSpawnSubagents: boolean): string[] {
-    const normalized = role.toLowerCase();
-    const skills = canSpawnSubagents ? ['subagent-coordination'] : [];
-    if (normalized.includes('browser') || normalized.includes('research')) skills.push('browser-operation');
-    if (normalized.includes('file') || normalized.includes('code')) skills.push('filesystem-operation');
-    if (normalized.includes('debug') || normalized.includes('terminal')) skills.push('local-debug');
-    if (skills.length === 0 || (canSpawnSubagents && skills.length === 1)) {
-      skills.push('browser-operation', 'filesystem-operation', 'local-debug');
-    }
-    return skills;
   }
 
   private contextForSpawn(input: SubAgentSpawnInput): string | null {

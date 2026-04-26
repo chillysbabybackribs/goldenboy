@@ -1,6 +1,9 @@
 import { AgentToolDefinition } from '../../AgentTypes';
 import { terminalService } from '../../../terminal/TerminalService';
 import { agentCache } from '../../AgentCache';
+import * as fs from 'fs';
+import * as path from 'path';
+import { APP_WORKSPACE_ROOT } from '../../../workspaceRoot';
 
 function objectInput(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -42,6 +45,93 @@ function commandWithCwd(command: string, cwd?: string): string {
 function compactOutput(output: string, maxChars: number): string {
   if (output.length <= maxChars) return output;
   return `${output.slice(-maxChars)}\n...[terminal output truncated to last ${maxChars} chars]`;
+}
+
+type RepoScriptName = 'build' | 'test';
+
+type RepoScriptPlan = {
+  scriptName: RepoScriptName;
+  command: string;
+  cwd: string;
+  manifestPath: string;
+  packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun';
+};
+
+function normalizeCwd(cwd?: string): string {
+  if (!cwd) return APP_WORKSPACE_ROOT;
+  return path.resolve(APP_WORKSPACE_ROOT, cwd);
+}
+
+function readJsonFile(filePath: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function detectPackageManager(dir: string, manifest: Record<string, unknown>): RepoScriptPlan['packageManager'] {
+  const packageManager = typeof manifest.packageManager === 'string' ? manifest.packageManager.toLowerCase() : '';
+  if (packageManager.startsWith('pnpm@')) return 'pnpm';
+  if (packageManager.startsWith('yarn@')) return 'yarn';
+  if (packageManager.startsWith('bun@')) return 'bun';
+  if (fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (fs.existsSync(path.join(dir, 'yarn.lock'))) return 'yarn';
+  if (fs.existsSync(path.join(dir, 'bun.lockb')) || fs.existsSync(path.join(dir, 'bun.lock'))) return 'bun';
+  return 'npm';
+}
+
+function scriptCommandForPackageManager(
+  packageManager: RepoScriptPlan['packageManager'],
+  scriptName: RepoScriptName,
+): string {
+  switch (packageManager) {
+    case 'pnpm': return `pnpm ${scriptName}`;
+    case 'yarn': return `yarn ${scriptName}`;
+    case 'bun': return `bun run ${scriptName}`;
+    case 'npm':
+    default:
+      return scriptName === 'test' ? 'npm test' : `npm run ${scriptName}`;
+  }
+}
+
+function resolveRepoScriptPlan(scriptName: RepoScriptName, cwd?: string): RepoScriptPlan {
+  let current = normalizeCwd(cwd);
+  const root = path.parse(current).root;
+
+  while (true) {
+    const manifestPath = path.join(current, 'package.json');
+    if (fs.existsSync(manifestPath)) {
+      const manifest = readJsonFile(manifestPath);
+      const scripts = manifest && typeof manifest.scripts === 'object' && manifest.scripts !== null
+        ? manifest.scripts as Record<string, unknown>
+        : null;
+      const scriptValue = scripts?.[scriptName];
+      if (typeof scriptValue === 'string' && scriptValue.trim()) {
+        const packageManager = detectPackageManager(current, manifest ?? {});
+        return {
+          scriptName,
+          command: scriptCommandForPackageManager(packageManager, scriptName),
+          cwd: current,
+          manifestPath,
+          packageManager,
+        };
+      }
+    }
+
+    if (current === APP_WORKSPACE_ROOT || current === root) break;
+    current = path.dirname(current);
+  }
+
+  throw new Error(`No package.json with a ${scriptName} script was found from ${normalizeCwd(cwd)} up to ${APP_WORKSPACE_ROOT}.`);
+}
+
+export function resolveRepoBuildPlan(cwd?: string): RepoScriptPlan {
+  return resolveRepoScriptPlan('build', cwd);
+}
+
+export function resolveRepoTestPlan(cwd?: string): RepoScriptPlan {
+  return resolveRepoScriptPlan('test', cwd);
 }
 
 function invalidateFilesystemViewsFromTerminal(): void {
@@ -106,6 +196,118 @@ export function createTerminalToolDefinitions(): AgentToolDefinition[] {
             sessionId: session.id,
             filesystemCacheInvalidated: true,
             followUp: 'If the command changed files, rerun filesystem.index_workspace before relying on indexed file cache search.',
+          },
+        };
+      },
+    },
+    {
+      name: 'terminal.build_repo',
+      description: 'Run the repository build command from the nearest package.json that defines a build script. Use this instead of terminal.exec when you need deterministic build verification after code changes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string' },
+          timeoutMs: { type: 'number' },
+          maxOutputChars: { type: 'number' },
+        },
+      },
+      async execute(input) {
+        const obj = objectInput(input);
+        const plan = resolveRepoBuildPlan(optionalString(obj, 'cwd'));
+        const timeoutMs = Math.min(Math.max(optionalNumber(obj, 'timeoutMs', 120_000), 1_000), 180_000);
+        const maxOutputChars = Math.min(Math.max(optionalNumber(obj, 'maxOutputChars', 12_000), 1_000), 64_000);
+        const session = ensureSession();
+        const effectiveCommand = commandWithCwd(plan.command, plan.cwd);
+        const result = await terminalService.executeCommand(effectiveCommand, timeoutMs);
+        invalidateFilesystemViewsFromTerminal();
+
+        if (!result) {
+          const output = terminalService.getRecentOutput(80);
+          return {
+            summary: `Repository build still running or timed out after ${timeoutMs}ms`,
+            data: {
+              buildCommand: plan.command,
+              manifestPath: plan.manifestPath,
+              packageManager: plan.packageManager,
+              cwd: plan.cwd,
+              timedOut: true,
+              output: compactOutput(output, maxOutputChars),
+              sessionId: session.id,
+              buildVerified: true,
+              filesystemCacheInvalidated: true,
+            },
+          };
+        }
+
+        return {
+          summary: `Built repository with ${plan.command} (exit ${result.exitCode})`,
+          data: {
+            buildCommand: plan.command,
+            manifestPath: plan.manifestPath,
+            packageManager: plan.packageManager,
+            exitCode: result.exitCode,
+            cwd: result.cwd || terminalService.getCwd() || plan.cwd,
+            durationMs: result.durationMs,
+            output: compactOutput(result.output, maxOutputChars),
+            sessionId: session.id,
+            buildVerified: true,
+            filesystemCacheInvalidated: true,
+          },
+        };
+      },
+    },
+    {
+      name: 'terminal.test_repo',
+      description: 'Run the repository test command from the nearest package.json that defines a test script. Use this instead of terminal.exec when you need deterministic repository test verification.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string' },
+          timeoutMs: { type: 'number' },
+          maxOutputChars: { type: 'number' },
+        },
+      },
+      async execute(input) {
+        const obj = objectInput(input);
+        const plan = resolveRepoTestPlan(optionalString(obj, 'cwd'));
+        const timeoutMs = Math.min(Math.max(optionalNumber(obj, 'timeoutMs', 180_000), 1_000), 180_000);
+        const maxOutputChars = Math.min(Math.max(optionalNumber(obj, 'maxOutputChars', 12_000), 1_000), 64_000);
+        const session = ensureSession();
+        const effectiveCommand = commandWithCwd(plan.command, plan.cwd);
+        const result = await terminalService.executeCommand(effectiveCommand, timeoutMs);
+        invalidateFilesystemViewsFromTerminal();
+
+        if (!result) {
+          const output = terminalService.getRecentOutput(80);
+          return {
+            summary: `Repository tests still running or timed out after ${timeoutMs}ms`,
+            data: {
+              testCommand: plan.command,
+              manifestPath: plan.manifestPath,
+              packageManager: plan.packageManager,
+              cwd: plan.cwd,
+              timedOut: true,
+              output: compactOutput(output, maxOutputChars),
+              sessionId: session.id,
+              testVerified: true,
+              filesystemCacheInvalidated: true,
+            },
+          };
+        }
+
+        return {
+          summary: `Tested repository with ${plan.command} (exit ${result.exitCode})`,
+          data: {
+            testCommand: plan.command,
+            manifestPath: plan.manifestPath,
+            packageManager: plan.packageManager,
+            exitCode: result.exitCode,
+            cwd: result.cwd || terminalService.getCwd() || plan.cwd,
+            durationMs: result.durationMs,
+            output: compactOutput(result.output, maxOutputChars),
+            sessionId: session.id,
+            testVerified: true,
+            filesystemCacheInvalidated: true,
           },
         };
       },

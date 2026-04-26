@@ -4,6 +4,10 @@ Canonical inventory for the stable dotted tool names exposed to agents.
 
 Update this file when adding, removing, or renaming agent-facing tools. Keep names stable even if implementation files move.
 
+## Answer
+
+- `answer.submit`
+
 ## Attachments
 
 - `attachments.list`
@@ -11,10 +15,6 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `attachments.read_document`
 - `attachments.search`
 - `attachments.stats`
-
-## Context
-
-- `context.load`
 
 ## Browser
 
@@ -38,11 +38,12 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `browser.hover`
 - `browser.inspect_page`
 - `browser.navigate`
-- `browser.pin_page`
+- `browser.open_tab`
 - `browser.read_cached_chunk`
 - `browser.record_finding`
 - `browser.reload`
 - `browser.research_search`
+- `browser.run_workflow`
 - `browser.run_intent_program`
 - `browser.search_page_cache`
 - `browser.select_option`
@@ -67,6 +68,10 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 - `filesystem.search_file_cache`
 - `filesystem.write`
 
+## Memory
+
+- `memory.plan_update`
+
 ## RepoMap
 
 - `repomap.describe_file`
@@ -79,12 +84,18 @@ Update this file when adding, removing, or renaming agent-facing tools. Keep nam
 
 - `session.resume_previous`
 
+## Skills
+
+- `skill.load`
+
 ## Sub-Agent
 
 - `subagent.spawn`
 
 ## Terminal
 
+- `terminal.build_repo`
+- `terminal.test_repo`
 - `terminal.exec`
 - `terminal.kill`
 - `terminal.spawn`

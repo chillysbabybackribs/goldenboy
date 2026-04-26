@@ -1,5 +1,7 @@
 # Command Center Input Area Redesign
 
+> Historical note: this dated UI spec was written before the Codex-only hard trim. Mentions of `HAIKU` buttons or multi-provider model controls describe the old UI state.
+
 **Date:** 2026-04-13  
 **Scope:** `src/renderer/command/` — input footer UI only (HTML + CSS)  
 **Goal:** Simplify and consolidate the input area into a compact, enterprise-grade layout with fewer visual layers.
@@ -59,7 +61,7 @@ Stays within the existing dark palette:
 |---|---|
 | `src/renderer/command/index.html` | Restructure input footer markup: replace dual-toggle with single model chip, remove token gauge from compose shell, add token span to status bar, collapse bottom bar into unified box |
 | `src/renderer/command/command.css` | Remove `.cc-model-toggle` / `.cc-model-toggle-btn` rules; add `.cc-model-chip` rule; update `.cc-compose-shell`, `.cc-compose-topbar`, `.cc-compose-bottombar`; add `.cc-compose-box` unified container; move token display styles to status bar context |
-| `src/renderer/command/command.ts` | Update DOM references: `modelToggleGroup`, `modelToggleGpt54Btn`, `modelToggleHaikuBtn` → `modelChip` (single element); update token rendering to write to new status bar span; keep all existing logic intact |
+| `src/renderer/command/command.ts` | Update DOM references: `modelToggleGroup`, `modelTogglePrimaryBtn`, `modelToggleSecondaryBtn` → `modelChip` (single element); update token rendering to write to new status bar span; keep all existing logic intact |
 
 ---
 

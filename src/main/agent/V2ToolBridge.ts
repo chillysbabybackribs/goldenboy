@@ -4,7 +4,8 @@ import { agentToolExecutor } from './AgentToolExecutor';
 import { formatValidationForModel } from './ConstraintValidator';
 import { chatKnowledgeStore } from '../chatKnowledge/ChatKnowledgeStore';
 import type { AgentToolContext } from './AgentTypes';
-import type { AnyProviderId } from '../../shared/types/model';
+import type { ProviderId } from '../../shared/types/model';
+import { activeToolNames } from './toolScopeState';
 
 const MAX_TOOL_RESULT_CHARS = 8_000;
 
@@ -22,6 +23,19 @@ function readContext(contextPath: string): AgentToolContext {
     return JSON.parse(raw) as AgentToolContext;
   } catch {
     return { runId: 'unknown', agentId: 'unknown', mode: 'unrestricted-dev' };
+  }
+}
+
+function writeContext(contextPath: string, context: AgentToolContext): void {
+  try {
+    const nextContext: AgentToolContext = { ...context };
+    if (nextContext.toolScope) {
+      nextContext.toolNames = activeToolNames(nextContext.toolScope);
+    }
+    fs.writeFileSync(contextPath, JSON.stringify(nextContext, null, 2), 'utf-8');
+  } catch {
+    // best-effort persistence; tool execution should not fail because context
+    // bookkeeping could not be written back.
   }
 }
 
@@ -116,12 +130,13 @@ export class V2ToolBridge {
           payload.arguments,
           ctx,
         );
+        writeContext(ctxPath, ctx);
 
         if (ctx.taskId && !toolName.startsWith('chat.')) {
           chatKnowledgeStore.recordToolMessage(
             ctx.taskId,
             JSON.stringify({ tool: toolName, input: payload.arguments, result }, null, 2).slice(0, 50_000),
-            ctx.agentId as AnyProviderId,
+            ctx.agentId as ProviderId,
             ctx.runId,
           );
         }

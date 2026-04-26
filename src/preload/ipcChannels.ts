@@ -92,10 +92,8 @@ export const IPC_CHANNELS = {
   // Model channels
   MODEL_INVOKE: 'model:invoke',
   MODEL_CANCEL: 'model:cancel',
-  MODEL_GET_PROVIDERS: 'model:get-providers',
   MODEL_GET_TASK_MEMORY: 'model:get-task-memory',
   MODEL_RESOLVE: 'model:resolve',
-  MODEL_HANDOFF: 'model:handoff',
   MODEL_RUN_INTENT_PROGRAM: 'model:run-intent-program',
   MODEL_PROGRESS: 'model:progress',
 
@@ -108,4 +106,6 @@ export const IPC_CHANNELS = {
   TERMINAL_STATUS: 'terminal:status',
   TERMINAL_EXIT: 'terminal:exit',
   TERMINAL_CAPTURE_SCROLLBACK: 'terminal:capture-scrollback',
+
+  SCREEN_RECORDER_SAVE_FILES: 'screen-recorder:save-files',
 } as const;

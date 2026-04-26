@@ -8,7 +8,8 @@ import {
   BrowserSettings,
 } from './browser';
 import { SurfaceActionRecord } from '../actions/surfaceActionTypes';
-import { ProviderId, ProviderRuntime, InvocationProgress, InvocationResult, HandoffPacket } from './model';
+import { ProviderId, ProviderRuntime, InvocationProgress, InvocationResult } from './model';
+import { CodeHeatmapSnapshot } from './codeHeatmap';
 
 export enum AppEventType {
   TASK_CREATED = 'TASK_CREATED',
@@ -69,7 +70,6 @@ export enum AppEventType {
   MODEL_INVOCATION_PROGRESS = 'MODEL_INVOCATION_PROGRESS',
   MODEL_INVOCATION_COMPLETED = 'MODEL_INVOCATION_COMPLETED',
   MODEL_INVOCATION_FAILED = 'MODEL_INVOCATION_FAILED',
-  MODEL_HANDOFF = 'MODEL_HANDOFF',
 
   // Terminal session lifecycle events
   TERMINAL_SESSION_CREATED = 'TERMINAL_SESSION_CREATED',
@@ -82,6 +82,9 @@ export enum AppEventType {
   TERMINAL_STATUS_UPDATED = 'TERMINAL_STATUS_UPDATED',
   TERMINAL_SESSION_REATTACHED = 'TERMINAL_SESSION_REATTACHED',
   TERMINAL_COMMAND_FINISHED = 'TERMINAL_COMMAND_FINISHED',
+
+  // Code heatmap events
+  CODE_HEATMAP_UPDATED = 'CODE_HEATMAP_UPDATED',
 }
 
 export type AppEventPayloads = {
@@ -112,7 +115,6 @@ export type AppEventPayloads = {
   [AppEventType.MODEL_INVOCATION_PROGRESS]: { progress: InvocationProgress };
   [AppEventType.MODEL_INVOCATION_COMPLETED]: { result: InvocationResult };
   [AppEventType.MODEL_INVOCATION_FAILED]: { taskId: string; providerId: ProviderId; error: string };
-  [AppEventType.MODEL_HANDOFF]: { packet: HandoffPacket };
 
   // Browser runtime lifecycle payloads
   [AppEventType.BROWSER_SURFACE_CREATED]: { profileId: string; partition: string };
@@ -162,6 +164,8 @@ export type AppEventPayloads = {
     durationMs: number;
     command: string;
   };
+
+  [AppEventType.CODE_HEATMAP_UPDATED]: { snapshot: CodeHeatmapSnapshot };
 };
 
 export type AppEvent<T extends AppEventType = AppEventType> = {

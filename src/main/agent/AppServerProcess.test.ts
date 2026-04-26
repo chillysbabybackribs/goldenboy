@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { mergeTomlMcpEntry, parseListeningPort, AppServerProcess } from './AppServerProcess';
+import {
+  mergeTomlMcpEntry,
+  parseListeningPort,
+  AppServerProcess,
+  codexConfigDirForHome,
+  codexConfigPathForHome,
+} from './AppServerProcess';
 
 describe('parseListeningPort', () => {
   it('parses port from listening line', () => {
@@ -14,24 +20,30 @@ describe('parseListeningPort', () => {
 });
 
 describe('AppServerProcess.stop() clears config', () => {
-  const CODEX_CONFIG_PATH = path.join(os.homedir(), '.codex', 'config.toml');
-  let originalConfig: string | null = null;
+  let realHomeDir = '';
+  let isolatedHomeDir = '';
+  let realConfigPath = '';
+  let isolatedConfigPath = '';
 
   beforeEach(() => {
-    originalConfig = fs.existsSync(CODEX_CONFIG_PATH)
-      ? fs.readFileSync(CODEX_CONFIG_PATH, 'utf-8')
-      : null;
+    realHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-real-home-'));
+    isolatedHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-isolated-home-'));
+    realConfigPath = codexConfigPathForHome(realHomeDir);
+    isolatedConfigPath = codexConfigPathForHome(isolatedHomeDir);
   });
 
   afterEach(() => {
-    if (originalConfig !== null) {
-      fs.writeFileSync(CODEX_CONFIG_PATH, originalConfig, 'utf-8');
-    } else if (fs.existsSync(CODEX_CONFIG_PATH)) {
-      fs.unlinkSync(CODEX_CONFIG_PATH);
-    }
+    fs.rmSync(realHomeDir, { recursive: true, force: true });
+    fs.rmSync(isolatedHomeDir, { recursive: true, force: true });
   });
 
-  it('removes v2-tools section from config.toml on stop()', () => {
+  it('clears the isolated config.toml on stop() without touching the real home config', () => {
+    const realConfig = [
+      'model = "gpt-5.4"',
+      '',
+      '[mcp_servers.real-only]',
+      'command = "keep-me"',
+    ].join('\n') + '\n';
     const staleConfig = [
       'model = "gpt-5.4"',
       '',
@@ -44,22 +56,64 @@ describe('AppServerProcess.stop() clears config', () => {
       'V2_TOOL_CONTEXT_PATH = "/tmp/stale.json"',
     ].join('\n') + '\n';
 
-    fs.mkdirSync(path.dirname(CODEX_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(CODEX_CONFIG_PATH, staleConfig, 'utf-8');
+    fs.mkdirSync(codexConfigDirForHome(realHomeDir), { recursive: true });
+    fs.mkdirSync(codexConfigDirForHome(isolatedHomeDir), { recursive: true });
+    fs.writeFileSync(realConfigPath, realConfig, 'utf-8');
+    fs.writeFileSync(isolatedConfigPath, staleConfig, 'utf-8');
 
-    const proc = new AppServerProcess(99999, '/some/shim.js', '/tmp/stale.json');
+    const proc = new AppServerProcess(99999, '/some/shim.js', '/tmp/stale.json', {
+      homeDir: realHomeDir,
+      isolatedHomeDir,
+    });
     proc.stop();
 
-    const after = fs.readFileSync(CODEX_CONFIG_PATH, 'utf-8');
-    expect(after).not.toContain('[mcp_servers.v2-tools]');
-    expect(after).not.toContain('V2_BRIDGE_PORT');
-    expect(after).toContain('model = "gpt-5.4"');
+    const realAfter = fs.readFileSync(realConfigPath, 'utf-8');
+    expect(realAfter).toContain('[mcp_servers.real-only]');
+    expect(realAfter).not.toContain('[mcp_servers.v2-tools]');
+    expect(fs.existsSync(isolatedHomeDir)).toBe(false);
   });
 
-  it('does not fail when config.toml does not exist', () => {
-    if (fs.existsSync(CODEX_CONFIG_PATH)) fs.unlinkSync(CODEX_CONFIG_PATH);
-    const proc = new AppServerProcess(1234, '/some/shim.js', '/tmp/ctx.json');
+  it('does not fail when the isolated config.toml does not exist', () => {
+    const proc = new AppServerProcess(1234, '/some/shim.js', '/tmp/ctx.json', {
+      homeDir: realHomeDir,
+      isolatedHomeDir,
+    });
     expect(() => proc.stop()).not.toThrow();
+  });
+
+  it('copies only auth/bootstrap files into the isolated Codex home', () => {
+    const realCodexDir = codexConfigDirForHome(realHomeDir);
+    fs.mkdirSync(realCodexDir, { recursive: true });
+    fs.writeFileSync(realConfigPath, [
+      'model = "gpt-5.4"',
+      '',
+      '[mcp_servers.real-only]',
+      'command = "keep-me"',
+    ].join('\n') + '\n', 'utf-8');
+    fs.writeFileSync(path.join(realCodexDir, 'auth.json'), '{"token":"ok"}', 'utf-8');
+    fs.writeFileSync(path.join(realCodexDir, 'config.json'), '{"profile":"ok"}', 'utf-8');
+    fs.writeFileSync(path.join(realCodexDir, 'installation_id'), 'install-1', 'utf-8');
+    fs.writeFileSync(path.join(realCodexDir, 'version.json'), '{"version":"1"}', 'utf-8');
+    fs.writeFileSync(path.join(realCodexDir, 'state.json'), '{"persisted":true}', 'utf-8');
+    fs.mkdirSync(path.join(realCodexDir, 'plugins'), { recursive: true });
+    fs.writeFileSync(path.join(realCodexDir, 'plugins', 'tool.txt'), 'should-not-copy', 'utf-8');
+
+    const proc = new AppServerProcess(1234, '/some/shim.js', '/tmp/ctx.json', {
+      homeDir: realHomeDir,
+      isolatedHomeDir,
+    });
+
+    (proc as any).writeConfig();
+
+    const isolatedConfig = fs.readFileSync(isolatedConfigPath, 'utf-8');
+    expect(isolatedConfig).toContain('[mcp_servers.v2-tools]');
+    expect(isolatedConfig).not.toContain('[mcp_servers.real-only]');
+    expect(fs.readFileSync(path.join(codexConfigDirForHome(isolatedHomeDir), 'auth.json'), 'utf-8')).toContain('"token":"ok"');
+    expect(fs.readFileSync(path.join(codexConfigDirForHome(isolatedHomeDir), 'config.json'), 'utf-8')).toContain('"profile":"ok"');
+    expect(fs.readFileSync(path.join(codexConfigDirForHome(isolatedHomeDir), 'installation_id'), 'utf-8')).toContain('install-1');
+    expect(fs.readFileSync(path.join(codexConfigDirForHome(isolatedHomeDir), 'version.json'), 'utf-8')).toContain('"version":"1"');
+    expect(fs.existsSync(path.join(codexConfigDirForHome(isolatedHomeDir), 'state.json'))).toBe(false);
+    expect(fs.existsSync(path.join(codexConfigDirForHome(isolatedHomeDir), 'plugins'))).toBe(false);
   });
 });
 

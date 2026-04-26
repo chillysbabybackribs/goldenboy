@@ -80,7 +80,6 @@
 
       <!-- Center column: chat + input -->
       <div class="cc-left">
-
         <!-- Chat thread -->
         <div class="cc-chat-shell">
           <div class="cc-chat" id="chatThread">
@@ -149,6 +148,11 @@
             <!-- Unified input box: inline utilities + textarea + inner bar -->
             <div class="cc-compose-box">
               <textarea class="cc-input" id="chatInput" placeholder="Send a message..." autocomplete="off" rows="2"></textarea>
+              <button class="cc-stop-btn cc-stop-btn-inset" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>
+                <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <rect x="4.5" y="4.5" width="11" height="11" rx="1.5" fill="currentColor"/>
+                </svg>
+              </button>
               <button class="cc-history-btn cc-history-btn-inset" id="chatHistoryBtn" type="button" title="Chat history" aria-label="Chat history">
                 <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
                   <path d="M2 4h12M2 8h8M2 12h10"/>
@@ -173,18 +177,18 @@
                     <span>Image</span>
                   </button>
                 </div>
-                <!-- Center: model selector -->
-                <div class="cc-model-selector" id="modelSelector" role="group" aria-label="Select model">
-                  <button class="cc-model-btn" id="modelBtnPrimary" type="button" data-owner="gpt-5.4">Codex</button>
-                  <button class="cc-model-btn" id="modelBtnHaiku" type="button" data-owner="haiku">Haiku 4.5</button>
-                  <button class="cc-model-btn" id="modelBtnGemini" type="button" data-owner="gemini">Gemini</button>
-                </div>
-
-                <!-- Right: stop + utilities -->
+                <!-- Right: utilities -->
                 <div class="cc-compose-actions">
-                  <button class="cc-stop-btn" id="chatStopBtn" type="button" title="Stop task" aria-label="Stop task" hidden>STOP</button>
                   <div class="cc-compose-utility-actions">
+                    <button class="cc-compose-utility-btn cc-compose-model-btn" id="modelBtnPrimary" type="button" data-owner="gpt-5.4">Codex</button>
                     <button class="cc-compose-utility-btn cc-browser-host-btn" id="commandBrowserAttachBtn" type="button" title="Move browser to command window" aria-label="Move browser to command window">Attach</button>
+                    <button class="cc-compose-utility-btn cc-compose-mask-utility-btn" id="visualMaskApplyBtn" type="button" title="Blur an element from the browser context menu" aria-label="Blur an element">
+                      Blur
+                    </button>
+                    <button class="cc-compose-utility-btn cc-compose-mask-utility-btn" id="visualMaskClearBtn" type="button" title="Clear all blur masks on the active tab" aria-label="Clear blur masks">
+                      Clear blur
+                    </button>
+                    <span class="cc-compose-mask-utility-status" id="visualMaskStatus" aria-live="polite"></span>
                     <button class="cc-compose-utility-btn cc-terminal-toggle-btn" id="commandTerminalBtn" type="button" title="Show terminal" aria-label="Show terminal" aria-expanded="false">Terminal</button>
                     <button class="cc-compose-utility-btn cc-logs-btn" id="logsBtn" type="button" title="Logs" aria-label="Logs">Logs</button>
                     <button class="cc-compose-utility-btn cc-new-chat-btn" id="chatNewBtn" type="button" title="Start a new chat" aria-label="Start a new chat" hidden>

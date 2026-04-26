@@ -34,6 +34,15 @@ const SAVE_DEBOUNCE_MS = 250;
 const ACTIVE_TAB_SCORE_BOOST = 4;
 const MAX_RECENCY_BOOST = 3.5;
 const RECENCY_BOOST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// Exact-phrase match bonus applied when the full (normalized) query appears as
+// a contiguous substring in the chunk body. Meaningful signal — a page that
+// literally contains "gpt-5 pricing" is strictly more relevant than one that
+// mentions "gpt" and "pricing" hundreds of tokens apart.
+const PHRASE_MATCH_BOOST = 6;
+// Floor below which we drop results entirely. Chunks scoring below this almost
+// always surface as noise; the agent wastes a `read_cached_chunk` call on them.
+// Pass qualityFloor: 0 to disable (audit/debug paths).
+const DEFAULT_QUALITY_FLOOR = 3;
 // answerFromCache diversity: limit each page's contribution so four suggested
 // chunk ids cover multiple pages instead of dumping four excerpts from the
 // same page — the model rarely needs that much redundant context.
@@ -184,44 +193,6 @@ export class PageKnowledgeStore {
     return { pageCount: pageIds.length, chunkCount: removedChunks };
   }
 
-  /**
-   * Non-destructive variant of {@link removePagesForTab} used when a tab is
-   * closed. Pages stay indexed under their original tabId so "I just closed
-   * that tab, look it up again" still answers. The pages are merely stamped
-   * with `tabClosedAt` so the LRU prefers evicting them ahead of live-tab
-   * pages once the global cap is hit. Pinned pages (see {@link setPinned})
-   * retain their pin through the close.
-   */
-  markTabClosed(tabId: string, now: number = Date.now()): { pageCount: number } {
-    const pageIds = this.pagesByTabId.get(tabId) ?? [];
-    let touched = 0;
-    for (const pageId of pageIds) {
-      const page = this.pages.get(pageId);
-      if (!page) continue;
-      if (page.tabClosedAt) continue;
-      this.pages.set(pageId, { ...page, tabClosedAt: now });
-      touched += 1;
-    }
-    if (touched > 0) this.scheduleSave();
-    return { pageCount: touched };
-  }
-
-  /**
-   * Toggle the pinned flag on a cached page. Pinned pages are exempt from
-   * LRU eviction — used by `browser.pin_page` so the model can protect the
-   * two or three pages a task actually depends on. Returns the updated
-   * record or null when `pageId` is unknown.
-   */
-  setPinned(pageId: string, pinned: boolean): CachedPageRecord | null {
-    const page = this.pages.get(pageId);
-    if (!page) return null;
-    if ((page.pinned ?? false) === pinned) return { ...page };
-    const updated: CachedPageRecord = { ...page, pinned, updatedAt: Date.now() };
-    this.pages.set(pageId, updated);
-    this.scheduleSave();
-    return { ...updated };
-  }
-
   listPages(): CachedPageRecord[] {
     return Array.from(this.pages.values()).map(page => ({ ...page }));
   }
@@ -266,6 +237,11 @@ export class PageKnowledgeStore {
     activeTabId?: string;
     /** Override `Date.now()` reference point (tests / deterministic recency). */
     now?: number;
+    /**
+     * Drop results whose raw score falls below this floor. Defaults to
+     * `DEFAULT_QUALITY_FLOOR`; pass 0 to disable filtering (debug/audit).
+     */
+    qualityFloor?: number;
   }): PageSearchResult[] {
     this.searchCount++;
     const terms = normalizeQuery(query);
@@ -273,9 +249,11 @@ export class PageKnowledgeStore {
       this.searchMissCount++;
       return [];
     }
+    const phrase = normalizePhrase(query);
 
     const limit = Math.min(input?.limit || 8, 20);
     const now = input?.now ?? Date.now();
+    const floor = input?.qualityFloor ?? DEFAULT_QUALITY_FLOOR;
     const chunks = Array.from(this.chunks.values()).filter(chunk => {
       if (input?.tabId && chunk.tabId !== input.tabId) return false;
       if (input?.pageId && chunk.pageId !== input.pageId) return false;
@@ -292,6 +270,11 @@ export class PageKnowledgeStore {
           if (chunk.headingLower.includes(term)) score += 3;
           if (chunk.titleLower.includes(term)) score += 2;
         }
+        // Exact-phrase bonus: only meaningful once we have ≥2 terms (otherwise
+        // the phrase is identical to the lone term and we'd double-count).
+        if (phrase && terms.length >= 2 && chunk.searchText.includes(phrase)) {
+          score += PHRASE_MATCH_BOOST;
+        }
         if (score > 0) {
           if (input?.activeTabId && chunk.tabId === input.activeTabId) {
             score += ACTIVE_TAB_SCORE_BOOST;
@@ -300,7 +283,7 @@ export class PageKnowledgeStore {
         }
         return { chunk, score };
       })
-      .filter(item => item.score > 0)
+      .filter(item => item.score >= Math.max(1, floor))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map(item => ({
@@ -310,8 +293,9 @@ export class PageKnowledgeStore {
         url: item.chunk.url,
         title: item.chunk.title,
         heading: item.chunk.heading,
-        snippet: makeSnippet(item.chunk.text, terms),
+        snippet: makeSnippet(item.chunk.text, terms, phrase),
         score: Math.round(item.score * 100) / 100,
+        confidence: confidenceTier(item.score),
         tokenEstimate: item.chunk.tokenEstimate,
       }));
     if (results.length > 0) this.searchHitCount++;
@@ -402,31 +386,14 @@ export class PageKnowledgeStore {
   private enforcePerTabLimit(tabId: string): void {
     const pageIds = this.pagesByTabId.get(tabId);
     if (!pageIds || pageIds.length <= MAX_PAGES_PER_TAB) return;
-    // Keep the MRU head (live history) and every pinned page above the cap.
-    // Pinned pages survive the per-tab cap so the model's protection carries
-    // over regardless of how many subsequent pages it opens in the same tab.
-    const retained: string[] = [];
-    const overflow: string[] = [];
-    for (let i = 0; i < pageIds.length; i++) {
-      const pageId = pageIds[i];
-      if (i < MAX_PAGES_PER_TAB) {
-        retained.push(pageId);
-        continue;
-      }
-      const page = this.pages.get(pageId);
-      if (page?.pinned) {
-        retained.push(pageId);
-        continue;
-      }
-      overflow.push(pageId);
-    }
-    for (const pageId of overflow) {
+    const evicted = pageIds.slice(MAX_PAGES_PER_TAB);
+    for (const pageId of evicted) {
       const page = this.pages.get(pageId);
       if (!page) continue;
       for (const chunkId of page.chunkIds) this.chunks.delete(chunkId);
       this.pages.delete(pageId);
     }
-    this.pagesByTabId.set(tabId, retained);
+    this.pagesByTabId.set(tabId, pageIds.slice(0, MAX_PAGES_PER_TAB));
   }
 
   private load(): void {
@@ -457,25 +424,12 @@ export class PageKnowledgeStore {
   }
 
   private enforceCacheLimits(): void {
-    const pages = Array.from(this.pages.values());
+    let pages = Array.from(this.pages.values());
     if (pages.length <= MAX_CACHED_PAGES && this.chunks.size <= MAX_CACHED_CHUNKS) return;
 
-    // Eviction order: closed-tab pages oldest-first, then live-tab pages
-    // oldest-first. Pinned pages are always skipped; they survive eviction
-    // until the caller unpins them. If every remaining page is pinned we
-    // accept running slightly over the nominal cap rather than silently
-    // dropping work the model asked us to protect.
-    const evictable = pages
-      .filter(page => !page.pinned)
-      .sort((a, b) => {
-        const aClosed = a.tabClosedAt ? 0 : 1;
-        const bClosed = b.tabClosedAt ? 0 : 1;
-        if (aClosed !== bClosed) return aClosed - bClosed;
-        return a.updatedAt - b.updatedAt;
-      });
-
-    while (evictable.length > 0 && (this.pages.size > MAX_CACHED_PAGES || this.chunks.size > MAX_CACHED_CHUNKS)) {
-      const oldest = evictable.shift();
+    pages = pages.sort((a, b) => a.updatedAt - b.updatedAt);
+    while (pages.length > MAX_CACHED_PAGES || this.chunks.size > MAX_CACHED_CHUNKS) {
+      const oldest = pages.shift();
       if (!oldest) break;
       for (const chunkId of oldest.chunkIds) {
         this.chunks.delete(chunkId);
@@ -576,15 +530,108 @@ function diversifyChunks(
   return chosen;
 }
 
-function makeSnippet(text: string, terms: string[]): string {
+/**
+ * Pick the {@link MAX_SNIPPET_CHARS}-wide window that covers the densest
+ * cluster of query-term matches — distinct terms first, raw hit count as the
+ * tiebreak. The naive "window around the first occurrence" misses snippets for
+ * queries like "gpt-5 pricing" whose terms land far apart in a chunk.
+ */
+export function pickBestSnippetWindow(
+  text: string,
+  terms: string[],
+  phrase: string | null,
+  windowSize: number,
+): { start: number; distinct: number; total: number } {
   const lower = text.toLowerCase();
-  const positions = terms
-    .map(term => lower.indexOf(term))
-    .filter(index => index >= 0);
-  const first = positions.length > 0 ? Math.min(...positions) : 0;
-  const start = Math.max(0, first - 140);
-  const snippet = text.slice(start, start + MAX_SNIPPET_CHARS).replace(/\s+/g, ' ').trim();
-  return `${start > 0 ? '...' : ''}${snippet}${start + MAX_SNIPPET_CHARS < text.length ? '...' : ''}`;
+  if (terms.length === 0 || text.length <= windowSize) {
+    return { start: 0, distinct: 0, total: 0 };
+  }
+
+  const anchors: number[] = [];
+  if (phrase) {
+    let i = 0;
+    while (i < lower.length) {
+      const idx = lower.indexOf(phrase, i);
+      if (idx === -1) break;
+      anchors.push(idx);
+      i = idx + phrase.length;
+    }
+  }
+  for (const term of terms) {
+    let i = 0;
+    while (i < lower.length) {
+      const idx = lower.indexOf(term, i);
+      if (idx === -1) break;
+      anchors.push(idx);
+      i = idx + term.length;
+    }
+  }
+  if (anchors.length === 0) return { start: 0, distinct: 0, total: 0 };
+
+  let best = { start: 0, distinct: -1, total: -1 };
+  for (const anchor of anchors) {
+    const start = Math.max(0, Math.min(text.length - windowSize, anchor - Math.floor(windowSize / 3)));
+    const end = start + windowSize;
+    const slice = lower.slice(start, end);
+    let distinct = 0;
+    let total = 0;
+    for (const term of terms) {
+      const occurrences = countOccurrencesLocal(slice, term);
+      if (occurrences > 0) {
+        distinct += 1;
+        total += occurrences;
+      }
+    }
+    if (phrase && slice.includes(phrase)) {
+      total += 2;
+    }
+    if (distinct > best.distinct || (distinct === best.distinct && total > best.total)) {
+      best = { start, distinct, total };
+    }
+  }
+  return best;
+}
+
+function makeSnippet(text: string, terms: string[], phrase: string | null): string {
+  if (!text) return '';
+  if (text.length <= MAX_SNIPPET_CHARS) {
+    return text.replace(/\s+/g, ' ').trim();
+  }
+  const { start } = pickBestSnippetWindow(text, terms, phrase, MAX_SNIPPET_CHARS);
+  const end = Math.min(text.length, start + MAX_SNIPPET_CHARS);
+  const snippet = text.slice(start, end).replace(/\s+/g, ' ').trim();
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+  return `${prefix}${snippet}${suffix}`;
+}
+
+function countOccurrencesLocal(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let index = 0;
+  while (index < haystack.length) {
+    const matchIndex = haystack.indexOf(needle, index);
+    if (matchIndex === -1) break;
+    count += 1;
+    index = matchIndex + needle.length;
+  }
+  return count;
+}
+
+function normalizePhrase(query: string): string | null {
+  const collapsed = query.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!collapsed) return null;
+  // Skip single-token and overly-long queries (>80 chars is almost never a
+  // literal phrase match candidate; it becomes a noisy boost).
+  if (!collapsed.includes(' ')) return null;
+  if (collapsed.length > 80) return null;
+  return collapsed;
+}
+
+function confidenceTier(score: number): 'high' | 'medium' | 'low' {
+  if (score >= 12) return 'high';
+  if (score >= 6) return 'medium';
+  return 'low';
 }
 
 function countOccurrences(haystack: string, needle: string): number {

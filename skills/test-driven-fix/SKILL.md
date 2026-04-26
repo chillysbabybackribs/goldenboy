@@ -1,3 +1,16 @@
+---
+name: test-driven-fix
+description: Use when a failing test, a regression, or any change needs verification by running specific tests. The test output is the source of truth.
+allowed-tools:
+  - terminal.exec
+  - terminal.test_repo
+  - filesystem.read_file_chunk
+  - filesystem.search_file_cache
+  - filesystem.patch
+  - filesystem.read
+references: []
+---
+
 # Test-Driven Fix
 
 Use this skill when a task involves a failing test, a regression, or any change that should be verified by running specific tests.
@@ -17,6 +30,7 @@ Use this skill when a task involves a failing test, a regression, or any change 
 
 ## Rules
 
+- This skill governs regression-fix verification procedure only. It does not decide whether the overall task should be single-pass or staged.
 - The test output is the source of truth. Do not reason about what the code "should" do if the test says otherwise.
 - If a test cannot pass without changing the test, explain why before touching the test.
 - Never silence a test failure by skipping or commenting it out.

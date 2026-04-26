@@ -101,7 +101,6 @@ export class TerminalService {
       cols: c,
       rows: r,
       persistent: false,
-      tmuxSession: null,
       restored: false,
     };
 
@@ -317,7 +316,6 @@ export class TerminalService {
 
   persistNow(): void {
     saveTerminalData({
-      tmuxSession: null,
       lastCwd: this.session?.cwd || null,
       shell: this.session?.shell || resolveShell(),
       persistent: false,

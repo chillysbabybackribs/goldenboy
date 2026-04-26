@@ -31,7 +31,10 @@ export type BrowserActionKind =
   | 'browser.return-to-primary-surface'
   | 'browser.click-ranked-action'
   | 'browser.wait-for-overlay-state'
-  | 'browser.open-search-results-tabs';
+  | 'browser.open-search-results-tabs'
+  | 'browser.apply-visual-mask'
+  | 'browser.clear-visual-masks'
+  | 'browser.list-visual-masks';
 
 export type TerminalActionKind =
   | 'terminal.execute'
@@ -62,6 +65,9 @@ export type BrowserSemanticTargetPayload = { tabId?: string };
 export type BrowserClickRankedActionPayload = { tabId?: string; index?: number; actionId?: string; preferDismiss?: boolean };
 export type BrowserWaitForOverlayPayload = { tabId?: string; state: 'open' | 'closed'; timeoutMs?: number };
 export type BrowserOpenSearchResultsTabsPayload = { tabId?: string; indices?: number[]; limit?: number; activateFirst?: boolean };
+export type BrowserApplyVisualMaskPayload = { selector: string; tabId?: string; blurPx?: number };
+export type BrowserClearVisualMasksPayload = { tabId?: string; maskId?: string; selector?: string; all?: boolean };
+export type BrowserListVisualMasksPayload = { tabId?: string };
 
 export type TerminalExecutePayload = { command: string };
 export type TerminalWritePayload = { input: string };
@@ -85,6 +91,9 @@ export type SurfaceActionPayloadMap = {
   'browser.click-ranked-action': BrowserClickRankedActionPayload;
   'browser.wait-for-overlay-state': BrowserWaitForOverlayPayload;
   'browser.open-search-results-tabs': BrowserOpenSearchResultsTabsPayload;
+  'browser.apply-visual-mask': BrowserApplyVisualMaskPayload;
+  'browser.clear-visual-masks': BrowserClearVisualMasksPayload;
+  'browser.list-visual-masks': BrowserListVisualMasksPayload;
   'terminal.execute': TerminalExecutePayload;
   'terminal.write': TerminalWritePayload;
   'terminal.restart': TerminalEmptyPayload;
@@ -180,6 +189,18 @@ export function summarizePayload(kind: SurfaceActionKind, payload: Record<string
       if (typeof p.limit === 'number') return `Open top ${p.limit} search results`;
       return 'Open search results in tabs';
     }
+    case 'browser.apply-visual-mask': {
+      const p = payload as BrowserApplyVisualMaskPayload;
+      return `Apply visual mask: ${p.selector}`;
+    }
+    case 'browser.clear-visual-masks': {
+      const p = payload as BrowserClearVisualMasksPayload;
+      if (p.maskId) return `Clear visual mask ${p.maskId}`;
+      if (p.selector) return `Clear visual masks for ${p.selector}`;
+      return 'Clear visual masks';
+    }
+    case 'browser.list-visual-masks':
+      return 'List visual masks';
     case 'terminal.execute': return `Execute: ${(payload as TerminalExecutePayload).command}`;
     case 'terminal.write': return `Write: ${(payload as TerminalWritePayload).input}`;
     case 'terminal.restart': return 'Restart terminal';
@@ -196,6 +217,7 @@ export const BROWSER_ACTION_KINDS: BrowserActionKind[] = [
   'browser.dismiss-foreground-ui', 'browser.return-to-primary-surface',
   'browser.click-ranked-action', 'browser.wait-for-overlay-state',
   'browser.open-search-results-tabs',
+  'browser.apply-visual-mask', 'browser.clear-visual-masks', 'browser.list-visual-masks',
 ];
 
 export const TERMINAL_ACTION_KINDS: TerminalActionKind[] = [

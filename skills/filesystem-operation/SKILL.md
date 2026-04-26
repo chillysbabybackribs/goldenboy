@@ -1,13 +1,26 @@
+---
+name: filesystem-operation
+description: Use when reading, searching, or browsing files is required (including plan-only turns where editing is not allowed). Prefer cache-first reads before whole-file reads.
+allowed-tools:
+  - filesystem.list
+  - filesystem.index_workspace
+  - filesystem.search_file_cache
+  - filesystem.read_file_chunk
+  - filesystem.cache_inventory
+  - filesystem.search
+  - filesystem.read
+  - filesystem.patch
+  - filesystem.write
+references:
+  - src/main/agent/tools/filesystemTools.ts
+  - src/main/fileKnowledge/
+  - src/main/context/diskCache.ts
+  - src/shared/types/ipc.ts
+---
+
 # Filesystem Operation
 
 Use this skill when a task requires reading, searching, creating, or editing files.
-
-## Relevant Files
-
-- `src/main/agent/tools/filesystemTools.ts`
-- `src/main/fileKnowledge/`
-- `src/main/context/diskCache.ts`
-- `src/shared/types/ipc.ts`
 
 ## Workflow
 
@@ -19,15 +32,19 @@ Use this skill when a task requires reading, searching, creating, or editing fil
 6. Keep edits scoped to the requested task.
 7. Report changed paths and verification results.
 
+## Rules
+
+- This skill governs filesystem procedure only. It does not grant permission to edit files on plan-only turns.
+- Prefer cached/indexed reads before full-file reads.
+- Use write tools only when the runtime scope already permits editing.
+
 ## Preferred Tools
 
 - `filesystem.list`
 - `filesystem.index_workspace`
-- `filesystem.answer_from_cache`
 - `filesystem.search_file_cache`
 - `filesystem.read_file_chunk`
-- `filesystem.list_cached_files`
-- `filesystem.file_cache_stats`
+- `filesystem.cache_inventory`
 - `filesystem.search`
 - `filesystem.read`
 - `filesystem.patch`

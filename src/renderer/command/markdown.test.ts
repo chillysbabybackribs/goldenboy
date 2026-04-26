@@ -141,16 +141,9 @@ describe('renderMarkdown', () => {
   });
 
   describe('inline links', () => {
-    it('renders absolute file-path links as a retracted chip', () => {
+    it('renders absolute file-path links as an inline chip', () => {
       const output = renderMarkdown('See [AgentModelService.invoke()](/home/dp/Documents/goldenboy/src/main/agent/AgentModelService.ts:384) for details.');
-      // The whole chip is a single `<details>` so it flows inline with the
-      // surrounding prose — clicking the label reveals the path pill.
-      expect(output).toContain('<details class="chat-file-ref">');
-      expect(output).toContain('<summary class="chat-file-ref-text" title="/home/dp/Documents/goldenboy/src/main/agent/AgentModelService.ts:384">AgentModelService.invoke()</summary>');
-      expect(output).toContain('<code class="chat-file-ref-path">/home/dp/Documents/goldenboy/src/main/agent/AgentModelService.ts:384</code>');
-      // The raw path is NOT spliced inline next to the label as prose — it
-      // only appears inside the collapsed details body so long paths don't
-      // clutter the chat surface.
+      expect(output).toContain('<span class="chat-file-ref" title="/home/dp/Documents/goldenboy/src/main/agent/AgentModelService.ts:384" data-file-path="/home/dp/Documents/goldenboy/src/main/agent/AgentModelService.ts:384">AgentModelService.invoke()</span>');
       expect(output).not.toContain('See /home/dp/Documents');
     });
 
@@ -168,7 +161,7 @@ describe('renderMarkdown', () => {
 
     it('processes inline formatting inside the link label', () => {
       const output = renderMarkdown('[`foo`](/abs/path.ts)');
-      expect(output).toContain('<summary class="chat-file-ref-text" title="/abs/path.ts"><code>foo</code></summary>');
+      expect(output).toContain('<span class="chat-file-ref" title="/abs/path.ts" data-file-path="/abs/path.ts"><code>foo</code></span>');
     });
 
     it('escapes HTML inside the label and URL', () => {

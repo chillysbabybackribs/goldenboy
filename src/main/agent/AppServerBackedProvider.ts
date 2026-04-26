@@ -13,16 +13,13 @@ type AppServerBackedProviderOptions = {
   modelId: string;
   process?: AppServerProcess;
   wsPort?: number;
-  /** Already-connected provider — skips per-task WebSocket connect when provided. */
-  provider?: AppServerProvider;
 };
 
 export class AppServerBackedProvider implements AgentProvider {
   readonly providerId: ProviderId;
   readonly supportsAppToolExecutor = true;
 
-  private delegate: AppServerProvider | null;
-  private readonly sharedDelegate: boolean;
+  private delegate: AppServerProvider | null = null;
   private connectPromise: Promise<AppServerProvider> | null = null;
   private pendingAbort = false;
   private ownedBridge: V2ToolBridge | null = null;
@@ -31,8 +28,10 @@ export class AppServerBackedProvider implements AgentProvider {
 
   constructor(private readonly options: AppServerBackedProviderOptions) {
     this.providerId = options.providerId;
-    this.delegate = options.provider ?? null;
-    this.sharedDelegate = options.provider !== undefined;
+  }
+
+  preconnect(): Promise<void> {
+    return this.getDelegate().then(() => undefined);
   }
 
   async invoke(request: AgentProviderRequest): Promise<AgentProviderResult> {
@@ -47,11 +46,9 @@ export class AppServerBackedProvider implements AgentProvider {
 
   async dispose(): Promise<void> {
     this.pendingAbort = true;
-    if (!this.sharedDelegate) {
-      this.delegate?.abort();
-      this.delegate = null;
-      this.connectPromise = null;
-    }
+    this.delegate?.abort();
+    this.delegate = null;
+    this.connectPromise = null;
     this.ownedProcess?.stop();
     if (this.ownedBridge) {
       await this.ownedBridge.stop();

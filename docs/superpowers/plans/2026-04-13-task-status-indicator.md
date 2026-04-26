@@ -1,5 +1,7 @@
 # Task Status Indicator Implementation Plan
 
+> Historical note: this dated UI plan is preserved as implementation history. Use the current renderer code as the source of truth for shipped behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Show a text-only typewriter status bar above the input box during agent runs, mapping raw progress events to short friendly phrases that type in, hold, then snap off.
@@ -101,7 +103,6 @@ const PHRASE_MAP: Array<{ pattern: RegExp; phrase: string }> = [
   { pattern: /filesystem\.index_workspace/i,            phrase: 'indexing workspace' },
   { pattern: /filesystem\.answer_from_cache/i,          phrase: 'checking file cache' },
   { pattern: /browser\.navigate/i,                      phrase: 'navigating' },
-  { pattern: /browser\.search_page_cache|browser\.read_cached_chunk/i, phrase: 'reading page cache' },
   { pattern: /browser\.research_search|browser\.search_web/i,          phrase: 'searching the web' },
   { pattern: /browser\.extract_page/i,                  phrase: 'reading page' },
   { pattern: /terminal\.exec/i,                         phrase: 'running command' },

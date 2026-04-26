@@ -5,11 +5,17 @@ import * as os from 'os';
 import * as http from 'http';
 import { EventEmitter } from 'events';
 
-const CODEX_CONFIG_DIR = path.join(os.homedir(), '.codex');
-const CODEX_CONFIG_PATH = path.join(CODEX_CONFIG_DIR, 'config.toml');
 const READYZ_TIMEOUT_MS = 30_000;
 const READYZ_POLL_INTERVAL_MS = 200;
 const MAX_BACKOFF_MS = 30_000;
+
+export function codexConfigDirForHome(homeDir: string): string {
+  return path.join(homeDir, '.codex');
+}
+
+export function codexConfigPathForHome(homeDir: string): string {
+  return path.join(codexConfigDirForHome(homeDir), 'config.toml');
+}
 
 export function parseListeningPort(line: string): number | null {
   const match = /listening on: ws:\/\/127\.0\.0\.1:(\d+)/.exec(line);
@@ -63,6 +69,50 @@ export function mergeTomlMcpEntry(
   return cleaned ? `${cleaned}\n\n${newBlock}\n` : `${newBlock}\n`;
 }
 
+function stripManagedSections(source: string): string {
+  const lines = source.split('\n');
+  const kept: string[] = [];
+  let skip = false;
+
+  for (const line of lines) {
+    const sectionMatch = /^\[(.+)\]\s*$/.exec(line.trim());
+    if (sectionMatch) {
+      const sectionName = sectionMatch[1];
+      skip = sectionName === 'mcp_servers.v2-tools'
+        || sectionName.startsWith('mcp_servers.v2-tools.')
+        || sectionName === 'mcp_servers.local-agent'
+        || sectionName.startsWith('mcp_servers.local-agent.')
+        || /v2-mcp-shim/.test(sectionName);
+    }
+
+    if (!skip) kept.push(line);
+  }
+
+  return kept.join('\n').trimEnd();
+}
+
+const CODEX_BASELINE_ALLOWLIST = new Set([
+  'auth.json',
+  'config.json',
+  'installation_id',
+  'version.json',
+]);
+
+function syncCodexBaselinePrereqs(realHomeDir: string, isolatedHomeDir: string): void {
+  const realCodexDir = codexConfigDirForHome(realHomeDir);
+  const isolatedCodexDir = codexConfigDirForHome(isolatedHomeDir);
+  fs.mkdirSync(isolatedCodexDir, { recursive: true });
+  if (!fs.existsSync(realCodexDir)) return;
+
+  for (const entry of fs.readdirSync(realCodexDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    if (!CODEX_BASELINE_ALLOWLIST.has(entry.name)) continue;
+    const source = path.join(realCodexDir, entry.name);
+    const target = path.join(isolatedCodexDir, entry.name);
+    fs.copyFileSync(source, target);
+  }
+}
+
 type AppServerState =
   | { status: 'stopped' }
   | { status: 'starting' }
@@ -78,13 +128,23 @@ export class AppServerProcess extends EventEmitter {
   private readyPromise: Promise<{ wsPort: number }> | null = null;
   private readyResolve: ((v: { wsPort: number }) => void) | null = null;
   private readyReject: ((e: Error) => void) | null = null;
+  private readonly realHomeDir: string;
+  private readonly codexHomeDir: string;
+  private readonly codexConfigDir: string;
+  private readonly codexConfigPath: string;
 
   constructor(
     private readonly bridgePort: number,
     private readonly shimPath: string,
     private readonly contextPath: string,
+    options?: { homeDir?: string; isolatedHomeDir?: string },
   ) {
     super();
+    this.realHomeDir = options?.homeDir ?? os.homedir();
+    this.codexHomeDir = options?.isolatedHomeDir
+      ?? fs.mkdtempSync(path.join(os.tmpdir(), 'goldenboy-codex-home-'));
+    this.codexConfigDir = codexConfigDirForHome(this.codexHomeDir);
+    this.codexConfigPath = codexConfigPathForHome(this.codexHomeDir);
   }
 
   isReady(): boolean {
@@ -119,29 +179,18 @@ export class AppServerProcess extends EventEmitter {
     this.child = null;
     this.state = { status: 'stopped' };
     this.clearConfig();
+    try {
+      fs.rmSync(this.codexHomeDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup.
+    }
   }
 
   private clearConfig(): void {
     try {
-      if (!fs.existsSync(CODEX_CONFIG_PATH)) return;
-      const existing = fs.readFileSync(CODEX_CONFIG_PATH, 'utf-8');
-      // Re-use the same strip logic from mergeTomlMcpEntry but write without appending a new block.
-      const lines = existing.split('\n');
-      const kept: string[] = [];
-      let skip = false;
-      for (const line of lines) {
-        const sectionMatch = /^\[(.+)\]\s*$/.exec(line.trim());
-        if (sectionMatch) {
-          const sectionName = sectionMatch[1];
-          skip = sectionName === 'mcp_servers.v2-tools'
-            || sectionName.startsWith('mcp_servers.v2-tools.')
-            || sectionName === 'mcp_servers.local-agent'
-            || sectionName.startsWith('mcp_servers.local-agent.')
-            || /v2-mcp-shim/.test(sectionName);
-        }
-        if (!skip) kept.push(line);
-      }
-      fs.writeFileSync(CODEX_CONFIG_PATH, kept.join('\n').trimEnd() + '\n', 'utf-8');
+      if (!fs.existsSync(this.codexConfigPath)) return;
+      const existing = fs.readFileSync(this.codexConfigPath, 'utf-8');
+      fs.writeFileSync(this.codexConfigPath, `${stripManagedSections(existing)}\n`, 'utf-8');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`AppServerProcess: failed to clear config.toml: ${message}`);
@@ -150,14 +199,15 @@ export class AppServerProcess extends EventEmitter {
 
   private writeConfig(): void {
     try {
-      if (!fs.existsSync(CODEX_CONFIG_DIR)) {
-        fs.mkdirSync(CODEX_CONFIG_DIR, { recursive: true });
+      syncCodexBaselinePrereqs(this.realHomeDir, this.codexHomeDir);
+      if (!fs.existsSync(this.codexConfigDir)) {
+        fs.mkdirSync(this.codexConfigDir, { recursive: true });
       }
-      const existing = fs.existsSync(CODEX_CONFIG_PATH)
-        ? fs.readFileSync(CODEX_CONFIG_PATH, 'utf-8')
+      const existing = fs.existsSync(this.codexConfigPath)
+        ? fs.readFileSync(this.codexConfigPath, 'utf-8')
         : '';
       const merged = mergeTomlMcpEntry(existing, this.shimPath, this.bridgePort, this.contextPath);
-      fs.writeFileSync(CODEX_CONFIG_PATH, merged, 'utf-8');
+      fs.writeFileSync(this.codexConfigPath, merged, 'utf-8');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`AppServerProcess: failed to write config.toml: ${message}`);
@@ -182,8 +232,14 @@ export class AppServerProcess extends EventEmitter {
 
   private spawnProcess(): Promise<number> {
     return new Promise((resolve, reject) => {
+      const env = {
+        ...process.env,
+        HOME: this.codexHomeDir,
+        USERPROFILE: this.codexHomeDir,
+      };
       const child = spawn('codex', ['app-server', '--listen', 'ws://127.0.0.1:0'], {
         stdio: ['ignore', 'pipe', 'pipe'],
+        env,
       });
       this.child = child;
 

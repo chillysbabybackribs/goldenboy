@@ -53,11 +53,11 @@ These are deterministic regression pages we own and should keep green in CI:
 
 | Fixture | Purpose | Primary Coverage |
 |---|---|---|
-| [intent-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/intent-lab.html) | Basic semantic workflow | login, upload, checkout, extract |
-| [checkout-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/checkout-lab.html) | E-commerce flow | login, add to cart, cart, checkout info, finish order |
-| [drag-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/drag-lab.html) | Drag/drop | native drag support |
-| [hover-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/hover-lab.html) | Hover reveal | native hover support |
-| [dialog-lab.html](/home/dp/Desktop/v2workspace/demo-app/public/dialog-lab.html) | Dialog semantics | accept/dismiss/prompt intent flows |
+| [intent-lab.html](/home/dp/Documents/goldenboy/src/main/browser/__fixtures__/web-intent/intent-lab.html) | Basic semantic workflow | login, upload, checkout, extract |
+| [checkout-lab.html](/home/dp/Documents/goldenboy/src/main/browser/__fixtures__/web-intent/checkout-lab.html) | E-commerce flow | login, add to cart, cart, checkout info, finish order |
+| [drag-lab.html](/home/dp/Documents/goldenboy/src/main/browser/__fixtures__/web-intent/drag-lab.html) | Drag/drop | native drag support |
+| [hover-lab.html](/home/dp/Documents/goldenboy/src/main/browser/__fixtures__/web-intent/hover-lab.html) | Hover reveal | native hover support |
+| [dialog-lab.html](/home/dp/Documents/goldenboy/src/main/browser/__fixtures__/web-intent/dialog-lab.html) | Dialog semantics | accept/dismiss/prompt intent flows |
 
 Regression coverage lives in [WebIntentVM.test.ts](/home/dp/Desktop/v2workspace/src/main/browser/WebIntentVM.test.ts).
 

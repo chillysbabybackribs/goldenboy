@@ -1,8 +1,6 @@
 import { escapeHtml, formatDate, formatTimeShort, formatNullableTime } from '../shared/utils.js';
 export {};
 const workspaceAPI = (window as any).workspaceAPI as WorkspaceAPI | null;
-declare const Terminal: any;
-declare const FitAddon: any;
 
 // ─── DOM ────────────────────────────────────────────────────────────────────
 const browserPane = document.getElementById('browserPane')!;
@@ -12,6 +10,7 @@ const tabList = document.getElementById('tabList')!;
 const tabScrollLeft = document.getElementById('tabScrollLeft') as HTMLButtonElement;
 const tabScrollRight = document.getElementById('tabScrollRight') as HTMLButtonElement;
 const btnTabOverflow = document.getElementById('btnTabOverflow')!;
+const btnOpenHeatmap = document.getElementById('btnOpenHeatmap') as HTMLButtonElement;
 const tabOverflowDropdown = document.getElementById('tabOverflowDropdown')!;
 const btnNewTab = document.getElementById('btnNewTab')!;
 const tabContextMenu = document.getElementById('tabContextMenu')!;
@@ -36,29 +35,13 @@ const btnFindClose = document.getElementById('btnFindClose') as HTMLButtonElemen
 const dropdownPanel = document.getElementById('dropdownPanel')!;
 const dropdownContent = document.getElementById('dropdownContent')!;
 const browserSurfaceArea = document.getElementById('browserSurfaceArea')!;
-const terminalPane = document.getElementById('terminalPane')!;
-const splitter = document.getElementById('splitter')!;
-const terminalStatus = document.getElementById('terminalStatus')!;
-const terminalMeta = document.getElementById('terminalMeta')!;
-const termCollapseBtn = document.getElementById('termCollapseBtn') as HTMLButtonElement;
-const termRestartBtn = document.getElementById('termRestartBtn') as HTMLButtonElement;
-const terminalContainer = document.getElementById('terminalContainer')!;
 const connectionDot = document.getElementById('connectionDot')!;
 const connectionLabel = document.getElementById('connectionLabel')!;
-const termSizeLabel = document.getElementById('termSizeLabel')!;
-const splitLabel = document.getElementById('splitLabel')!;
+const browserLocationLabel = document.getElementById('browserLocationLabel')!;
+const HEATMAP_INTERNAL_URL = 'goldenboy://heatmap';
 
 // ─── State ──────────────────────────────────────────────────────────────────
-let term: any = null;
-(window as any).__term = () => term;
-let fitAddon: any = null;
-let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let boundsTimer: ReturnType<typeof setTimeout> | null = null;
-let currentRatio = 0.5;
-let splitMeasureAttempts = 0;
-const DEFAULT_TERMINAL_COLLAPSED = true;
-let terminalCollapsed = DEFAULT_TERMINAL_COLLAPSED;
-let isDragging = false;
 let activePanel: string | null = null;
 let lastBrowserState: BrowserState | null = null;
 let lastAuthDiagnostics: BrowserAuthDiagnostics | null = null;
@@ -73,6 +56,36 @@ let lastDiagnosticsData: {
   networkEvents: [],
   capturedAt: null,
 };
+let recorderPanelRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let recorderState: {
+  sources: ScreenRecorderSource[];
+  selectedSourceIds: Set<string>;
+  isLoading: boolean;
+  isRecording: boolean;
+  startedAt: number | null;
+  isSaving: boolean;
+  lastSaved: ScreenRecorderSaveResult | null;
+  error: string | null;
+} = {
+  sources: [],
+  selectedSourceIds: new Set<string>(),
+  isLoading: false,
+  isRecording: false,
+  startedAt: null,
+  isSaving: false,
+  lastSaved: null,
+  error: null,
+};
+
+type ActiveRecorderTrack = {
+  source: ScreenRecorderSource;
+  stream: MediaStream;
+  recorder: MediaRecorder;
+  chunks: Blob[];
+  stopped: Promise<{ fileName: string; blob: Blob }>;
+};
+
+let activeRecorderTracks: ActiveRecorderTrack[] = [];
 
 // CSP blocks inline `onerror` handlers, so favicon failures are handled here.
 document.addEventListener('error', (event: Event) => {
@@ -86,6 +99,261 @@ function formatNetworkDuration(ms: unknown): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return 'Unknown';
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
+}
+
+function formatRecorderDuration(startedAt: number | null): string {
+  if (!startedAt) return '00:00';
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function sanitizeRecorderSegment(input: string): string {
+  return input.replace(/[^a-z0-9._-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'display';
+}
+
+function getRecorderMimeType(): string {
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  for (const candidate of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+  return 'video/webm';
+}
+
+function updateRecorderPanelRefreshTimer(): void {
+  if (recorderPanelRefreshTimer) {
+    clearInterval(recorderPanelRefreshTimer);
+    recorderPanelRefreshTimer = null;
+  }
+  if (activePanel === 'recorder' && recorderState.isRecording) {
+    recorderPanelRefreshTimer = setInterval(() => {
+      if (activePanel === 'recorder') renderPanel('recorder');
+    }, 1000);
+  }
+}
+
+async function loadRecorderSources(force = false): Promise<void> {
+  if (!workspaceAPI) return;
+  if (recorderState.isLoading) return;
+  if (!force && recorderState.sources.length > 0) return;
+  recorderState.isLoading = true;
+  recorderState.error = null;
+  if (activePanel === 'recorder') renderPanel('recorder');
+  try {
+    const sources = await workspaceAPI.screenRecorder.listSources();
+    recorderState.sources = sources;
+    const currentSelections = new Set(recorderState.selectedSourceIds);
+    const validSelections = new Set(
+      sources
+        .map((source) => source.id)
+        .filter((sourceId) => currentSelections.has(sourceId)),
+    );
+    recorderState.selectedSourceIds = validSelections.size > 0
+      ? validSelections
+      : new Set(sources.map((source) => source.id));
+  } catch (error) {
+    recorderState.error = error instanceof Error ? error.message : 'Unable to load displays.';
+  } finally {
+    recorderState.isLoading = false;
+    if (activePanel === 'recorder') renderPanel('recorder');
+  }
+}
+
+function buildRecorderFileName(source: ScreenRecorderSource, startedAt: number): string {
+  const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, '-');
+  const label = sanitizeRecorderSegment(source.displayId ? `${source.name}-display-${source.displayId}` : source.name);
+  return `${label}-${stamp}.webm`;
+}
+
+async function createRecorderTrack(source: ScreenRecorderSource, mimeType: string, startedAt: number): Promise<ActiveRecorderTrack> {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: source.id,
+      },
+    } as MediaTrackConstraints,
+  } as MediaStreamConstraints);
+
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const stopped = new Promise<{ fileName: string; blob: Blob }>((resolve, reject) => {
+    recorder.onstop = () => {
+      resolve({
+        fileName: buildRecorderFileName(source, startedAt),
+        blob: new Blob(chunks, { type: mimeType || 'video/webm' }),
+      });
+    };
+    recorder.onerror = () => {
+      reject(new Error(`Recording failed for ${source.name}.`));
+    };
+  });
+  recorder.ondataavailable = (event: BlobEvent) => {
+    if (event.data && event.data.size > 0) {
+      chunks.push(event.data);
+    }
+  };
+  recorder.start(1000);
+
+  return {
+    source,
+    stream,
+    recorder,
+    chunks,
+    stopped,
+  };
+}
+
+async function startRecorderSession(): Promise<void> {
+  if (!workspaceAPI || recorderState.isRecording || recorderState.isSaving) return;
+  await loadRecorderSources();
+  const selectedSources = recorderState.sources.filter((source) => recorderState.selectedSourceIds.has(source.id));
+  if (selectedSources.length === 0) {
+    recorderState.error = 'Select at least one monitor before recording.';
+    if (activePanel === 'recorder') renderPanel('recorder');
+    return;
+  }
+
+  const startedAt = Date.now();
+  const mimeType = getRecorderMimeType();
+  recorderState.error = null;
+  recorderState.lastSaved = null;
+
+  const startedTracks: ActiveRecorderTrack[] = [];
+  try {
+    for (const source of selectedSources) {
+      const track = await createRecorderTrack(source, mimeType, startedAt);
+      startedTracks.push(track);
+    }
+    activeRecorderTracks = startedTracks;
+    recorderState.isRecording = true;
+    recorderState.startedAt = startedAt;
+    updateRecorderPanelRefreshTimer();
+    if (activePanel === 'recorder') renderPanel('recorder');
+  } catch (error) {
+    for (const track of startedTracks) {
+      track.stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+    }
+    activeRecorderTracks = [];
+    recorderState.isRecording = false;
+    recorderState.startedAt = null;
+    recorderState.error = error instanceof Error ? error.message : 'Unable to start recording.';
+    updateRecorderPanelRefreshTimer();
+    if (activePanel === 'recorder') renderPanel('recorder');
+  }
+}
+
+async function stopRecorderSession(): Promise<void> {
+  if (!workspaceAPI || !recorderState.isRecording || recorderState.isSaving || activeRecorderTracks.length === 0) return;
+  recorderState.isSaving = true;
+  recorderState.error = null;
+  if (activePanel === 'recorder') renderPanel('recorder');
+
+  try {
+    const pending = [...activeRecorderTracks];
+    for (const track of pending) {
+      if (track.recorder.state !== 'inactive') {
+        track.recorder.stop();
+      }
+    }
+    const finished = await Promise.all(pending.map((track) => track.stopped));
+    for (const track of pending) {
+      track.stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+    }
+
+    const files = await Promise.all(finished.map(async (item) => {
+      const bytes = new Uint8Array(await item.blob.arrayBuffer());
+      return {
+        fileName: item.fileName,
+        bytes,
+      };
+    }));
+    const result = await workspaceAPI.screenRecorder.saveFiles(files);
+    recorderState.lastSaved = result;
+    recorderState.isRecording = false;
+    recorderState.startedAt = null;
+    recorderState.error = null;
+    activeRecorderTracks = [];
+  } catch (error) {
+    recorderState.error = error instanceof Error ? error.message : 'Unable to stop and save recordings.';
+  } finally {
+    recorderState.isSaving = false;
+    recorderState.isRecording = false;
+    recorderState.startedAt = null;
+    activeRecorderTracks = [];
+    updateRecorderPanelRefreshTimer();
+    if (activePanel === 'recorder') renderPanel('recorder');
+  }
+}
+
+function renderRecorderPanel(): void {
+  const hasSources = recorderState.sources.length > 0;
+  const selectionCount = recorderState.selectedSourceIds.size;
+  const savedMarkup = recorderState.lastSaved
+    ? `
+      <div class="recorder-block">
+        <div class="recorder-block-title">Last Capture</div>
+        <div class="recorder-summary">${escapeHtml(recorderState.lastSaved.directory)}</div>
+        <div class="recorder-saved-list">
+          ${recorderState.lastSaved.files.map((file) => `
+            <div class="recorder-saved-item">
+              <span class="recorder-saved-name">${escapeHtml(file.fileName)}</span>
+              <span class="recorder-saved-meta">${Math.max(1, Math.round(file.byteLength / 1048576))} MB</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `
+    : '';
+
+  dropdownContent.innerHTML = `
+    <div class="recorder-block">
+      <div class="recorder-header">
+        <div>
+          <div class="recorder-block-title">Multi-Monitor Recorder</div>
+          <div class="recorder-summary">${recorderState.isRecording ? `Recording ${selectionCount} display${selectionCount === 1 ? '' : 's'} · ${formatRecorderDuration(recorderState.startedAt)}` : 'Capture selected monitors into separate WebM files.'}</div>
+        </div>
+        <div class="recorder-actions">
+          <button class="ext-load-btn" id="btnRecorderRefreshSources" ${recorderState.isLoading || recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>Refresh</button>
+          <button class="ext-load-btn" id="btnRecorderStart" ${!hasSources || recorderState.isLoading || recorderState.isRecording || recorderState.isSaving || selectionCount === 0 ? 'disabled' : ''}>Start</button>
+          <button class="ext-load-btn" id="btnRecorderStop" ${!recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>Stop</button>
+        </div>
+      </div>
+      <div class="recorder-chip-row">
+        <button class="settings-toggle-button" id="btnRecorderSelectAll" ${!hasSources || recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>All</button>
+        <button class="settings-toggle-button" id="btnRecorderClearAll" ${!hasSources || recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>None</button>
+        <span class="recorder-pill ${recorderState.isRecording ? 'live' : ''}">${recorderState.isSaving ? 'Saving…' : recorderState.isRecording ? 'Live' : 'Idle'}</span>
+      </div>
+      ${recorderState.error ? `<div class="recorder-error">${escapeHtml(recorderState.error)}</div>` : ''}
+      ${recorderState.isLoading ? '<div class="panel-empty">Loading displays...</div>' : ''}
+      ${!recorderState.isLoading && !hasSources ? '<div class="panel-empty">No monitors available.</div>' : ''}
+      <div class="recorder-grid">
+        ${recorderState.sources.map((source) => `
+          <label class="recorder-source-card ${recorderState.selectedSourceIds.has(source.id) ? 'selected' : ''}">
+            <input class="recorder-source-checkbox" type="checkbox" data-recorder-source-id="${escapeHtml(source.id)}" ${recorderState.selectedSourceIds.has(source.id) ? 'checked' : ''} ${recorderState.isRecording || recorderState.isSaving ? 'disabled' : ''}>
+            <div class="recorder-source-preview">${source.thumbnailDataUrl ? `<img src="${source.thumbnailDataUrl}" alt="${escapeHtml(source.name)}">` : '<div class="recorder-source-placeholder">No preview</div>'}</div>
+            <div class="recorder-source-meta">
+              <span class="recorder-source-title">${escapeHtml(source.name)}</span>
+              <span class="recorder-source-subtitle">${escapeHtml(source.displayId ? `Display ${source.displayId}` : 'Desktop source')}</span>
+            </div>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+    ${savedMarkup}
+  `;
 }
 
 
@@ -145,17 +413,12 @@ function setExecutionBrowserAttached(attached: boolean): void {
   browserAttachedToExecution = attached;
   executionShell.classList.toggle('browser-detached', !attached);
   (browserPane as HTMLElement).hidden = !attached;
-  splitter.hidden = !attached;
   btnAttachBrowserHere.disabled = false;
   btnAttachBrowserHere.textContent = attached ? 'Move to Command' : 'Attach Browser';
   btnAttachBrowserHere.title = attached ? 'Move browser to command window' : 'Move browser back to execution window';
-  if (attached) {
-    applySplitRatio(currentRatio);
-  } else {
-    terminalPane.style.width = '100%';
-    browserPane.style.width = '0px';
-    requestAnimationFrame(() => fitTerminal());
-  }
+  browserLocationLabel.textContent = attached ? 'Execution window' : 'Command window';
+  connectionDot.className = attached ? 'status-dot done' : 'status-dot idle';
+  connectionLabel.textContent = attached ? 'Browser attached' : 'Browser moved to command';
 }
 
 // ─── Tabs ───────────────────────────────────────────────────────────────────
@@ -312,6 +575,7 @@ tabList.addEventListener('contextmenu', (e: MouseEvent) => {
 });
 
 btnNewTab.addEventListener('click', () => workspaceAPI?.actions.submit({ target: 'browser', kind: 'browser.create-tab', payload: {} }));
+btnOpenHeatmap.addEventListener('click', () => openHeatmapTab());
 tabContextMenu.addEventListener('click', (e: Event) => {
   const target = e.target as HTMLElement;
   const action = target.getAttribute('data-context-action');
@@ -525,6 +789,7 @@ btnMenu.addEventListener('click', () => {
 
 function openPanel(panel: string): void {
   activePanel = panel;
+  updateRecorderPanelRefreshTimer();
   dropdownPanel.style.display = 'flex';
   // Update tab active state
   dropdownPanel.querySelectorAll('.dropdown-tab').forEach(t => {
@@ -540,6 +805,11 @@ function openPanel(panel: string): void {
     void refreshBrowserDiagnostics().then(() => {
       if (activePanel === 'diagnostics') renderPanel('diagnostics');
     });
+  } else if (panel === 'recorder') {
+    dropdownContent.innerHTML = '<div class="panel-empty">Loading recorder…</div>';
+    void loadRecorderSources().then(() => {
+      if (activePanel === 'recorder') renderPanel('recorder');
+    });
   } else {
     renderPanel(panel);
   }
@@ -548,8 +818,18 @@ function openPanel(panel: string): void {
 
 function closePanel(): void {
   activePanel = null;
+  updateRecorderPanelRefreshTimer();
   dropdownPanel.style.display = 'none';
   reportBrowserBounds();
+}
+
+function openHeatmapTab(): void {
+  workspaceAPI?.actions.submit({
+    target: 'browser',
+    kind: 'browser.create-tab',
+    payload: { url: HEATMAP_INTERNAL_URL },
+  });
+  closePanel();
 }
 
 dropdownPanel.querySelector('.dropdown-tabs')!.addEventListener('click', (e: Event) => {
@@ -594,6 +874,8 @@ function renderPanel(panel: string): void {
         <span class="item-url">${sizeStr}</span>
       </div>`;
     }).join('');
+  } else if (panel === 'recorder') {
+    renderRecorderPanel();
   } else if (panel === 'diagnostics') {
     try {
       const nav = bs.navigation;
@@ -698,6 +980,7 @@ function renderPanel(panel: string): void {
           <option value="bing" ${s.searchEngine === 'bing' ? 'selected' : ''}>Bing</option>
         </select></div>
         <div class="settings-row"><label>Default Zoom</label><span>${Math.round(s.defaultZoom * 100)}%</span></div>
+        <div class="settings-row settings-actions-row"><button class="ext-load-btn" id="btnOpenHeatmapTab">Open Heatmap</button></div>
       </div>
       <div class="settings-group">
         <div class="settings-label">Content</div>
@@ -764,6 +1047,33 @@ dropdownContent.addEventListener('click', (e: Event) => {
     return;
   }
 
+  if (target.id === 'btnRecorderRefreshSources') {
+    void loadRecorderSources(true);
+    return;
+  }
+
+  if (target.id === 'btnRecorderStart') {
+    void startRecorderSession();
+    return;
+  }
+
+  if (target.id === 'btnRecorderStop') {
+    void stopRecorderSession();
+    return;
+  }
+
+  if (target.id === 'btnRecorderSelectAll') {
+    recorderState.selectedSourceIds = new Set(recorderState.sources.map((source) => source.id));
+    if (activePanel === 'recorder') renderPanel('recorder');
+    return;
+  }
+
+  if (target.id === 'btnRecorderClearAll') {
+    recorderState.selectedSourceIds = new Set<string>();
+    if (activePanel === 'recorder') renderPanel('recorder');
+    return;
+  }
+
   // Settings toggles
   const settingKey = target.getAttribute('data-setting');
   if (settingKey && lastBrowserState) {
@@ -775,6 +1085,7 @@ dropdownContent.addEventListener('click', (e: Event) => {
   // Clear buttons
   if (target.id === 'btnClearHistory') { workspaceAPI?.browser.clearHistory(); return; }
   if (target.id === 'btnClearData') { workspaceAPI?.browser.clearData(); return; }
+  if (target.id === 'btnOpenHeatmapTab') { openHeatmapTab(); return; }
   if (target.id === 'btnRefreshDiagnostics') {
     void refreshBrowserDiagnostics().then(() => {
       if (activePanel === 'diagnostics') renderPanel('diagnostics');
@@ -828,6 +1139,16 @@ dropdownContent.addEventListener('change', (e: Event) => {
   }
   if (target.id === 'settingsContentMode') {
     workspaceAPI?.browser.updateSettings({ contentMode: (target as HTMLSelectElement).value as 'strict-clean' | 'compatibility' });
+  }
+
+  const recorderCheckbox = target.closest('[data-recorder-source-id]') as HTMLInputElement | null;
+  if (recorderCheckbox) {
+    const sourceId = recorderCheckbox.getAttribute('data-recorder-source-id') || '';
+    if (sourceId) {
+      if (recorderCheckbox.checked) recorderState.selectedSourceIds.add(sourceId);
+      else recorderState.selectedSourceIds.delete(sourceId);
+      if (activePanel === 'recorder') renderPanel('recorder');
+    }
   }
 });
 
@@ -887,146 +1208,10 @@ workspaceAPI?.browser.onNavUpdate((nav: BrowserNavigationState) => {
 
 workspaceAPI?.browser.onStateUpdate((state: BrowserState) => { updateBrowserState(state); });
 
-// ─── Split Management ──────────────────────────────────────────────────────
-function applySplitRatio(ratio: number): void {
-  if (!browserAttachedToExecution) return;
-  currentRatio = Math.max(0.15, Math.min(0.85, ratio));
-  const shell = browserPane.parentElement!;
-  const shellWidth = Math.max(
-    1,
-    Math.round(
-      shell.getBoundingClientRect().width || document.documentElement.clientWidth || window.innerWidth,
-    ),
-  );
-  if (!Number.isFinite(shellWidth) || shellWidth <= 1) {
-    splitMeasureAttempts += 1;
-    if (splitMeasureAttempts < 20) {
-      requestAnimationFrame(() => applySplitRatio(ratio));
-    }
-    return;
-  }
-  splitMeasureAttempts = 0;
-  if (terminalCollapsed) {
-    applyTerminalCollapsedLayout();
-    return;
-  }
-  const totalWidth = shellWidth - splitter.getBoundingClientRect().width;
-  const browserWidth = Math.round(totalWidth * currentRatio);
-  const terminalWidth = totalWidth - browserWidth;
-  browserPane.style.width = `${browserWidth}px`;
-  terminalPane.style.width = `${terminalWidth}px`;
-  splitLabel.textContent = `Split: ${Math.round(currentRatio * 100)}/${Math.round((1 - currentRatio) * 100)}`;
-  requestAnimationFrame(() => { scheduleFit(); reportBrowserBounds(); });
-}
-
-function applyTerminalCollapsedLayout(): void {
-  if (!browserAttachedToExecution) return;
-  const shell = browserPane.parentElement!;
-  const totalWidth = Math.max(
-    1,
-    Math.round(
-      shell.getBoundingClientRect().width || document.documentElement.clientWidth || window.innerWidth,
-    ),
-  );
-  if (!Number.isFinite(totalWidth) || totalWidth <= 1) {
-    splitMeasureAttempts += 1;
-    if (splitMeasureAttempts < 20) {
-      requestAnimationFrame(() => applyTerminalCollapsedLayout());
-    }
-    return;
-  }
-  splitMeasureAttempts = 0;
-  const terminalWidth = 42;
-  browserPane.style.width = `${Math.max(0, Math.round(totalWidth - terminalWidth))}px`;
-  terminalPane.style.width = `${terminalWidth}px`;
-  splitLabel.textContent = 'Terminal collapsed';
-  requestAnimationFrame(() => reportBrowserBounds());
-}
-
-function setTerminalCollapsed(collapsed: boolean): void {
-  terminalCollapsed = collapsed;
-  const shell = browserPane.parentElement!;
-  shell.classList.toggle('terminal-collapsed', collapsed);
-  terminalPane.classList.toggle('collapsed', collapsed);
-  termCollapseBtn.setAttribute('aria-expanded', String(!collapsed));
-  termCollapseBtn.setAttribute('aria-label', collapsed ? 'Expand terminal' : 'Collapse terminal');
-  termCollapseBtn.setAttribute('title', collapsed ? 'Expand terminal' : 'Collapse terminal');
-
-  if (collapsed) {
-    applyTerminalCollapsedLayout();
-    return;
-  }
-
-  applySplitRatio(currentRatio);
-  requestAnimationFrame(() => fitTerminal());
-}
-
-window.addEventListener('resize', () => applySplitRatio(currentRatio));
-
-function initSplitter(): void {
-  let startX = 0, startRatio = 0, shellWidth = 0;
-  const onMouseMove = (e: MouseEvent) => { if (!isDragging) return; applySplitRatio(startRatio + (e.clientX - startX) / shellWidth); };
-  const onMouseUp = () => { if (!isDragging) return; isDragging = false; splitter.classList.remove('active'); document.body.style.cursor = ''; document.body.style.userSelect = ''; document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); workspaceAPI?.setSplitRatio(currentRatio); fitTerminal(); };
-  splitter.addEventListener('mousedown', (e: MouseEvent) => { if (terminalCollapsed) return; e.preventDefault(); isDragging = true; startX = e.clientX; startRatio = currentRatio; shellWidth = browserPane.parentElement!.getBoundingClientRect().width - splitter.getBoundingClientRect().width; splitter.classList.add('active'); document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; document.addEventListener('mousemove', onMouseMove); document.addEventListener('mouseup', onMouseUp); });
-}
-
-// ─── Terminal ──────────────────────────────────────────────────────────────
-function initTerminal(): void {
-  term = new Terminal({
-    theme: { background: '#000000', foreground: '#ededed', cursor: '#ffffff', cursorAccent: '#000000', selectionBackground: 'rgba(255,255,255,0.12)', selectionForeground: '#ffffff', black: '#000000', red: '#ee4444', green: '#00d47b', yellow: '#ff9500', blue: '#3b82f6', magenta: '#a78bfa', cyan: '#22d3ee', white: '#ededed', brightBlack: '#555555', brightRed: '#ff6b6b', brightGreen: '#34d399', brightYellow: '#fbbf24', brightBlue: '#60a5fa', brightMagenta: '#c4b5fd', brightCyan: '#67e8f9', brightWhite: '#ffffff' },
-    fontFamily: "'Geist Mono', 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
-    fontSize: 13, lineHeight: 1.35, cursorBlink: true, cursorStyle: 'bar', allowTransparency: false, scrollback: 50000,
-  });
-  fitAddon = new FitAddon.FitAddon(); term.loadAddon(fitAddon); term.open(terminalContainer);
-
-  term.onData((data: string) => {
-    workspaceAPI?.terminal.write(data);
-  });
-
-  let totalBytes = 0;
-  let totalChunks = 0;
-  workspaceAPI?.terminal.onOutput((data: string) => {
-    totalBytes += data.length;
-    totalChunks++;
-    term.write(data);
-  });
-  (window as any).__termStats = () => {
-    const s = { totalBytes, totalChunks, bufferLines: term.buffer.normal.length, baseY: term.buffer.normal.baseY, viewportY: term.buffer.normal.viewportY, cols: term.cols, rows: term.rows };
-    console.log('[TERM STATS]', JSON.stringify(s));
-    return s;
-  };
-  workspaceAPI?.terminal.onStatus((session: TerminalSessionInfo) => updateTerminalMeta(session));
-  workspaceAPI?.terminal.onExit((exitCode: number) => { terminalStatus.textContent = `Exited (${exitCode})`; connectionDot.className = 'status-dot error'; connectionLabel.textContent = 'Disconnected'; });
-  new ResizeObserver(() => scheduleFit()).observe(terminalContainer);
-}
-
-function scheduleFit(): void { if (terminalCollapsed) return; if (resizeTimer) clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { fitTerminal(); resizeTimer = null; }, isDragging ? 16 : 80); }
-function getTerminalDimensions(): { cols: number; rows: number } | null {
-  if (!fitAddon || !term) return null;
-  try { const dims = fitAddon.proposeDimensions(); if (dims && dims.cols > 0 && dims.rows > 0) return { cols: dims.cols, rows: dims.rows }; } catch {}
-  return null;
-}
-function fitTerminal(): void {
-  if (terminalCollapsed) return;
-  if (!fitAddon || !term) return;
-  try { fitAddon.fit(); const dims = getTerminalDimensions(); if (dims) { workspaceAPI?.terminal.resize(dims.cols, dims.rows); termSizeLabel.textContent = `${dims.cols}x${dims.rows}`; } } catch {}
-}
-function updateTerminalMeta(session: TerminalSessionInfo): void {
-  const m: Record<string, string> = { idle: 'Idle', starting: 'Starting', running: 'Running', exited: 'Exited', error: 'Error' };
-  terminalStatus.textContent = m[session.status] || session.status;
-  const p: string[] = []; if (session.shell) p.push(session.shell.split('/').pop() || session.shell); if (session.pid) p.push(`PID ${session.pid}`);
-  if (session.persistent) p.push('tmux');
-  else p.push('no persistence');
-  terminalMeta.textContent = p.join(' | ');
-  if (session.status === 'running') { connectionDot.className = 'status-dot done'; connectionLabel.textContent = session.restored ? 'Reconnected' : 'Connected'; }
-}
-termRestartBtn.addEventListener('click', async () => { termRestartBtn.disabled = true; try { await workspaceAPI?.actions.submit({ target: 'terminal', kind: 'terminal.restart', payload: {} }); term?.clear(); } finally { termRestartBtn.disabled = false; } });
-termCollapseBtn.addEventListener('click', () => setTerminalCollapsed(!terminalCollapsed));
-
 // ─── State Sync ────────────────────────────────────────────────────────────
 function renderState(state: any): void {
-  if (state.terminalSession?.session) updateTerminalMeta(state.terminalSession.session);
-  if (state.executionSplit) { const r = state.executionSplit.ratio; if (!isDragging && Math.abs(r - currentRatio) > 0.01) applySplitRatio(r); }
+  const attached = Boolean(state.browser?.layout?.executionAttached ?? browserAttachedToExecution);
+  if (attached !== browserAttachedToExecution) setExecutionBrowserAttached(attached);
 }
 workspaceAPI?.onStateUpdate((state: any) => renderState(state));
 
@@ -1059,31 +1244,12 @@ async function init(): Promise<void> {
     console.error('[execution] workspaceAPI is not available; browser controls are disabled.');
     return;
   }
-  initSplitter(); initTerminal(); initBrowserBoundsObserver();
+  initBrowserBoundsObserver();
   const state = await workspaceAPI.getState();
-  setTerminalCollapsed(DEFAULT_TERMINAL_COLLAPSED);
-  if (state.executionSplit) applySplitRatio(state.executionSplit.ratio); else applySplitRatio(0.5);
   renderState(state);
   const bs = await workspaceAPI.browser.getState();
   updateBrowserState(bs);
-  requestAnimationFrame(() => { reportBrowserBounds(); fitTerminal(); });
-
-  fitTerminal();
-  const dims = getTerminalDimensions();
-
-  const existing = await workspaceAPI.terminal.getSession();
-  if (existing && existing.status === 'running') {
-    updateTerminalMeta(existing);
-    if (dims) workspaceAPI.terminal.resize(dims.cols, dims.rows);
-    if (existing.restored) {
-      connectionDot.className = 'status-dot done';
-      connectionLabel.textContent = 'Reconnected';
-    }
-  } else {
-    const s = await workspaceAPI.terminal.startSession(dims?.cols ?? undefined, dims?.rows ?? undefined);
-    updateTerminalMeta(s);
-  }
-  fitTerminal();
+  requestAnimationFrame(() => { reportBrowserBounds(); });
   workspaceAPI.addLog('info', 'system', 'Execution window initialized');
 }
 init().catch((error: unknown) => {

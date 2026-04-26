@@ -35,6 +35,8 @@ export const PHYSICAL_TASK_COMPLETION_PROTOCOL = [
   '',
   'Prefer non-interactive commands with explicit flags; avoid commands that wait for prompts unless interactive input is necessary and resolvable via terminal.write.',
   '',
+  'After any codebase edit, run the repository build before stopping when a build command exists. Prefer `terminal.build_repo` over raw `terminal.exec` for repository build verification when that tool is available. When the task is to verify repository tests, prefer `terminal.test_repo` over raw `terminal.exec` when that tool is available. If the build fails, fix the errors and rebuild until the build passes, unless the user explicitly asks you not to, the repo has no build command, or a non-codebase blocker prevents completion.',
+  '',
   'After an effectful action, verify completion with a follow-up observation (command output, status check, file read, CLI inspection, browser state, API response). Do not claim completion solely because a command was issued.',
   '',
   'Respect the active constraint list, source-validation rules, and user intent. Never perform destructive, credential-exposing, financial, legal-signature, or irreversible external actions unless explicitly requested with clear context.',

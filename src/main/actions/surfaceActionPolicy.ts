@@ -32,6 +32,9 @@ export const ACTION_CONCURRENCY_POLICY: Record<SurfaceActionKind, ActionConcurre
   'browser.click-ranked-action': { mode: 'serialize' },
   'browser.wait-for-overlay-state': { mode: 'serialize', replacesSameKind: true },
   'browser.open-search-results-tabs': { mode: 'serialize', replacesSameKind: true },
+  'browser.apply-visual-mask': { mode: 'serialize' },
+  'browser.clear-visual-masks': { mode: 'serialize', replacesSameKind: true },
+  'browser.list-visual-masks': { mode: 'serialize', replacesSameKind: true },
 
   // Terminal — execute serializes, replace queued same-kind
   'terminal.execute':     { mode: 'serialize', replacesSameKind: true },

@@ -1,7 +1,9 @@
 import { AgentProvider, AgentToolDefinition } from './AgentTypes';
+import { createAnswerSubmitToolDefinitions } from './tools/answerSubmit';
 import { createBrowserToolDefinitions } from './tools/browser';
 import { createAttachmentToolDefinitions } from './tools/attachments';
 import { createFilesystemToolDefinitions } from './tools/filesystem';
+import { createMemoryToolDefinitions } from './tools/memory';
 import { createTerminalToolDefinitions } from './tools/terminal';
 import { createSubAgentToolDefinitions } from './tools/subagent';
 import { createRepoMapToolDefinitions } from './tools/repomap';
@@ -15,9 +17,11 @@ export function summarizeToolDefinitions(tools: AgentToolDefinition[]): AgentToo
 
 export function createUnrestrictedDevToolSchemas(providerFactory: (input: SubAgentSpawnInput) => AgentProvider): AgentToolSchemaSummary[] {
   return summarizeToolDefinitions([
+    ...createAnswerSubmitToolDefinitions(),
     ...createAttachmentToolDefinitions(),
     ...createBrowserToolDefinitions(),
     ...createFilesystemToolDefinitions(),
+    ...createMemoryToolDefinitions(),
     ...createTerminalToolDefinitions(),
     ...createRepoMapToolDefinitions(),
     ...createSubAgentToolDefinitions(providerFactory),

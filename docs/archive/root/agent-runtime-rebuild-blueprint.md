@@ -1,5 +1,7 @@
 # Agent Runtime Rebuild Blueprint
 
+Status: archived blueprint. Useful for historical design context, but not authoritative for the current runtime implementation.
+
 ## Objective
 Deliver a long-lived, sessionized agent execution model for V2 that preserves the existing tool orchestration contracts while removing per-turn runtime churn.
 

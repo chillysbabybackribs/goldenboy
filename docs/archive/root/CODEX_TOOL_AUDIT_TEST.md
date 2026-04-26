@@ -1,5 +1,7 @@
 # Codex Tool Audit Test
 
+Status: archived historical analysis. Assumptions in this file may no longer match the current runtime.
+
 ## Problem Statement
 
 Codex and the runtime have a tool scope system (`runtimeScope.ts`, `taskProfile.ts`) that is designed to select appropriate tools for each task to reduce token waste. However, the CODEX_AUDIT.md notes that **every single task profile sets `allowedTools: 'all'`**, meaning the filtering logic exists but is never actually used.

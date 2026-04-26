@@ -135,8 +135,8 @@ export function appReducer(state: AppState, action: Action): AppState {
             outputTokens: 0,
             apiCalls: 0,
             updatedAt: Date.now(),
-            lastProviderId: null,
-            providerBreakdown: {},
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
           },
         },
       };
@@ -148,13 +148,8 @@ export function appReducer(state: AppState, action: Action): AppState {
         outputTokens: 0,
         apiCalls: 0,
         updatedAt: Date.now(),
-        lastProviderId: null,
-        providerBreakdown: {},
-      };
-      const providerCurrent = current.providerBreakdown[action.providerId] || {
-        inputTokens: 0,
-        outputTokens: 0,
-        apiCalls: 0,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
       };
       const cachedDelta = action.cachedInputTokens ?? 0;
       const cacheCreationDelta = action.cacheCreationInputTokens ?? 0;
@@ -167,19 +162,8 @@ export function appReducer(state: AppState, action: Action): AppState {
             outputTokens: current.outputTokens + action.outputTokens,
             apiCalls: current.apiCalls + action.apiCalls,
             updatedAt: Date.now(),
-            lastProviderId: action.providerId,
             cachedInputTokens: (current.cachedInputTokens ?? 0) + cachedDelta,
             cacheCreationInputTokens: (current.cacheCreationInputTokens ?? 0) + cacheCreationDelta,
-            providerBreakdown: {
-              ...current.providerBreakdown,
-              [action.providerId]: {
-                inputTokens: providerCurrent.inputTokens + action.inputTokens,
-                outputTokens: providerCurrent.outputTokens + action.outputTokens,
-                apiCalls: providerCurrent.apiCalls + action.apiCalls,
-                cachedInputTokens: (providerCurrent.cachedInputTokens ?? 0) + cachedDelta,
-                cacheCreationInputTokens: (providerCurrent.cacheCreationInputTokens ?? 0) + cacheCreationDelta,
-              },
-            },
           },
         },
       };

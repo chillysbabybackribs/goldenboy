@@ -300,21 +300,45 @@ export function createFilesystemToolDefinitions(): AgentToolDefinition[] {
       description: 'Read one indexed file chunk by id. Use after filesystem.search_file_cache to avoid whole-file reads.',
       inputSchema: {
         type: 'object',
-        required: ['chunkId'],
         properties: {
           chunkId: { type: 'string' },
+          chunkIds: { type: 'array', items: { type: 'string' } },
           maxChars: { type: 'number' },
         },
       },
       async execute(input) {
         const obj = objectInput(input);
-        const chunkId = requireString(obj, 'chunkId');
-        const chunk = fileKnowledgeStore.readChunk(chunkId, optionalNumber(obj, 'maxChars', 3000));
+        const maxChars = optionalNumber(obj, 'maxChars', 3000);
+        const requestedChunkIds = Array.isArray(obj.chunkIds)
+          ? Array.from(new Set(obj.chunkIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
+          : [];
+
+        if (requestedChunkIds.length > 0) {
+          const chunks = requestedChunkIds
+            .map((chunkId) => fileKnowledgeStore.readChunk(chunkId, maxChars))
+            .filter((chunk): chunk is NonNullable<typeof chunk> => chunk !== null);
+          const foundIds = new Set(chunks.map((chunk) => chunk.id));
+          const missing = requestedChunkIds.filter((chunkId) => !foundIds.has(chunkId));
+          if (chunks.length === 0) {
+            throw new Error(`Cached file chunk not found: ${requestedChunkIds.join(', ')}`);
+          }
+          logFileCache(`Read ${chunks.length}/${requestedChunkIds.length} cached file chunks`);
+          return {
+            summary: `Read ${chunks.length}/${requestedChunkIds.length} cached file chunks`,
+            data: { chunks, missing },
+          };
+        }
+
+        const chunkId = typeof obj.chunkId === 'string' ? obj.chunkId.trim() : '';
+        if (!chunkId) {
+          throw new Error('filesystem.read_file_chunk requires chunkId or chunkIds.');
+        }
+        const chunk = fileKnowledgeStore.readChunk(chunkId, maxChars);
         if (!chunk) throw new Error(`Cached file chunk not found: ${chunkId}`);
         logFileCache(`Read file chunk ${chunk.relativePath}:${chunk.startLine}-${chunk.endLine}`);
         return {
           summary: `Read cached file chunk ${chunk.relativePath}:${chunk.startLine}-${chunk.endLine}`,
-          data: { chunk },
+          data: { chunks: [chunk], missing: [] },
         };
       },
     },

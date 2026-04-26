@@ -12,7 +12,6 @@ export type TerminalSessionInfo = {
   cols: number;
   rows: number;
   persistent: boolean;
-  tmuxSession: string | null;
   restored: boolean;
 };
 

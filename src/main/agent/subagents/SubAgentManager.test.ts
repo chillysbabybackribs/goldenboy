@@ -7,7 +7,7 @@ import { agentRunStore } from '../AgentRunStore';
 import { agentToolExecutor } from '../AgentToolExecutor';
 import { SubAgentManager } from './SubAgentManager';
 import type { SubAgentSpawnInput } from './SubAgentTypes';
-import { HAIKU_PROVIDER_ID, PRIMARY_PROVIDER_ID } from '../../../shared/types/model';
+import { PRIMARY_PROVIDER_ID } from '../../../shared/types/model';
 import { taskMemoryStore } from '../../models/taskMemoryStore';
 
 vi.mock('electron', () => ({
@@ -125,7 +125,7 @@ describe('SubAgentManager', () => {
     const execution = await manager.run('parent-run', {
       task: 'Patch the provider and verify the command failure',
       role: 'code',
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
     });
 
     expect(execution.result.status).toBe('completed');
@@ -160,7 +160,7 @@ describe('SubAgentManager', () => {
 
   it('rolls sub-agent usage through the recorder using the child provider id', async () => {
     const provider: AgentProvider & { providerId: string } = {
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
       invoke: vi.fn(async (): Promise<AgentProviderResult> => ({
         output: 'delegated summary',
         usage: {
@@ -178,13 +178,13 @@ describe('SubAgentManager', () => {
       task: 'Investigate the module graph',
       role: 'research',
       taskId: 'task-usage-rollup',
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
     });
 
     expect(recorder).toHaveBeenCalledTimes(1);
     expect(recorder).toHaveBeenCalledWith({
       taskId: 'task-usage-rollup',
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
       usage: {
         inputTokens: 120,
         outputTokens: 37,
@@ -196,7 +196,7 @@ describe('SubAgentManager', () => {
 
   it('skips usage recording when no taskId is supplied', async () => {
     const provider: AgentProvider = {
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
       invoke: vi.fn(async (): Promise<AgentProviderResult> => ({
         output: 'done',
         usage: { inputTokens: 1, outputTokens: 2, durationMs: 1 },
@@ -208,7 +208,7 @@ describe('SubAgentManager', () => {
     await manager.run('parent-run', {
       task: 'No-task usage case',
       role: 'research',
-      providerId: HAIKU_PROVIDER_ID,
+      providerId: PRIMARY_PROVIDER_ID,
     });
 
     expect(recorder).not.toHaveBeenCalled();
@@ -263,16 +263,16 @@ describe('SubAgentManager', () => {
       execute: async () => ({ summary: 'researched web', data: {} }),
     });
     agentToolExecutor.register({
-      name: 'browser.search_page_cache',
-      description: 'Search cached pages',
-      inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' } } },
-      execute: async () => ({ summary: 'searched cache', data: {} }),
+      name: 'browser.extract_page',
+      description: 'Extract page content',
+      inputSchema: { type: 'object', additionalProperties: false, properties: { tabId: { type: 'string' } } },
+      execute: async () => ({ summary: 'extracted page', data: {} }),
     });
     agentToolExecutor.register({
-      name: 'browser.read_cached_chunk',
-      description: 'Read cached chunk',
-      inputSchema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string' } } },
-      execute: async () => ({ summary: 'read chunk', data: {} }),
+      name: 'browser.record_finding',
+      description: 'Pin a research finding into task memory',
+      inputSchema: { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, summary: { type: 'string' } } },
+      execute: async () => ({ summary: 'pinned finding', data: {} }),
     });
     taskMemoryStore.recordPlan('task-scope-derived', 'Execution underway', {
       category: 'plan',
@@ -307,23 +307,13 @@ describe('SubAgentManager', () => {
     expect(seenRequests[0].tools.map((tool) => tool.name)).toHaveLength(3);
     expect(seenRequests[0].tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
       'browser.research_search',
-      'browser.search_page_cache',
-      'browser.read_cached_chunk',
+      'browser.extract_page',
+      'browser.record_finding',
     ]));
   });
 
-  it('starts an explicit all-tools sub-agent with the map-first surface (context.load + preloaded categories)', async () => {
+  it('starts an explicit all-tools sub-agent with every registered tool', async () => {
     const seenRequests: AgentProviderRequest[] = [];
-    agentToolExecutor.register({
-      name: 'context.load',
-      description: 'Load tool categories',
-      inputSchema: {
-        type: 'object',
-        properties: { categories: { type: 'array', items: { type: 'string' } } },
-        required: ['categories'],
-      },
-      execute: async () => ({ summary: 'loaded', data: {} }),
-    });
     agentToolExecutor.register({
       name: 'terminal.exec',
       description: 'Run a command',
@@ -369,9 +359,52 @@ describe('SubAgentManager', () => {
 
     expect(seenRequests).toHaveLength(1);
     const toolNames = seenRequests[0].tools.map((tool) => tool.name);
-    expect(toolNames).toContain('context.load');
     expect(toolNames).toContain('terminal.exec');
     expect(toolNames).toContain('filesystem.patch');
+  });
+
+  it('clamps derived child scope to the parent runtime scope', async () => {
+    agentToolExecutor.register({
+      name: 'filesystem.read',
+      description: 'Read file',
+      inputSchema: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' } } },
+      execute: async () => ({ summary: 'read file', data: {} }),
+    });
+    agentToolExecutor.register({
+      name: 'filesystem.patch',
+      description: 'Patch file',
+      inputSchema: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' } } },
+      execute: async () => ({ summary: 'patched file', data: {} }),
+    });
+    agentToolExecutor.register({
+      name: 'terminal.exec',
+      description: 'Run command',
+      inputSchema: { type: 'object', additionalProperties: false, properties: { command: { type: 'string' } } },
+      execute: async () => ({ summary: 'ran command', data: {} }),
+    });
+
+    const seenRequests: AgentProviderRequest[] = [];
+    const providerFactory = vi.fn((): AgentProvider => ({
+      invoke: vi.fn(async (request: AgentProviderRequest): Promise<AgentProviderResult> => {
+        seenRequests.push(request);
+        return {
+          output: 'done',
+          usage: { inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      }),
+    }));
+    const manager = new SubAgentManager(providerFactory);
+
+    await manager.run('parent-run-clamped', {
+      task: 'Patch the provider and verify the command failure',
+      role: 'code',
+      taskId: 'task-scope-clamped',
+      providerId: PRIMARY_PROVIDER_ID,
+      parentAllowedTools: ['filesystem.read'],
+    });
+
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0].tools.map((tool) => tool.name)).toEqual(['filesystem.read']);
   });
 
   it('keeps a broader scope for verification-heavy child tasks even during execution phase', async () => {
